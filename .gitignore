@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Node
+node_modules/
+dist/
+build/
+.vite/
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# MOBIUS runtime artifacts
+# NOTE: analysis artifacts are large and untrusted. They must never be committed.
+data/
+artifacts/
+uploads/
+apk/
+*.apk
+*.dex
+*.jar
+*.so
+
+# Tooling
+.DS_Store
+*.log
