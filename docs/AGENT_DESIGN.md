@@ -68,6 +68,10 @@ class Agent(Protocol, Generic[InT, OutT]):
 This makes every agent trivially mockable and makes it *impossible* for an agent to write a Finding
 directly. Only `ValidationService` creates findings.
 
+All five members are **Protocols declared in `mobius/core/ports.py`** (Layer 1). `AgentContext` depends
+only on ports, and Layer 1 never imports from `adapters/` — the rule in `ARCHITECTURE.md §3.1`, enforced
+by the import-lint test. Adapters provide the implementations; that is the whole point of the split.
+
 ## 3. Structured communication schema
 
 The master prompt's illustrative message schema is a reasonable start but conflates several things.
@@ -195,7 +199,13 @@ never decides termination.
 | **FSM + persisted frontier + arithmetic ranking + LLM content generation** | **Chosen** | Deterministic control, bounded cost, replayable, auditable; model adds judgement where judgement is needed |
 | Learned policy (RL) | Rejected | No training signal; unjustifiable in a semester |
 
-## 5. The seven agents, concretely
+## 5. The agents — seven specified, three shipped in v1
+
+The table below specifies all seven so the contracts are stable and the deferred ones are additive. **v1
+implements three**: RECON (deterministic, no model), SPECTRE (model-backed), VERITAS (model-backed, on a
+different model). NEXUS is the FSM/scheduler rather than a model-calling agent, and ARCHIVIST is a
+deterministic service. PHANTOM, VECTOR and ORACLE are deferred — see ADR-015 and the risk register. This
+is the canonical count; any other figure in any document is stale.
 
 Each row is implementable as one module with a prompt and a tool allowlist.
 

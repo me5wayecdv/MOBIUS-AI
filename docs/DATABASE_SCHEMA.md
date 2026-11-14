@@ -25,6 +25,7 @@
 erDiagram
     USER ||--o{ AUTHORIZATION : grants
     AUTHORIZATION ||--o{ INVESTIGATION : permits
+    INVESTIGATION ||--o{ APPROVAL : gated_by
     APPLICATION ||--o{ INVESTIGATION : target_of
     APPLICATION ||--o{ EVIDENCE : has
     INVESTIGATION ||--o{ EVENT : emits
@@ -42,6 +43,19 @@ erDiagram
     INVESTIGATION ||--o{ GRAPH_NODE : contains
     GRAPH_NODE ||--o{ GRAPH_EDGE : source
 ```
+
+## 2.1 Entities named in the brief that are deliberately not tables
+
+The brief's §13 entity list is a starting proposal. Four of its entities are not tables here; each
+omission is a decision, not an oversight, and is recorded so the mapping is auditable.
+
+| Brief entity | Status here | Why |
+|---|---|---|
+| `Agents` | **No table** | Agents are code (`ADR-004`), not rows. Their *state* is derived from `events`, which is the only source the War Room must trust (`EVENT_ARCHITECTURE.md §8`). A mutable `agents` table would be a second source of truth that can drift from the event log. |
+| `AgentTasks` | → `frontier_entries` | Renamed: the unit of work is a frontier entry with a score, a lease and attempts — a task queue, not a task record. |
+| `AgentMessages` | **Removed** (`ADR-004`) | Agents are functions invoked by a scheduler; there is no peer-to-peer channel. Inter-agent exchange is `decision_made` + `observation_created` linked by `correlation_id`. See `EVENT_ARCHITECTURE.md §4` "Retired". |
+| `CodeReferences` | → folded into `observations` | A code reference is provenance on an observation (`subject_ref` + `source_ref`), not an independent entity. A separate table would allow a reference to exist with no claim attached to it — precisely the "evidence without a finding" clutter this project avoids. |
+| `ModelConfigurations` / `ModelEvaluations` | **Not in v1** | Routing is two environment variables and two tiers (`ADR-010`). Persisting model configuration is meaningful only once several models are benchmarked, at which point `MODEL_BENCHMARKS.md` results — not a DB table — are the artefact that matters. Deferred, not forgotten. |
 
 ## 3. Tables
 
@@ -104,16 +118,77 @@ CREATE TABLE investigations (
     started_at      timestamptz,
     finished_at     timestamptz,
     stop_reason     text,                   -- completed | budget_exhausted | cancelled | error
+    -- Pause is a FLAG, not a state (ADR-017). A paused investigation keeps the state it was in;
+    -- the worker simply stops leasing. See ARCHITECTURE.md §4 and EVENT_ARCHITECTURE.md §7.
+    paused_at       timestamptz,
+    paused_by       uuid REFERENCES users(id),
+    pause_reason    text,
     created_at      timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT state_known CHECK (state IN (
         'INTAKE','SCOPE_BLOCKED','RECON','SURFACE_READY','SELECTING','DISPATCHING',
         'OBSERVING','VALIDATING','AWAITING_APPROVAL','CORRELATING','REPORTING',
         'CLOSED','BUDGET_EXHAUSTED','CANCELLED','FAILED')),
-    CONSTRAINT intensity_within_authorization CHECK (intensity BETWEEN 0 AND 3)
+    -- local range guard only; the cross-table rule is the trigger below (see note)
+    CONSTRAINT intensity_range CHECK (intensity BETWEEN 0 AND 3),
+    CONSTRAINT pause_is_coherent CHECK (
+        (paused_at IS NULL AND paused_by IS NULL) OR (paused_at IS NOT NULL AND paused_by IS NOT NULL))
 );
 CREATE INDEX ON investigations (state) WHERE finished_at IS NULL;
 CREATE INDEX ON investigations (application_id, created_at DESC);
+-- partial index supporting the "is this scan paused?" read without touching state
+CREATE INDEX ON investigations (paused_at) WHERE paused_at IS NOT NULL;
 ```
+
+**The intensity-vs-authorisation control is a trigger, not a CHECK.** A Postgres `CHECK` cannot read
+another table, so the rule behind FR-AUTH-2 / `THREAT_MODEL.md` SC-01 ("requested intensity must not
+exceed what was granted, and the grant must still be live") cannot be expressed declaratively. An
+earlier draft named a constraint `intensity_within_authorization` while only checking the 0–3 range,
+which overstated what the database enforced. The control is now real:
+
+```sql
+CREATE OR REPLACE FUNCTION enforce_authorization_scope() RETURNS trigger AS $$
+DECLARE
+    auth_max     smallint;
+    auth_expires timestamptz;
+    auth_revoked timestamptz;
+BEGIN
+    -- Pre-authorisation states exist so a refused scan is still auditable (AC-FR-AUTH-2).
+    IF NEW.state IN ('INTAKE','SCOPE_BLOCKED') THEN
+        RETURN NEW;
+    END IF;
+
+    IF NEW.authorization_id IS NULL THEN
+        RAISE EXCEPTION 'investigation may not leave INTAKE without an authorization'
+            USING ERRCODE = 'check_violation';
+    END IF;
+
+    SELECT max_intensity, expires_at, revoked_at
+      INTO auth_max, auth_expires, auth_revoked
+      FROM authorizations WHERE id = NEW.authorization_id;
+
+    IF auth_revoked IS NOT NULL THEN
+        RAISE EXCEPTION 'authorization % is revoked', NEW.authorization_id USING ERRCODE = 'check_violation';
+    END IF;
+    IF auth_expires <= now() THEN
+        RAISE EXCEPTION 'authorization % has expired', NEW.authorization_id USING ERRCODE = 'check_violation';
+    END IF;
+    IF NEW.intensity > auth_max THEN
+        RAISE EXCEPTION 'intensity % exceeds granted %, approval required',
+            NEW.intensity, auth_max USING ERRCODE = 'check_violation';
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER investigations_scope_guard
+    BEFORE INSERT OR UPDATE OF intensity, authorization_id, state ON investigations
+    FOR EACH ROW EXECUTE FUNCTION enforce_authorization_scope();
+```
+
+Test coverage: `AC-FR-AUTH-2` asserts the 409 path; a DB-level test asserts each of the four
+`RAISE EXCEPTION` branches fires. Application-layer duplication in `IntakeService` is intentional — the
+service returns a clean error, the trigger is the backstop. Tested both ways: a test that succeeds with
+the service and fails without the trigger proves the trigger is load-bearing.
 
 **Partial index rationale:** the worker's hot query is "which investigations are live". A partial index
 on `finished_at IS NULL` keeps that O(live) rather than O(all).
@@ -383,6 +458,60 @@ CREATE TABLE audit_log (
 CREATE INDEX ON audit_log (created_at DESC);
 ```
 
+
+### 3.10 Approvals (intensity escalation)
+
+Numbered last to avoid renumbering the sections other documents reference.
+
+An approval is a bounded, expiring human grant that lets a single investigation perform an action at a
+higher intensity than the authorisation blanket-allows. It is the storage backing the FSM state
+`AWAITING_APPROVAL`, the `approval_requested / approval_granted / approval_rejected` events, and
+`POST /approvals/{id}/grant|reject`.
+
+```sql
+CREATE TABLE approvals (
+    id                 uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    investigation_id   uuid NOT NULL REFERENCES investigations(id),
+    requested_action   text NOT NULL,      -- must exist in the action registry
+    intensity_required smallint NOT NULL CHECK (intensity_required BETWEEN 0 AND 3),
+    intensity_granted  smallint CHECK (intensity_granted BETWEEN 0 AND 3),
+    justification      text NOT NULL CHECK (length(justification) >= 10),
+    risk_summary       text NOT NULL,
+    state              text NOT NULL DEFAULT 'pending'
+                       CHECK (state IN ('pending','granted','rejected','expired','revoked')),
+    requested_by       text NOT NULL,
+    decided_by         uuid REFERENCES users(id),
+    decided_at         timestamptz,
+    decision_note      text,
+    expires_at         timestamptz NOT NULL,
+    created_at         timestamptz NOT NULL DEFAULT now(),
+
+    -- a decision must be attributable
+    CONSTRAINT decision_recorded
+        CHECK (state = 'pending' OR decided_at IS NOT NULL),
+    CONSTRAINT decided_requires_user
+        CHECK (state IN ('pending','expired') OR decided_by IS NOT NULL),
+    -- a grant may narrow, never widen, the request
+    CONSTRAINT grant_within_request
+        CHECK (intensity_granted IS NULL OR intensity_granted <= intensity_required),
+    -- a rejected or expired approval grants nothing
+    CONSTRAINT non_grant_has_no_level
+        CHECK (state <> 'rejected' OR intensity_granted IS NULL),
+    CONSTRAINT approval_expiry_sane CHECK (expires_at > created_at)
+);
+CREATE INDEX ON approvals (investigation_id, state);
+CREATE INDEX approvals_pending ON approvals (state, expires_at) WHERE state = 'pending';
+```
+
+**Expiry is enforced, not decorative.** The worker filters on `state = 'pending' AND expires_at > now()`
+and a sweeper marks stale rows `expired`, emitting an `approval_rejected` event with
+`reason="expired"`. A grant that was never used is still recorded — the audit trail includes what was
+*avoided*, not only what was done (mirrors `API_SPECIFICATION.md` §3.4).
+
+**Why a bounded grant and not a scope edit.** Raising the authorisation's `max_intensity` would widen the
+scope of every future investigation on that APK. An approval is per-investigation, per-action, and
+expires, so escalation cannot silently persist.
+
 ## 4. Why PostgreSQL alone is sufficient (and no graph DB)
 
 | Need | Postgres answer |
@@ -414,9 +543,13 @@ SELECT DISTINCT n.* FROM walk JOIN graph_nodes n ON n.id = walk.id;
 ```
 
 ```sql
--- Path from entry point to a finding, only over edges at or above an assertion level
--- (FR-GRAPH-4). Assertion levels are compared via a small lookup, not string ordering.
-SELECT * FROM pgr_path(...);  -- implemented in app code with a bidirectional BFS for clarity
+-- Path from entry point to a finding, only over edges at or above an assertion level (FR-GRAPH-4).
+-- NOT a pgRouting call: no graph extension is used (ADR-006). Path search is a bidirectional BFS in
+-- GraphService over the two edge indexes above, which is easier to unit-test and to explain than a
+-- recursive CTE for this access pattern. The neighbourhood query above stays in SQL because it is a
+-- single bounded expansion; path search does not, because each hop needs assertion filtering and an
+-- early-exit on the meeting point.
+-- Assertion levels are compared through an explicit lookup table in code, never string ordering.
 ```
 
 Recursive CTEs with a depth bound are the right tool: they are readable by a student, testable, and
@@ -448,6 +581,8 @@ features are load-bearing.
   1. no dangling `evidence_refs` in observations/findings/graph (FR-EV-3),
   2. every `confirmed` finding has ≥ 1 `verdict` with `gate_passed = true`,
   3. every investigation in a terminal state has a report or a `stop_reason`,
-  4. `events` seq is gapless per investigation.
+  4. `events` seq is gapless per investigation,
+  5. every `AWAITING_APPROVAL` transition has a matching `approvals` row for that investigation, and no
+     tool execution occurred at an intensity above the highest live grant.
 - These four assertions are the machine-checkable version of the project's honesty claims. They should
   run in CI and fail the build.

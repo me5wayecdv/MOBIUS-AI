@@ -50,7 +50,7 @@ precision pilot before building the War Room.
 | Phase | Deliverable | State |
 |---|---|---|
 | 0 | Environment, repository and capability audit | **Complete, measured** |
-| 1 | 22 specification/methodology/decision documents | **Complete, awaiting approval** |
+| 1 | 23 specification/methodology/decision documents | **Complete, awaiting approval** |
 | 2+ | Implementation | **Not started** — by instruction |
 
 No existing file was deleted or rewritten. The repository contained a single 56-byte `README.md`.
@@ -115,8 +115,9 @@ engineering happened.
                                     │ Postgres: state · events · frontier · graph
                     ┌───────────────▼──────────────────────────┐
                     │ Orchestrator — FSM + frontier + budgets  │
-                    │  RECON(det) · SPECTRE(model) · VERITAS   │
-                    │  (model, DIFFERENT model) · ARCHIVIST    │
+                    │  agents: RECON(det) · SPECTRE · VERITAS  │
+                    │  VERITAS runs on a DIFFERENT model       │
+                    │  + ARCHIVIST svc · NEXUS is the FSM      │
                     └───────────────┬──────────────────────────┘
                                     │ validated argv only, no creds, no egress
                     ┌───────────────▼──────────────────────────┐
@@ -127,6 +128,11 @@ engineering happened.
 Invariants: control flow deterministic · findings need gate predicates · every claim needs evidence ·
             every state change is an event · abstention is legal and reported
 ```
+
+**Canonical v1 count — use this wording everywhere.** *Three agents in code: RECON (deterministic),
+SPECTRE (model-backed), VERITAS (model-backed, on a different model), plus NEXUS as the FSM/scheduler
+and ARCHIVIST as a deterministic service.* Five views means five screens, not five agents. Any other
+number in any document is stale.
 
 Full detail: `ARCHITECTURE.md`. Agent contracts: `AGENT_DESIGN.md`.
 

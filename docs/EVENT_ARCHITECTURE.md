@@ -89,6 +89,13 @@ and filter to a single hypothesis thread. This is the cheapest large win in the 
 | `report_ready` | `report_id, version, coverage` | report tab |
 | `budget_warning` | `resource, used, limit` | budget meter |
 | `scan_cancelled` | `by, at` | terminal banner |
+| `investigation_paused` | `by, reason` | paused banner |
+| `investigation_resumed` | `by` | paused banner |
+
+**Retired:** `agent_message` (§11 of the brief) is **not** in this catalogue. ADR-004 makes agents typed
+functions invoked by a scheduler rather than peers exchanging messages, so there is no message channel to
+observe. Inter-agent exchange is expressed as `decision_made` + `observation_created` correlated by
+`correlation_id`. Recorded here rather than silently omitted, because the brief lists the event type.
 
 **Rule:** an event type exists only if a UI surface consumes it. Event types with no consumer are
 schema debt. The table above is therefore also the UI contract, and it should be trimmed rather than
@@ -138,7 +145,7 @@ open decision (ADR-007 note).
 
 | Action | Effect on events |
 |---|---|
-| Pause | FSM enters `PAUSED` (a sub-state of `SELECTING`); the worker stops leasing frontier entries; in-flight tool calls are **allowed to finish** and their events are recorded |
+| Pause | Sets `investigations.paused_at`/`paused_by`. **The FSM state does not change** (ADR-017) — a paused scan keeps the state it was in, so nothing has to remember a prior state and there is no transition storm. The worker stops leasing frontier entries; in-flight tool calls are **allowed to finish** and their events are recorded |
 | Resume | lease loop restarts; frontier state untouched |
 | Cancel | `CANCELLED`; runner receives SIGTERM to the tool process group; partial output is preserved as evidence with `truncated=true` |
 | Emergency stop | all scans → `CANCELLED`; all leases released; tool leases revoked |

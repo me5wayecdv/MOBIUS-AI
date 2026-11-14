@@ -134,7 +134,7 @@
 | NFR-PERF-2 | RECON of a 50 MB APK completes < 60 s | Benchmark fixture |
 | NFR-PERF-3 | Graph endpoint responds < 800 ms for a 500-node neighbourhood | Seeded graph benchmark |
 | NFR-SEC-1 | All tool execution via argv arrays; no `shell=True` anywhere | `ruff` rule + grep gate in CI |
-| NFR-SEC-2 | Analysis of untrusted APKs occurs in a worker with no write access to the DB and no outbound network by default | Compose network policy + test |
+| NFR-SEC-2 | Analysis of untrusted APKs occurs in a container with no DB credentials and no outbound network by default; a container runtime is a hard prerequisite (**ADR-016**) | Container network policy + test; degraded mode must be reported if absent |
 | NFR-SEC-3 | Uploaded files are never executed by the API process | Architecture test: API has no `subprocess` import |
 | NFR-SEC-4 | Secrets via environment only; `.env` git-ignored; startup fails if a required secret is default | Startup check + test |
 | NFR-REL-1 | An agent or tool failure never aborts the investigation; it produces an `agent_error` event and frontier adaptation | Fault-injection test suite |

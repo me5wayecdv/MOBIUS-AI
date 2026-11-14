@@ -9,7 +9,7 @@ until `MODEL_BENCHMARKS.md` has produced numbers — this document contains **no
 ## 1. The interface
 
 ```python
-# mobius/adapters/llm/gateway.py
+# mobius/core/ports.py   <- Layer 1. Protocols only: no implementation, no vendor SDK, no I/O.
 class ModelGateway(Protocol):
     async def complete_structured(
         self,
@@ -34,6 +34,13 @@ class StructuredResult(BaseModel):
     repair_attempts: int
     schema_valid: bool
 ```
+
+> **Why this port lives in `core/`, not `adapters/`.** `ARCHITECTURE.md §3.1` forbids Layer 1 from
+> importing Layer 2, and enforces it with an import-lint test. `AgentContext` — a Layer-1 contract —
+> exposes `model: ModelGateway`, so the Protocol must be declared in `mobius/core/ports.py` alongside
+> `EvidenceReader`, `ToolInvoker`, `EventEmitter` and `BudgetMeter`. Adapters *implement* these ports;
+> core never imports from `adapters/`. An earlier draft placed `ModelGateway` under `adapters/llm/`,
+> which would have inverted the dependency on day one.
 
 Deliberately absent from the interface: streaming, tool-calling, vision, function schemas, agent
 frameworks. Each of those is a capability that must be *measured* before it is *relied on*, and adding
