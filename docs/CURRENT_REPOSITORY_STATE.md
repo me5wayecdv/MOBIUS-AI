@@ -1,8 +1,11 @@
 # CURRENT REPOSITORY STATE
 
-**Snapshot date:** 2026-11-13
-**Base:** `main` @ `f3d189e` (merge of PR #1)
-**Branch under review:** `arena/c510d1da-mobius-ai`
+**Snapshot date:** 2026-11-12
+**Base:** `main` @ `88d456c` (merge of PR #2)
+**Branch under review:** `arena/4c61c1ea-mobius-ai`
+
+> **Superseded in part:** this file described a documentation-only repository. Since Phase 2 began,
+> `src/mobius/` and `tests/` exist. See §1a and `IMPLEMENTATION_STATUS.md` for the current inventory.
 **Purpose:** Phase 0 deliverable. Answers one question factually: *what is in this repository right now?*
 
 ---
@@ -15,7 +18,18 @@
 | `.gitignore` | Python/Node/env + explicit exclusion of `*.apk *.dex *.jar *.so`, `data/ artifacts/ uploads/ apk/` | 37 |
 | `docs/` | 23 markdown documents (Phase 0 + Phase 1 set) | ~5 500 |
 
-Nothing else. There is no `src/`, no `mobiush/`, no `web/`, no `tests/`, no `migrations/`.
+## 1a. Added in Phase 2 (2026-11-12)
+
+| Path | Contents |
+|---|---|
+| `src/mobius/core/` | Layer 1 — `ids`, `enums`, `schemas`, `fsm`, `gates`, `frontier`, `ports` (no I/O imports) |
+| `src/mobius/adapters/` | Layer 2 — 14 SQLAlchemy tables, engine/session, event store, `sql/scope_guard.sql` |
+| `src/mobius/services/` | Layer 3 — intake/authorisation, evidence, gate validation |
+| `src/mobius/api/` | Layer 4 — FastAPI factory, 14 routes, RFC 9457 error mapping |
+| `tests/` | 142 tests (136 pass, 6 Postgres-only skips) |
+| `pyproject.toml` | Packaging, deps, pytest config with registered markers |
+
+Still absent: `web/`, `migrations/`, any analysis agent, any Android tool adapter.
 
 ## 2. What does not exist
 

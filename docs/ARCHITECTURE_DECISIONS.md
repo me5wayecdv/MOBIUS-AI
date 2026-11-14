@@ -23,6 +23,8 @@ ADR supersedes it and states why (`master prompt §21`).
 | 015 | Vertical slice over phase-by-phase build | **Requires Director approval** |
 | 016 | A container runtime is required for the runner sandbox | Proposed |
 | 017 | Pause is a flag, not an FSM state | Proposed |
+| 018 | JSON columns instead of Postgres arrays | Proposed |
+| 019 | Explicit flush order; no ORM relationships | Proposed |
 
 ---
 
@@ -245,6 +247,60 @@ approval) — which the state model could not express without a second dimension
 **Addendum — `SCOPE_BLOCKED` is retained as a state.** It is genuinely a workflow outcome ("this scan may
 not proceed"), not a temporary stop, and it exists so that a *refused* scan is still an auditable row
 (AC-FR-AUTH-2). That is the distinction between the two: outcome vs interruption.
+
+## ADR-018 — JSON columns instead of PostgreSQL arrays
+
+**Problem.** `evidence_refs`, `maswe`, `masvs` and `gate_evidence` are naturally `text[]` in Postgres.
+The test suite and CI run on SQLite, which has no array type.
+
+**Options.** (a) `ARRAY(Text)` with a SQLite variant; (b) JSON columns everywhere; (c) join tables for
+every list; (d) skip SQLite and require Postgres for tests.
+
+**Decision.** (b) — JSON.
+
+**Rationale.** (a) is the tempting option and the worst one: two storage representations of the same
+concept, so a bug can appear only on one backend and only in production. (c) would be correct
+relationally but adds four join tables to a schema that is already the largest artefact in the project,
+and the lists are read whole, never queried by element. (d) makes the domain tests depend on an external
+service, which contradicts the Layer-1 purity goal the project is built around.
+
+**Cost.** The database can no longer enforce that an element of `evidence_refs` exists. That is a real
+loss: it is the one integrity property JSON gives up here.
+
+**Mitigation.** An application-level check plus the FR-EV-3 dangling-reference test, which scans for
+references to evidence rows that do not exist. `gate_evidence` is validated by Pydantic to `dict[str, bool]`
+before it reaches the column, so the shape is still guaranteed.
+
+**Reversal.** Moderate — a migration to `text[]` with a validation pass. Acceptable because the column
+names and payload shapes would not change.
+
+## ADR-019 — Explicit flush order instead of ORM relationships
+
+**Problem.** The first working build of `IntakeService` failed with
+`sqlite3.IntegrityError: FOREIGN KEY constraint failed`. Root cause, reproduced: SQLAlchemy orders INSERTs
+using `relationship()` declarations, **not** foreign keys. With no relationships configured it emitted
+`INSERT applications`, then `INSERT investigations`, and never emitted the pending `users` row at all —
+so a parent vanished and a child violated the constraint.
+
+**Options.** (a) add `relationship()` declarations so the unit of work sorts by dependency; (b) order
+explicit flushes in the service; (c) disable `PRAGMA foreign_keys`; (d) drop ORM writes, use Core inserts.
+
+**Decision.** (b).
+
+**Rationale.** (c) is not a fix, it removes the detector — the same code would corrupt a Postgres
+database silently. (a) works, but relationships bring cascade semantics, lazy-loading surprises and
+implicit DELETE behaviour into a layer whose job is to store rows and nothing else; the mapping would then
+drive domain decisions. (d) is more code for no additional safety. (b) makes the dependency order visible
+at the call site (user → application/authorisation → investigation → event), keeps the mapping layer dumb,
+and is what the tests exercise.
+
+**Consequences.** Every service that writes more than one table must flush parents before children, and a
+new table means reviewing its writers. Recorded here because the failure is silent-ish (a missing INSERT,
+not a loud error) and would otherwise be "fixed" by adding relationships without knowing why.
+
+**Diagnostic note for the next person.** `sort_tables_and_constraints` returns the correct order — that is
+not evidence about the unit of work. Reproduce by adding rows in one `commit()` and reading the emitted
+SQL with `echo=True`.
 
 ---
 
