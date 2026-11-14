@@ -56,6 +56,11 @@ class ManifestInvalid(DomainError):
     http_status = 422
 
 
+class CodeIndexFailed(DomainError):
+    code = "CODE_INDEX_FAILED"
+    http_status = 422
+
+
 class NotFound(DomainError):
     code = "NOT_FOUND"
     http_status = 404

@@ -367,6 +367,66 @@ touching callers. Revisit if concurrent viewers exceed ~50 or latency becomes a 
 
 ---
 
+## ADR-022 — SPECTRE decides reachability by graph search, with no model in the path
+
+**Problem.** SPECTRE's job is to convert RECON's `insufficient_evidence` candidates into
+gate evidence: is a sensitive sink reachable from an exported entry point without a caller
+check? The design in the master prompt routes this through the model (decompile, ask, parse
+the answer).
+
+**Options.** (a) model reads the decompiled method and answers "reachable or not"; (b) a
+deterministic bounded BFS over the call graph built from the dex; (c) hybrid — BFS to gather
+candidates, model to adjudicate the ones BFS leaves open.
+
+**Decision.** (b) for v1. (c) is the intended end state for the parts (b) cannot answer, but
+(b) ships alone first.
+
+**Rationale.**
+1. *Determinism is a stated requirement.* The same APK must yield the same path and the same
+   verdict or the audit trail is theatre. A model makes the verdict depend on sampler state,
+   prompt order and provider version; a graph search depends on the dex bytes only.
+2. *The question is not one a model answers better.* "Is there a call path from A to B" is a
+   graph property, not a judgement call. Asking a model to compute it introduces variance
+   with no gain in capability.
+3. *It routes around blocker Q3.* Sending decompiled proprietary code to a third party is
+   unresolved (R-09, ethics Q3). Reachability needs none of that, so the first capability
+   that produces real evidence is also the one that needs no data-sharing decision.
+4. *It produces the clauses the gate already consumes*, rather than a prose judgement the
+   gate would have to trust.
+
+**The rule that makes this honest — truncation is never refutation.** A bounded search that
+finds nothing has learned nothing about what it did not look at. So `sink_reachable` is
+`True` only on a found path, and `False` **only** when the traversal completed *and*
+`CodeIndex.truncated` is false. Every other outcome — node budget exhausted, no entry point
+matched, class absent, dex unparseable — is `None`, which the gate treats as missing
+evidence (`Clause.absence_is_evidence`, ADR-018's gate machinery), never as a failed clause.
+A partial search therefore reports `insufficient_evidence`; only an exhaustive one may
+produce `not-reached` → `REJECTED`.
+
+**What the search deliberately cannot see.** No data flow: reachability to a *sink
+invocation* is not proof that attacker-controlled data reaches it. No CFG: a guard anywhere
+in the same method counts, even if it executes after the sink (conservative — it biases
+toward not confirming, recorded as R-21). No reflection, no obfuscated dynamic dispatch, no
+framework internals (the graph holds application classes only, so the search cannot walk
+the framework and manufacture a path). These are false-negative sources, and they are why
+the sink catalogue was tightened mid-development: `SharedPreferences.getString` and
+`Context.startActivity` were removed after a real APK produced a "confirmed" finding whose
+only content was an exported receiver reading its own preference. Reachability without data
+flow cannot distinguish that from exfiltration, so the catalogue only admits operations
+whose execution is itself security-relevant.
+
+**Cost.** The verdict is weaker than a real data-flow analysis and will miss findings a
+taint tracker would catch. It is reported as `insufficient_evidence` with the reached
+methods, so an analyst can finish the job by hand, and the model-backed pass over exactly
+those methods remains the plan.
+
+**Consequences.** SPECTRE's confidence values are capped at 0.95 and the gate can reject but
+only the *complete* absence of a path — never "looks safe". `method_names` are matched
+without descriptors because real `onReceive(Context,Intent)V` does not match an empty
+descriptor, which the first real APK exposed.
+
+---
+
 ## Sources
 
 - [S1] Enumerated failure modes of unconstrained agent loops: https://blog.llmgo.top/en/articles/agent-loop-state-machine/

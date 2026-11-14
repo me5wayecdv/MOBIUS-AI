@@ -225,7 +225,7 @@ class Finding(_Model):
     status: FindingStatus = FindingStatus.DISCOVERED
     discovered_by: str
     validated_by: str | None = None
-    gate_evidence: dict[str, bool] = Field(default_factory=dict)
+    gate_evidence: dict[str, bool | None] = Field(default_factory=dict)
     remediation: str | None = None
 
     @model_validator(mode="after")
@@ -239,7 +239,8 @@ class Finding(_Model):
                 raise ValueError(
                     "a confirmed finding must record gate_evidence showing which clauses passed"
                 )
-            if not all(self.gate_evidence.values()):
+            # `None` means a clause was never established; only `True` counts as satisfied.
+            if not all(value is True for value in self.gate_evidence.values()):
                 raise ValueError(
                     "every gate clause must have passed for a finding to be confirmed; "
                     f"failed clauses: {sorted(k for k, v in self.gate_evidence.items() if not v)}"
@@ -261,7 +262,7 @@ class VerdictRecord(_Model):
     rejection_reason: RejectionReason | None = None
     rationale: str = Field(min_length=1)
     gate_passed: bool
-    gate_detail: dict[str, bool] = Field(default_factory=dict)
+    gate_detail: dict[str, bool | None] = Field(default_factory=dict)
     validated_by: str
     model_id: str | None = None
 

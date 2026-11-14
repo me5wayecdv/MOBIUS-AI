@@ -112,6 +112,7 @@ class Verdict(StrEnum):
 
 class RejectionReason(StrEnum):
     NOT_REACHABLE = "not-reachable"
+    GUARDED_BY_CALLER_CHECK = "guarded-by-caller-check"
     SANITISED = "sanitised"
     MITIGATED_BY_PLATFORM = "mitigated-by-platform"
     MISREAD_CODE = "misread-code"

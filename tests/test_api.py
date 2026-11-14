@@ -283,3 +283,53 @@ def test_fresh_checkout_starts_without_pre_created_directories(tmp_path):
         assert session.execute(text("SELECT 1")).scalar() == 1
     assert (tmp_path / "nested" / "artifacts").is_dir()
     ctx.engine.dispose()
+
+
+def _apk_with_fixture_dex(manifest: str) -> bytes:
+    import io as _io
+    import pathlib
+    import zipfile as _zip
+
+    dex = (pathlib.Path(__file__).parent / "fixtures" / "dex" / "AnalysisTest.dex").read_bytes()
+    buf = _io.BytesIO()
+    with _zip.ZipFile(buf, "w") as zf:
+        zf.writestr("AndroidManifest.xml", manifest)
+        zf.writestr("classes.dex", dex)
+    return buf.getvalue()
+
+
+def test_spectre_runs_over_http_against_a_real_dex(client):
+    manifest = (
+        '<manifest xmlns:android="http://schemas.android.com/apk/res/android" '
+        'package="com.example.demo"><application>'
+        '<activity android:name="AnalysisTest" android:exported="true"/>'
+        "</application></manifest>"
+    )
+    app = client.post(
+        "/api/v1/applications",
+        files={"file": ("demo.apk", _apk_with_fixture_dex(manifest),
+                        "application/vnd.android.package-archive")},
+    ).json()
+    auth = _authorize(client, app["sha256"]).json()
+    scan = _scan(client, app["id"], auth["id"]).json()
+    assert client.post(f"/api/v1/scans/{scan['id']}/recon").status_code == 200
+
+    resp = client.post(f"/api/v1/scans/{scan['id']}/spectre")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["state"] == "CORRELATING"
+    assert body["index"]["classes"] == 1
+    assert body["candidates"] == 1
+    # AnalysisTest has no lifecycle entry point, so the honest answer is "not established".
+    assert body["results"][0]["reachability"] == "no-entry-point"
+    assert body["results"][0]["status"] == "manual_review_required"
+
+
+def test_spectre_rejects_an_unparseable_dex_with_a_typed_error(client):
+    app = _upload(client).json()
+    auth = _authorize(client, app["sha256"]).json()
+    scan = _scan(client, app["id"], auth["id"]).json()
+    client.post(f"/api/v1/scans/{scan['id']}/recon")
+    resp = client.post(f"/api/v1/scans/{scan['id']}/spectre")
+    assert resp.status_code == 422
+    assert resp.json()["code"] == "CODE_INDEX_FAILED"

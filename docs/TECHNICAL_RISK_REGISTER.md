@@ -123,6 +123,7 @@ cursor first, upgrade to live streaming second — the event store makes this a 
 | R-18 | Integration left to the last two weeks | 4×4=16 → mitigated by ADR-015 | vertical slice forces early integration |
 | R-19 | A grader asks "why is this not just MobSF + GPT?" | 3×4=12 | answer with the benchmark: precision on negative controls, abstention correctness, gate evidence completeness |
 | R-20 | Legal/ethics objection to the project | 2×5=10 | authorisation model + purpose-built test apps only + written ethics statement |
+| R-21 | Static reachability misses findings (reflection, obfuscation, no data flow, guard treated as protection regardless of instruction order) | 5×3=15 | every miss is reported as `insufficient_evidence`, never as "no vulnerability"; `truncated` is a distinct result; the limitation is stated in `IMPLEMENTATION_STATUS.md` and ADR-022. **Partly unmitigated by design** — a precise data-flow analysis is out of v1 scope |
 
 ## The three risks that actually decide the outcome
 

@@ -41,6 +41,7 @@ explains intent; the generated schema is normative. Any divergence is a bug.
 | `BUDGET_EXHAUSTED` | 409 | Budget already spent |
 | `EVIDENCE_DANGLING` | 500 | Integrity violation; should be impossible, surfaced loudly |
 | `IDEMPOTENCY_CONFLICT` | 409 | Same key, different body |
+| `CODE_INDEX_FAILED` | 422 | The APK has no readable `classes.dex`, or androguard could not parse it |
 
 ## 3. Endpoints
 
@@ -161,7 +162,38 @@ Evaluates a confirmation gate over supplied attributes and persists a finding pl
 Responses are `confirmed`, `rejected` (with a `rejection_reason` from a fixed taxonomy) or
 `insufficient_evidence` — the last when some clauses were not established, which is **not** the
 same as "safe". With only RECON's attributes the result is always `insufficient_evidence`: RECON
-cannot see whether the code behind a component reaches anything.
+cannot see whether the code behind a component reaches anything. `POST /scans/{id}/spectre` is
+what supplies the missing code attributes.
+
+#### `POST /scans/{id}/spectre`
+Indexes `classes.dex`, builds the call graph, and searches from each candidate component's entry
+point to a sensitive sink. Requires `state = SURFACE_READY`; runs the analysis states and emits
+`code_analysis_complete`. **Deterministic: no model is called** (ADR-022), so the same APK always
+produces the same result. Not idempotent in the same way as RECON — a repeat re-indexes and can
+re-validate, and it will fail the state check rather than duplicate evidence.
+
+```json
+{
+  "index": {"classes": 10, "methods": 34, "graph_nodes": 34,
+            "internal_calls": 41, "truncated": false},
+  "candidates": 1, "confirmed": 0, "rejected": 1, "manual_review": 0,
+  "results": [
+    { "component": "com.example.Update", "kind": "receiver",
+      "reachability": "not-reached", "sink": null, "guards": [], "path_length": null,
+      "verdict": "rejected", "status": "rejected",
+      "rejection_reason": "not-reachable",
+      "explanation": "complete traversal of 6 method(s) found no sink",
+      "attributes": {"exported": true, "permission": null,
+                     "sink_reachable": false, "caller_check_absent": false} }
+  ]
+}
+```
+
+`reachability` is `reached`, `not-reached`, `guarded`, or `unknown`. `sink_reachable` is `true`
+only when a path was found, and `false` **only** when the traversal completed and the index was
+not truncated; a truncated search yields `null`, which becomes `insufficient_evidence`, never
+`rejected`. `rejection_reason` is `not-reachable` or `guarded-by-caller-check` — a guard refutes
+the "no caller check" clause, it does not prove the component safe.
 
 #### `GET /scans/{id}/stream` (SSE)
 `text/event-stream`. Replays from `?after=<seq>` or the `Last-Event-ID` header, then follows.

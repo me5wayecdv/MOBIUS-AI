@@ -56,6 +56,10 @@ class Clause:
     key: str
     description: str
     predicate: Callable[[Any], bool]
+    #: True when "the attribute is absent" *is* the evidence - e.g. no android:permission
+    #: declared. For every other clause, an absent or None attribute means the claim was
+    #: never established, which must read as missing evidence rather than as a refutation.
+    absence_is_evidence: bool = False
 
     def evaluate(self, attributes: Mapping[str, Any]) -> bool:
         return self.predicate(attributes.get(self.key))
@@ -82,10 +86,20 @@ class GateResult:
     clauses: Mapping[str, bool]
     failed: tuple[str, ...]
     missing_attributes: tuple[str, ...]
+    #: clauses that failed on a *known* value - enough to refute the hypothesis
+    failed_decisively: tuple[str, ...] = ()
 
-    def as_gate_evidence(self) -> dict[str, bool]:
-        """Shape expected by ``Finding.gate_evidence``."""
-        return dict(self.clauses)
+    def as_gate_evidence(self) -> dict[str, bool | None]:
+        """Shape expected by ``Finding.gate_evidence``.
+
+        Tri-state on purpose: ``True`` established, ``False`` refuted, ``None`` never
+        established. Collapsing the third case to ``False`` made a clause no evidence was
+        offered for indistinguishable from one the evidence contradicted - visible only by
+        reading the finding of a real scan, where a rejected finding listed
+        ``caller_check_absent: false`` although nothing had been established about it.
+        """
+        missing = set(self.missing_attributes)
+        return {key: (None if key in missing else value) for key, value in self.clauses.items()}
 
 
 _GATES: tuple[Gate, ...] = (
@@ -97,7 +111,7 @@ _GATES: tuple[Gate, ...] = (
         severity_hint=Severity.HIGH,
         clauses=(
             Clause("exported", "Component is reachable by another app", _is_true),
-            Clause("permission", "No android:permission guards it", _is_empty),
+            Clause("permission", "No android:permission guards it", _is_empty, absence_is_evidence=True),
             Clause(
                 "caller_check_absent",
                 "No runtime caller verification (checkCallingPermission / Binder.getCallingUid)",
@@ -275,16 +289,24 @@ def evaluate(category: str, attributes: Mapping[str, Any]) -> GateResult:
     missing: list[str] = []
     for clause in gate.clauses:
         results[clause.key] = clause.evaluate(attributes)
-        if clause.key not in attributes:
+        absent = clause.key not in attributes or (
+            attributes.get(clause.key) is None and not clause.absence_is_evidence
+        )
+        if absent:
             missing.append(clause.key)
 
     failed = tuple(k for k, v in results.items() if not v)
+    # A clause that failed on a value we actually have refutes the hypothesis. A clause that
+    # "failed" only because its attribute was never established does not, and must not be
+    # reported as if it did.
+    decisive = tuple(k for k in failed if k not in missing)
     return GateResult(
         category=category,
         passed=not failed,
         clauses=results,
         failed=failed,
         missing_attributes=tuple(missing),
+        failed_decisively=decisive,
     )
 
 
