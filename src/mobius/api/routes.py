@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query, UploadFile
-from fastapi.responses import JSONResponse
+import asyncio
+import json
+
+from fastapi import APIRouter, Depends, Header, Query, Request, UploadFile
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from ..adapters.events import SqlEventStore
 from ..adapters.models import EvidenceRow, FindingRow, InvestigationRow
-from ..core import gates
-from ..core.enums import EvidenceKind, RejectionReason
+from ..core import fsm, gates
+from ..core.enums import EvidenceKind, InvestigationState, RejectionReason
 from ..services.evidence import EvidenceService
 from ..services.intake import IntakeService
+from ..services.recon import ReconService
 from ..services.validation import ValidationService
 from .deps import analyst_id, get_context
 from .schemas import (
@@ -333,6 +337,104 @@ def validate(
             "gate_passed": verdict.gate_passed,
         },
     }
+
+
+# ------------------------------------------------------------------------------------
+# RECON
+# ------------------------------------------------------------------------------------
+
+
+@router.post("/scans/{scan_id}/recon", tags=["scans"])
+def run_recon(scan_id: str, session=Depends(_session)):
+    """Run the deterministic manifest analysis. Idempotent only in the sense that it
+    refuses to run twice: re-running would duplicate observations and frontier entries."""
+    ctx = get_context()
+    return ReconService(session, ctx.store).run(scan_id)
+
+
+@router.get("/scans/{scan_id}/surface", tags=["scans"])
+def get_surface(scan_id: str, session=Depends(_session)):
+    ctx = get_context()
+    return ReconService(session, ctx.store).surface(scan_id)
+
+
+# ------------------------------------------------------------------------------------
+# Event stream (SSE)
+# ------------------------------------------------------------------------------------
+
+
+def _sse(event) -> str:
+    return (
+        f"id: {event.seq}\n"
+        f"event: {event.type}\n"
+        f"data: {json.dumps(event.payload, separators=(',', ':'))}\n\n"
+    )
+
+
+@router.get("/scans/{scan_id}/stream", tags=["stream"])
+async def stream_events(
+    scan_id: str,
+    request: Request,
+    after: int = Query(default=0, ge=0),
+    follow: bool = Query(default=True),
+    idle_timeout: float = Query(default=30.0, ge=0.0, le=300.0),
+    last_event_id: str | None = Header(default=None),
+):
+    """Server-sent events, replayed from a cursor.
+
+    Deliberately implemented by polling the event table rather than by Postgres
+    LISTEN/NOTIFY. That keeps replay, ordering and the `Last-Event-ID` contract identical on
+    SQLite and Postgres, and means the resume path is exercised continuously instead of only
+    after a disconnect. The cost is a small poll interval; the `EventEmitter` port exists so
+    a push transport can replace this without touching any caller.
+    """
+    ctx = get_context()
+    start = after
+    if last_event_id:
+        try:
+            start = max(start, int(last_event_id))
+        except ValueError:
+            pass
+
+    with ctx.session() as probe:
+        if probe.get(InvestigationRow, scan_id) is None:
+            from ..services.errors import NotFound
+
+            raise NotFound(f"investigation {scan_id} not found")
+
+    async def generator():
+        last = start
+        idle = 0.0
+        while True:
+            if await request.is_disconnected():
+                return
+            with ctx.session() as session:
+                events = SqlEventStore(session).read_after(scan_id, after_seq=last, limit=200)
+                row = session.get(InvestigationRow, scan_id)
+                terminal = row is not None and fsm.is_terminal(InvestigationState(row.state))
+            if events:
+                for event in events:
+                    last = event.seq
+                    yield _sse(event)
+                idle = 0.0
+                continue
+            if terminal:
+                # Everything that will ever be written has been written. Closing here is
+                # what lets a client stop reconnecting without guessing.
+                yield "event: stream_end\ndata: {}\n\n"
+                return
+            if not follow or idle >= idle_timeout:
+                return
+            await asyncio.sleep(0.2)
+            idle += 0.2
+            if idle % 5 < 0.2:
+                yield ": keep-alive\n\n"
+
+    return StreamingResponse(
+        generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ------------------------------------------------------------------------------------

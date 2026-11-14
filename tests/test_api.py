@@ -201,6 +201,50 @@ def test_validation_refuses_self_validation(client):
     assert resp.json()["code"] == "VALIDATOR_MUST_DIFFER"
 
 
+def test_recon_runs_over_http_and_exposes_the_surface(client):
+    app = _upload(client).json()
+    auth = _authorize(client, app["sha256"]).json()
+    scan = _scan(client, app["id"], auth["id"]).json()
+
+    recon = client.post(f"/api/v1/scans/{scan['id']}/recon")
+    assert recon.status_code == 200, recon.text
+    body = recon.json()
+    assert body["state"] == "SURFACE_READY"
+    assert body["evidence_id"].startswith("ev_")
+
+    surface = client.get(f"/api/v1/scans/{scan['id']}/surface").json()
+    assert surface["observations"], "RECON must record what it saw"
+
+    again = client.post(f"/api/v1/scans/{scan['id']}/recon")
+    assert again.status_code == 409
+    assert again.json()["code"] == "SCAN_STATE_CONFLICT"
+
+
+def test_recon_rejects_a_non_manifest_apk(client):
+    import io
+    import zipfile
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("AndroidManifest.xml", b"<not-a-manifest/>")
+    app = client.post(
+        "/api/v1/applications",
+        files={"file": ("x.apk", buf.getvalue(), "application/vnd.android.package-archive")},
+    ).json()
+    auth = _authorize(client, app["sha256"]).json()
+    scan = _scan(client, app["id"], auth["id"]).json()
+    resp = client.post(f"/api/v1/scans/{scan['id']}/recon")
+    assert resp.status_code == 422
+    assert resp.json()["code"] == "MANIFEST_INVALID"
+
+
+def test_health_reports_androguard_present_when_installed(client):
+    body = client.get("/api/v1/health").json()
+    import importlib.util
+
+    assert body["tools"]["androguard"] is (importlib.util.find_spec("androguard") is not None)
+
+
 def test_unknown_scan_is_404_with_a_code(client):
     resp = client.get("/api/v1/scans/scn_missing")
     assert resp.status_code == 404
@@ -220,3 +264,22 @@ def test_evidence_round_trip(client):
     listed = client.get(f"/api/v1/scans/{scan['id']}/evidence").json()["items"]
     assert len(listed) == 1
     assert listed[0]["summary"] == "extracted manifest"
+
+
+def test_fresh_checkout_starts_without_pre_created_directories(tmp_path):
+    """A clone has no data/ directory. The app must create it, not fail on first upload."""
+    from mobius.api.config import Settings
+    from mobius.api.deps import AppContext
+
+    settings = Settings(
+        db_url=f"sqlite+pysqlite:///{tmp_path}/nested/dir/mobius.db",
+        artifact_root=tmp_path / "nested" / "artifacts",
+        env="test",
+    )
+    ctx = AppContext(settings)
+    with ctx.session() as session:
+        from sqlalchemy import text
+
+        assert session.execute(text("SELECT 1")).scalar() == 1
+    assert (tmp_path / "nested" / "artifacts").is_dir()
+    ctx.engine.dispose()

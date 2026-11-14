@@ -13,6 +13,9 @@ dependencies = [
     "uvicorn[standard]>=0.29",
     "sqlalchemy>=2.0",
     "python-multipart>=0.0.9",
+    # RECON decodes binary AndroidManifest.xml with androguard. It is pure Python and needs
+    # no JDK, unlike JADX/Apktool - which is why RECON is the one adapter that runs here.
+    "androguard>=4.1",
 ]
 
 [project.optional-dependencies]

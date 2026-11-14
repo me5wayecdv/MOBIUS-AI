@@ -51,6 +51,11 @@ class ApkTooLarge(DomainError):
     http_status = 413
 
 
+class ManifestInvalid(DomainError):
+    code = "MANIFEST_INVALID"
+    http_status = 422
+
+
 class NotFound(DomainError):
     code = "NOT_FOUND"
     http_status = 404

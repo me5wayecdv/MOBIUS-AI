@@ -13,17 +13,17 @@ University graduation project.
 |---|---|
 | Phase 0 — environment & repo audit | **Complete** |
 | Phase 1 — research & architecture | **Complete — awaiting Project Director approval** |
-| Phase 2 — core platform foundation | **Vertical slice running** (no analysis agents yet) |
+| Phase 2 — core platform foundation | **Vertical slice running**; RECON analyses real APKs |
 
 ### What actually runs today
 
-A working, tested vertical slice: upload an APK, record an authorisation bound to its
-SHA-256, open an investigation, watch the state machine advance, and validate a claim
-through a gate to a confirmed or rejected finding.
+Upload an APK, authorise it by SHA-256, open an investigation, let RECON decode the
+binary `AndroidManifest.xml` into evidence-backed observations, then validate a claim
+through a gate to a confirmed, rejected or *insufficient* verdict — streamed live over SSE.
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
-.venv/bin/python -m pytest                 # 136 passed, 6 skipped
+.venv/bin/python -m pytest                 # 176 passed, 6 skipped
 .venv/bin/uvicorn mobius.api.app:app --host 0.0.0.0 --port 8000
 curl localhost:8000/api/v1/health
 ```
@@ -36,16 +36,16 @@ absent, because they are.
 
 | Not implemented | Consequence |
 |---|---|
-| Any analysis agent (RECON, SPECTRE, VERITAS, NEXUS loop) | No APK is ever inspected; the pipeline stops at `RECON` |
-| APK parsing (androguard / JADX / Apktool) | Upload validates that the file is an APK; it does not understand it |
+| SPECTRE, VERITAS, NEXUS loop | Nothing reads code. RECON stops at `SURFACE_READY`; a RECON-only candidate is always `insufficient_evidence` |
+| Code analysis (JADX / Apktool) | No decompilation; no sink reachability; the platform/JDK is absent here (R-01) |
+| RECON beyond the manifest | No dex parsing, string extraction, certificate or native-library analysis yet |
 | Dynamic analysis | `intensity` 3 is refused globally; ADR-016 still holds |
-| Live event stream (WebSocket/SSE) | Events are readable by polling `GET /scans/{id}/events?after=` only |
 | Real authentication | Stub identity header; the app **refuses to start** with `MOBIUS_ENV=production` |
 | War Room UI | No frontend exists |
 | Attack graph, reports, benchmark | Tables and docs exist; no writer, no numbers |
 | `enforce_authorization_scope` trigger | Written and unit-tested as SQL, **never executed** — no PostgreSQL here. Its 6 tests skip |
 
-`136 passed, 6 skipped` is the real count from this build. The 6 skips are the Postgres
+`176 passed, 6 skipped` is the real count from this build. The 6 skips are the Postgres
 trigger tests; a skip is not a pass. See [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md)
 for per-component detail and the claims audit.
 
