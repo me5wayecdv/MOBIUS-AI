@@ -15,6 +15,7 @@ from ..core.enums import EvidenceKind, InvestigationState, RejectionReason
 from ..services.evidence import EvidenceService
 from ..services.intake import IntakeService
 from ..services.recon import ReconService
+from ..services.spectre import SpectreService
 from ..services.validation import ValidationService
 from .deps import analyst_id, get_context
 from .schemas import (
@@ -356,6 +357,17 @@ def run_recon(scan_id: str, session=Depends(_session)):
 def get_surface(scan_id: str, session=Depends(_session)):
     ctx = get_context()
     return ReconService(session, ctx.store).surface(scan_id)
+
+
+@router.post("/scans/{scan_id}/spectre", tags=["scans"])
+def run_spectre(scan_id: str, session=Depends(_session)):
+    """Run code analysis: build a call graph, search for sink reachability, ask the gate.
+
+    Deterministic - no model is called. Returns one result per candidate component, each
+    with the reachability status and the verdict it produced.
+    """
+    ctx = get_context()
+    return SpectreService(session, ctx.store).analyse(scan_id)
 
 
 # ------------------------------------------------------------------------------------

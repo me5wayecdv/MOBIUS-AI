@@ -4,6 +4,47 @@ Every review, decision request and supersession is recorded here. Newest first.
 
 ---
 
+## 2026-11-13 · RL-006 · SPECTRE — the real APK found five bugs the fixtures hid
+
+**Scope:** dex indexing, call graph, reachability search, SPECTRE service, `POST
+/scans/{id}/spectre`. Tests 176 → 243 (6 skipped, Postgres-only).
+
+Every finding below came from running the pipeline against a real APK
+(`com.politedroid_4.apk`, 18 489 bytes) or from a test that contradicted an assumption — not
+from review. The synthetic fixtures passed throughout; four of these bugs were invisible to
+them.
+
+| # | Finding | Resolution |
+|---|---|---|
+| 1 | A guard on the caller (`checkCallingPermission` and friends) was mapped to `not-reachable`, telling the analyst "there is no path" when the truth was "there is a path and it is checked" | New reason `guarded-by-caller-check`. A guard refutes `caller_check_absent`; it says nothing about reachability |
+| 2 | The call graph contained only methods that had internal callees, so lifecycle methods with no in-app callees were simply absent — the entry point of the only candidate did not exist in the graph | Every method is seeded as a node; `internal_calls` counts edges separately from `graph_nodes` |
+| 3 | Entry points were matched by `MethodRef(class, name)` with an **empty descriptor**, so real `onReceive(Context,Intent)V` never matched and the app reported `no-entry-point` | `CallGraph.methods_named()` matches by name and returns the overloads |
+| 4 | A `None` clause value counted as a failed clause, so a candidate the tool had never refuted came out `rejected` — an absence of evidence reported as evidence of absence | `Clause.absence_is_evidence` + `GateResult.failed_decisively`; decisive failure is checked before missing, so `None` yields `insufficient_evidence` |
+| 5 | **A false positive.** With the graph finally working, the real APK produced `confirmed`: exported receiver → `SharedPreferences.getString` → "shared-prefs" sink | The sink was not a sink. Reading a preference discloses nothing; reachability without data flow cannot tell that from exfiltration. `shared-prefs` and `intent-redirect` removed from the catalogue, with a regression test asserting they stay out |
+
+| 6 | A complete search that reached **nothing** reported `caller_check_absent: true` and `path_length: 0` — a claim about a call chain that does not exist, reading as "the entry point is the sink" | Both are `null` when there is no path. Only a reached path can say anything about the checks on it |
+| 7 | Stored `gate_evidence` collapsed the tri-state to booleans, so a clause nothing had been offered as evidence about was stored as `false`, indistinguishable from "refuted" | `as_gate_evidence()` emits `null` for never-established; `Finding.gate_evidence` and `VerdictRecord.gate_detail` accept the third state |
+| 8 | The finding title said "reachability not established" on a finding whose verdict was a *decisive* refutation | The title now follows the verdict: "no sensitive sink reachable in the application code" |
+
+Findings 6–8 were all found by reading the JSON of a live `curl` run rather than by a test —
+the stored record disagreed with what the pipeline had actually established. Finding 5 is the
+one worth keeping: the pipeline's first confirmed finding on real code was
+wrong, and it was wrong because the catalogue was written by enumeration rather than by a
+rule. The rule now stated in `sinks.py` is that a sink must be an operation whose *execution*
+is security-relevant. After the tightening the same APK is correctly `not-reached` →
+`REJECTED` over a complete traversal of six methods.
+
+**What is proven now.** A real APK, parsed by real androguard, yields a real graph (10
+classes, 34 methods, 41 internal calls) and a deterministic verdict. Truncation is never
+refutation, asserted by test. The gate can reject on exhaustive absence.
+
+**Still unproven.** No confirmed true positive on real code — the corpus has no app with the
+pattern, so every "confirmed" verdict so far comes from synthetic dex. No multi-dex, no
+obfuscated app, no reflection, no data flow. JADX-level understanding of the reachable
+methods is not attempted. The Postgres trigger remains unexecuted.
+
+---
+
 ## 2026-11-13 · RL-003 · Review findings resolved — **AWAITING DIRECTOR REVIEW**
 
 **Addresses:** RL-002 findings I-01 … I-10.

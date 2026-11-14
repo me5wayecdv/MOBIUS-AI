@@ -35,7 +35,7 @@ from .errors import MissingEvidence, ValidatorMustDiffer
 # rather than free text, so rejections aggregate into a taxonomy instead of prose.
 _CLAUSE_TO_REASON: dict[str, RejectionReason] = {
     "permission": RejectionReason.MITIGATED_BY_PLATFORM,
-    "caller_check_absent": RejectionReason.NOT_REACHABLE,
+    "caller_check_absent": RejectionReason.GUARDED_BY_CALLER_CHECK,
     "sink_reachable": RejectionReason.NOT_REACHABLE,
     "data_is_sensitive": RejectionReason.NOT_SENSITIVE_DATA,
     "not_placeholder": RejectionReason.TEST_ONLY_VALUE,
@@ -66,6 +66,7 @@ class ValidationService:
         validated_by: str,
         severity: Severity | None = None,
         component_ref: str | None = None,
+        confidence_cap: float | None = None,
         source_ref: SourceRef | None = None,
         model_id: str | None = None,
         rejection_reason: RejectionReason | None = None,
@@ -89,15 +90,17 @@ class ValidationService:
             verdict = Verdict.CONFIRMED
             status = FindingStatus.CONFIRMED
             reason = None
-        elif result.missing_attributes:
-            # We did not establish some clauses. That is not a refutation.
+        elif result.failed_decisively:
+            # At least one clause is false on evidence we have. That refutes the hypothesis
+            # regardless of what else is unknown, so it is checked before missing evidence.
+            verdict = Verdict.REJECTED
+            status = FindingStatus.REJECTED
+            reason = rejection_reason or self._reason_for(result.failed_decisively)
+        else:
+            # Every unpassed clause was never established. Not a refutation.
             verdict = Verdict.INSUFFICIENT_EVIDENCE
             status = FindingStatus.MANUAL_REVIEW_REQUIRED
             reason = None
-        else:
-            verdict = Verdict.REJECTED
-            status = FindingStatus.REJECTED
-            reason = rejection_reason or self._reason_for(result.failed)
 
         store = SqlEventStore(self._session)
         store.emit(
@@ -112,6 +115,12 @@ class ValidationService:
             # Partial establishment: report the fraction of clauses we actually settled.
             settled = len(gate.clauses) - len(result.missing_attributes)
             confidence = round(max(settled / len(gate.clauses), 0.0) * 0.5, 2)
+        if confidence_cap is not None:
+            # The gate passing means every clause was established *given the evidence class*.
+            # It does not mean the conclusion is certain: a reachability-only finding has no
+            # data flow behind it, so the caller caps confidence at the evidence class's value
+            # and 1.0 is never reported for it.
+            confidence = round(min(confidence, confidence_cap), 2)
 
         finding_domain = Finding(
             investigation_id=investigation_id,

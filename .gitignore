@@ -29,6 +29,8 @@ uploads/
 apk/
 *.apk
 *.dex
+# Scoped exception: small, attributed test fixtures (see tests/fixtures/dex/NOTICE.md).
+!tests/fixtures/**/*.dex
 *.jar
 *.so
 

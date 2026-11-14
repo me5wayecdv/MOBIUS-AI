@@ -134,3 +134,51 @@ def test_gate_catalogue_is_complete():
     for gate in gates.GATES.values():
         assert gate.clauses, f"{gate.category} has no clauses - it would pass vacuously"
         assert gate.maswe or gate.masvs, f"{gate.category} has no standards mapping"
+
+
+def test_none_means_unestablished_not_false():
+    """Regression: a `None` attribute once counted as a *failed* clause.
+
+    That turned "we never established sink reachability" into "sink is not reachable", which
+    would reject a candidate the tool had not actually refuted. A None on a must-be-true
+    clause is missing evidence; on a must-be-empty clause it is the observation itself.
+    """
+    result = gates.evaluate(
+        "exported-component-no-permission",
+        {"exported": True, "permission": None, "caller_check_absent": None, "sink_reachable": None},
+    )
+    assert not result.passed
+    assert set(result.missing_attributes) == {"caller_check_absent", "sink_reachable"}
+    assert result.failed_decisively == ()
+    assert "permission" not in result.missing_attributes, "absent permission is the evidence"
+
+
+def test_decisive_failure_is_separated_from_missing_evidence():
+    result = gates.evaluate(
+        "exported-component-no-permission",
+        {"exported": True, "permission": "com.example.BIND_SYNC", "caller_check_absent": None},
+    )
+    assert "permission" in result.failed_decisively
+    assert "caller_check_absent" in result.missing_attributes
+    assert "permission" not in result.missing_attributes
+
+
+def test_gate_evidence_distinguishes_refuted_from_never_established():
+    """Regression from a real scan's stored finding.
+
+    A rejected finding recorded `caller_check_absent: false` for a clause nothing had been
+    offered as evidence about. A reader cannot tell that from "a caller check was found", so
+    the third state is carried through to storage as `null`.
+    """
+    from mobius.core.gates import evaluate
+
+    result = evaluate(
+        "exported-component-no-permission",
+        {"exported": True, "permission": None, "sink_reachable": False},
+    )
+
+    evidence = result.as_gate_evidence()
+    assert evidence["sink_reachable"] is False  # refuted by a complete search
+    assert evidence["exported"] is True  # established
+    assert evidence["caller_check_absent"] is None  # never established
+    assert evidence["permission"] is True  # "no permission" is itself the evidence

@@ -18,34 +18,38 @@ University graduation project.
 ### What actually runs today
 
 Upload an APK, authorise it by SHA-256, open an investigation, let RECON decode the
-binary `AndroidManifest.xml` into evidence-backed observations, then validate a claim
-through a gate to a confirmed, rejected or *insufficient* verdict — streamed live over SSE.
+binary `AndroidManifest.xml` into evidence-backed observations, let SPECTRE index the real
+dex and search the call graph for a path from an exported entry point to a sensitive sink,
+then validate a claim through a gate to a confirmed, rejected or *insufficient* verdict —
+streamed live over SSE. No model is called anywhere: every verdict is reproducible from the
+APK bytes (ADR-022).
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
-.venv/bin/python -m pytest                 # 176 passed, 6 skipped
+.venv/bin/python -m pytest                 # 237 passed, 6 skipped
 .venv/bin/uvicorn mobius.api.app:app --host 0.0.0.0 --port 8000
 curl localhost:8000/api/v1/health
 ```
 
-`GET /api/v1/health` reports which Android tools are present **before** a scan starts. In
-the current development environment it reports `jadx`, `apktool`, `adb` and `androguard` as
-absent, because they are.
+`GET /api/v1/health` reports which Android tools are present **before** a scan starts, so
+a missing tool is visible rather than inferred from an empty result. `androguard` is present
+and is what RECON and SPECTRE actually use; `jadx`, `apktool` and `adb` are absent, because
+they are, which is why no decompilation is claimed.
 
 ### What is **not** real yet — stated plainly
 
 | Not implemented | Consequence |
 |---|---|
-| SPECTRE, VERITAS, NEXUS loop | Nothing reads code. RECON stops at `SURFACE_READY`; a RECON-only candidate is always `insufficient_evidence` |
-| Code analysis (JADX / Apktool) | No decompilation; no sink reachability; the platform/JDK is absent here (R-01) |
-| RECON beyond the manifest | No dex parsing, string extraction, certificate or native-library analysis yet |
+| VERITAS model agent, NEXUS loop | No model is called. Gates and verdicts **are** real; SPECTRE reaches them by graph search, not by a model |
+| Code analysis beyond reachability | Call graph and sink reachability are real (dex, application classes only). **No decompilation** (no JDK, R-01), **no data flow**, **no CFG**, no reflection, no multi-dex |
+| RECON beyond the manifest | Strings are extracted from dex; certificates, native libraries and multi-dex are not |
 | Dynamic analysis | `intensity` 3 is refused globally; ADR-016 still holds |
 | Real authentication | Stub identity header; the app **refuses to start** with `MOBIUS_ENV=production` |
 | War Room UI | No frontend exists |
 | Attack graph, reports, benchmark | Tables and docs exist; no writer, no numbers |
 | `enforce_authorization_scope` trigger | Written and unit-tested as SQL, **never executed** — no PostgreSQL here. Its 6 tests skip |
 
-`176 passed, 6 skipped` is the real count from this build. The 6 skips are the Postgres
+`243 passed, 6 skipped` is the real count from this build. The 6 skips are the Postgres
 trigger tests; a skip is not a pass. See [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md)
 for per-component detail and the claims audit.
 
