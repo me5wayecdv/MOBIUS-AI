@@ -115,6 +115,31 @@ no Android tool has been invoked; no model has been called; no benchmark number 
 
 ---
 
+## 2026-11-12 · RL-005 · RECON and the event stream
+
+**Scope:** binary manifest decoding, surface derivation, RECON service, SSE stream. Tests
+142 → 176.
+
+**Findings**, each from a failing test or a failing server rather than from review:
+
+| # | Finding | Resolution |
+|---|---|---|
+| 1 | A hand-written AXML encoder produced a file androguard rejected from the third element onward: the start-element chunk size omitted the 20-byte `attrExt` header, so the parser lost alignment | Chunk size = `36 + 20*attrs`. Three encoder bugs found this way, none of which review would have caught |
+| 2 | All `TYPE_STRING` attribute values decoded as empty | `rawValue` must be the string-pool index, as aapt writes it; `NO_ENTRY` made androguard return `b''` |
+| 3 | androguard's XML output declares `xmlns:android` but writes attributes **unprefixed**, so `{uri}name` lookups silently returned `None` — a fully exported app read as inert | Bare-name fallback in `_android()`. Caught only because the binary fixture was checked end to end |
+| 4 | `uvicorn` on a fresh checkout died with `sqlite3.OperationalError: unable to open database file` | `AppContext` now creates the artefact root and the SQLite parent directory; test added. An error that points at the wrong subsystem is worse than no error |
+
+**Not a finding, worth recording:** RECON's outputs are deliberately insufficient to confirm
+anything. `test_recon_candidates_can_never_confirm` asserts `insufficient_evidence` for every
+candidate it produces. This is the first point where the project's central claim is enforced by
+a test rather than by prose.
+
+**Still unproven:** no real-world APK has been parsed (no sample available — only a synthetic
+AXML fixture validated against androguard); no model has been called; no dex/string/certificate
+analysis exists; the PostgreSQL trigger remains unexecuted.
+
+---
+
 ## Supersessions
 
 | ADR | Superseded by | Reason |

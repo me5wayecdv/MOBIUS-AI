@@ -9,6 +9,7 @@ fake authentication is worse than one with none: it would look protected.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 from fastapi import Header
 
@@ -16,6 +17,18 @@ from ..adapters.db import make_engine, make_session_factory
 from ..adapters.models import Base
 from ..services.artifacts import ArtifactStore
 from .config import Settings
+
+
+def _ensure_sqlite_parent(db_url: str) -> None:
+    """Create the parent directory of a file-backed SQLite database, if there is one."""
+    if not db_url.startswith("sqlite") or db_url.endswith(":memory:"):
+        return
+    _, _, path = db_url.partition(":///")
+    if not path or path == ":memory:":
+        return
+    parent = Path(path).expanduser().parent
+    if str(parent) not in {"", "."}:
+        parent.mkdir(parents=True, exist_ok=True)
 
 
 class AppContext:
@@ -28,6 +41,11 @@ class AppContext:
                 "refusing to start: stub authentication is enabled and MOBIUS_ENV="
                 f"{self.settings.env!r}. Implement real auth (T-049) before deploying."
             )
+        # Create the directories the process needs before opening the database. Without
+        # this, a fresh checkout fails with `sqlite3.OperationalError: unable to open
+        # database file`, which points at SQLite rather than at the missing directory.
+        self.settings.artifact_root.mkdir(parents=True, exist_ok=True)
+        _ensure_sqlite_parent(self.settings.db_url)
         self.engine = make_engine(self.settings.db_url)
         if create_schema:
             Base.metadata.create_all(self.engine)

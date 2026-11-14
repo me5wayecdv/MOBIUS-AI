@@ -25,6 +25,8 @@ ADR supersedes it and states why (`master prompt §21`).
 | 017 | Pause is a flag, not an FSM state | Proposed |
 | 018 | JSON columns instead of Postgres arrays | Proposed |
 | 019 | Explicit flush order; no ORM relationships | Proposed |
+| 020 | RECON decodes AXML in-process with androguard | Proposed |
+| 021 | SSE by polling the event table, not LISTEN/NOTIFY | Proposed |
 
 ---
 
@@ -301,6 +303,67 @@ not a loud error) and would otherwise be "fixed" by adding relationships without
 **Diagnostic note for the next person.** `sort_tables_and_constraints` returns the correct order — that is
 not evidence about the unit of work. Reproduce by adding rows in one `commit()` and reading the emitted
 SQL with `echo=True`.
+
+## ADR-020 — RECON decodes AXML in-process with androguard
+
+**Problem.** RECON must read the binary `AndroidManifest.xml` inside an APK. The approved
+architecture (ADR-002) puts analysis tooling behind an external, configurable tool plane,
+because JADX and Apktool need a JDK that this environment does not have.
+
+**Options.** (a) route manifest parsing through the external tool plane like every other
+adapter; (b) special-case androguard as an in-process Python dependency; (c) write our own
+AXML decoder; (d) extract the manifest with a remote service.
+
+**Decision.** (b).
+
+**Rationale.** The tool-plane rule exists to keep a killable, credential-free process around
+*mutating* tools — decompilers, instrumenters, whatever executes against untrusted input.
+androguard is a parser: pure Python, no subprocess, no JDK, no network, and it runs inside
+the same request that already holds the APK bytes. Introducing a subprocess boundary here
+would add a failure mode without adding isolation, since the parser reads a file the API has
+already accepted. (a) would also make RECON un-runnable in an environment where the whole
+point is that RECON *is* the runnable part. (c) duplicates a mature parser on a binary format
+with a long tail of vendor quirks. (d) sends an attacker-supplied document to a third party.
+
+**Consequences.**
+- `androguard>=4.1` is a hard dependency. It is the only analysis tool in the dependency set.
+- The domain never imports it: `core.manifest` holds the surface model, and
+  `adapters.android_manifest` is the only module that touches androguard, so SPECTRE's
+  JADX path can stay external without disturbing this one.
+- **Documented quirk:** androguard's `AXMLPrinter` emits `xmlns:android="..."` but writes the
+  attributes *without* the `android:` prefix. A strict `{uri}name` lookup therefore reads
+  every Android attribute as absent, which makes a fully exported app look inert. The adapter
+  falls back to the bare attribute name and a test pins the behaviour.
+- The binary path is tested against a hand-encoded AXML fixture that androguard must also
+  decode, because no sample APK exists in this environment.
+
+**Reversal cost.** Low: the parser sits behind `parse_apk()`, returning a Layer-1
+`ManifestSurface`. Swapping in JADX's XML output changes one adapter function.
+
+## ADR-021 — SSE by polling the event table, not LISTEN/NOTIFY
+
+**Problem.** The War Room needs a live event feed with resume-after-reconnect.
+
+**Options.** (a) Postgres `LISTEN`/`NOTIFY` plus WebSocket; (b) SSE fed by polling
+`events` with `seq > last`; (c) in-process pub/sub through a queue.
+
+**Decision.** (b).
+
+**Rationale.** (c) is wrong in a multi-process deployment and was rejected for the same
+reason ADR-007 rejected Redis: the database already holds the ordering guarantee, and a
+second bus can disagree with it. (a) is the better end state but is Postgres-only, which
+would leave the stream untested in CI and unusable on the SQLite path a reviewer runs; it
+also adds a listening connection per client. Polling keeps replay, ordering and the
+`Last-Event-ID` contract identical on both backends, and it exercises the resume path
+continuously rather than only after a real disconnect.
+
+**Cost.** Up to one poll interval of latency (200 ms today) and one small query per interval
+per connected client. Both are acceptable at the target scale (a handful of analysts).
+
+**Consequences.** `GET /scans/{id}/stream` closes with a `stream_end` event once the
+investigation is terminal and every event has been delivered, so clients stop reconnecting
+without guessing. The `EventEmitter` port means a push transport can replace this without
+touching callers. Revisit if concurrent viewers exceed ~50 or latency becomes a complaint.
 
 ---
 

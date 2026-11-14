@@ -9,6 +9,7 @@ multi-table adds fail intermittently (see mobius.services.intake module docstrin
 from __future__ import annotations
 
 import io
+import logging
 import zipfile
 from datetime import datetime, timedelta, timezone
 
@@ -19,6 +20,17 @@ from mobius.api.deps import AppContext, set_context
 from mobius.api.config import Settings
 from mobius.api.app import create_app
 from mobius.services.artifacts import ArtifactStore
+
+
+# androguard logs every chunk it parses at DEBUG through loguru, which would bury pytest
+# output. Silence it once, at import, rather than per test.
+try:  # pragma: no cover - cosmetic
+    from loguru import logger as _loguru
+
+    _loguru.remove()
+except ImportError:  # pragma: no cover
+    pass
+logging.getLogger("androguard").setLevel(logging.CRITICAL)
 
 
 def make_apk(*, manifest: str | None = None, extra: dict[str, bytes] | None = None) -> bytes:

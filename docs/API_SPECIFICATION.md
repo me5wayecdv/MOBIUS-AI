@@ -30,6 +30,11 @@ explains intent; the generated schema is normative. Any divergence is a bug.
 | `INTENSITY_NOT_GRANTED` | 409 | Requested intensity exceeds grant |
 | `APK_TOO_LARGE` | 413 | > 200 MB |
 | `APK_INVALID` | 422 | Not a ZIP / no `AndroidManifest.xml` |
+| `MANIFEST_INVALID` | 422 | Manifest present but unreadable (bad AXML, no package, wrong root) |
+| `VALIDATOR_MUST_DIFFER` | 409 | `discovered_by == validated_by` (ADR-010) |
+| `MISSING_EVIDENCE` | 422 | A validation was requested with no `evidence_refs` |
+| `INTENSITY_DISABLED` | 409 | Intensity above the global v1 ceiling, whatever was granted |
+| `NOT_FOUND` | 404 | Unknown application, scan or evidence id |
 | `APK_DUPLICATE` | 409 | Same SHA-256 exists; retry with `?force=true` |
 | `SCAN_STATE_CONFLICT` | 409 | e.g. pause on a `CLOSED` scan |
 | `TOOL_UNAVAILABLE` | 503 | Required binary missing on the analysis host (NFR-PORT-1) |
@@ -115,6 +120,54 @@ Errors: `AUTH_REQUIRED`, `INTENSITY_NOT_GRANTED`, `APK_DUPLICATE` (n/a here).
 All three are idempotent and return `{state, paused}`. `pause` sets `paused_at`/`paused_by` and leaves
 `state` unchanged (ADR-017); `resume` clears them. `cancel` sets `stop_reason="cancelled"` and is the
 per-scan emergency stop.
+
+#### `POST /scans/{id}/recon`
+Runs deterministic manifest analysis. Requires `state = RECON`; transitions to `SURFACE_READY`.
+Emits `evidence_collected`, `surface_ready`, then `investigation_updated`. **Not idempotent** —
+a second call returns `SCAN_STATE_CONFLICT`, because re-running would duplicate observations and
+frontier entries.
+
+```json
+{
+  "package_name": "com.example.demo", "version_name": "1.2.3", "version_code": 7,
+  "min_sdk": 24, "target_sdk": 34,
+  "permissions": ["android.permission.INTERNET"],
+  "components": 5, "exported": 4, "unguarded_exported": 3,
+  "candidates": 2, "excluded_launchers": 1, "frontier_enqueued": 2,
+  "notes": ["1 exported launcher component(s) excluded as candidates: ..."],
+  "evidence_id": "ev_01J8...", "state": "SURFACE_READY"
+}
+```
+
+`notes` exists because the exclusions matter as much as the hits: a launcher is excluded by a
+heuristic, and a component with no explicit `android:exported` has its status *inferred* from the
+platform default. Both are stated rather than hidden.
+
+#### `GET /scans/{id}/surface`
+Reads back what RECON recorded: the observations (one per component, plus one for the package)
+and the frontier entries it queued. Each observation carries `evidence_refs`, so every claim is
+traceable to the manifest bytes.
+
+#### `POST /scans/{id}/validate`
+Evaluates a confirmation gate over supplied attributes and persists a finding plus a verdict.
+
+```json
+{ "category": "exported-component-no-permission",
+  "attributes": {"exported": true, "permission": null},
+  "title": "...", "description": "...", "evidence_refs": ["ev_01J8..."],
+  "discovered_by": "RECON", "validated_by": "VERITAS" }
+```
+
+Responses are `confirmed`, `rejected` (with a `rejection_reason` from a fixed taxonomy) or
+`insufficient_evidence` — the last when some clauses were not established, which is **not** the
+same as "safe". With only RECON's attributes the result is always `insufficient_evidence`: RECON
+cannot see whether the code behind a component reaches anything.
+
+#### `GET /scans/{id}/stream` (SSE)
+`text/event-stream`. Replays from `?after=<seq>` or the `Last-Event-ID` header, then follows.
+Frames are `id: <seq>`, `event: <type>`, `data: <json>`. Once the investigation is terminal and
+every event has been delivered the server emits `stream_end` and closes, so a client stops
+reconnecting without guessing. Transport rationale: ADR-021.
 
 #### `GET /scans/{id}`
 ```json
