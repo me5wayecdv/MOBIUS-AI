@@ -92,6 +92,29 @@ list of ways each gate and each architectural claim can be wrong (template in `H
 
 ---
 
+## 2026-11-12 · RL-004 · Phase 2 vertical slice — what the tests found
+
+**Scope:** first implementation pass: Layer-1 core, SQLAlchemy mapping, intake/validation
+services, HTTP API, 142 tests.
+
+**Findings that changed the code**, each found by a failing test rather than by review:
+
+| # | Finding | Resolution |
+|---|---|---|
+| 1 | SQLAlchemy ordered INSERTs by mapper definition, not foreign key, and **dropped a pending parent entirely** (`users` was never emitted) → `FOREIGN KEY constraint failed` | ADR-019: explicit flush order in services; relationships deliberately not used |
+| 2 | A "missing" attribute is not equivalent across predicate kinds: for `_is_empty` (no `android:permission`) absence **is** the evidence, for `_is_true` absence means unestablished | Kept the semantics, documented in `test_gates.py`; `missing_attributes` reported independently of `failed` |
+| 3 | My first `Finding` fixture assumed a confirmed finding could hold confidence 0.42 | The schema refused it. Confirmed ⇒ confidence 1.0 stays |
+| 4 | State spelling: I assumed lowercase `recon` on the wire | `API_SPECIFICATION.md` already specifies `RECON`. Code matched the spec; the test was wrong |
+
+**Corrections to earlier claims in this log.** Nothing previously marked `DONE` regressed;
+all prior rows were documentation and remain accurate. The README's "No code exists yet"
+was true when written and is now false — updated in the same commit.
+
+**Still unproven, restated:** the PostgreSQL trigger has never executed (6 tests skip);
+no Android tool has been invoked; no model has been called; no benchmark number exists.
+
+---
+
 ## Supersessions
 
 | ADR | Superseded by | Reason |
