@@ -136,6 +136,11 @@ stateDiagram-v2
     CLOSED --> [*]
 ```
 
+**Pause is orthogonal to this machine** (ADR-017). Pausing sets `paused_at` and stops the worker from
+leasing; it does **not** introduce a `PAUSED` state. Adding one would force every transition to carry a
+"remember the previous state" field and would double the transition table for no behavioural gain. The
+diagram above is therefore complete.
+
 Properties that make this defensible:
 
 1. **Every transition is an event.** `investigation_updated` with `from`/`to`. There is no path that

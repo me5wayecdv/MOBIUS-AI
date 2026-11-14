@@ -112,7 +112,8 @@ formality, they are the audit record.
 Errors: `AUTH_REQUIRED`, `INTENSITY_NOT_GRANTED`, `APK_DUPLICATE` (n/a here).
 
 #### `POST /scans/{id}/pause` · `/resume` · `/cancel`
-All three are idempotent and return the state. `cancel` sets `stop_reason="cancelled"` and is the
+All three are idempotent and return `{state, paused}`. `pause` sets `paused_at`/`paused_by` and leaves
+`state` unchanged (ADR-017); `resume` clears them. `cancel` sets `stop_reason="cancelled"` and is the
 per-scan emergency stop.
 
 #### `GET /scans/{id}`
@@ -120,6 +121,7 @@ per-scan emergency stop.
 {
   "id": "scn_01J8ZR4M2P",
   "state": "SELECTING",
+  "paused": false,
   "application_id": "app_01J8ZQ3K7Y",
   "step_count": 14,
   "budget": { "max_steps": 60, "max_model_tokens": 400000, "max_tool_calls": 80, "max_wall_seconds": 1800 },
@@ -211,7 +213,7 @@ offer "expand instead of show everything" (FR-GRAPH-3).
 ```json
 { "format": "pdf", "include_rejected": true, "include_unknowns": true }
 ```
-`include_unknowns` defaults to `true` and cannot be disabled via the API — an intentional product
+`include_unknowns` defaults to `true`, and setting it to `false` is rejected with `422` — an intentional product
 decision: reports that hide what was not determined are misleading.
 
 #### `GET /scans/{id}/report?version=1` → file stream

@@ -21,6 +21,8 @@ ADR supersedes it and states why (`master prompt §21`).
 | 013 | MobSF via HTTP only (GPL boundary) | Proposed |
 | 014 | v1 attack graph is a bounded reachability view | Proposed |
 | 015 | Vertical slice over phase-by-phase build | **Requires Director approval** |
+| 016 | A container runtime is required for the runner sandbox | Proposed |
+| 017 | Pause is a flag, not an FSM state | Proposed |
 
 ---
 
@@ -184,6 +186,65 @@ there is still time to fix it. It also produces something demonstrable at any po
 **Risk of the decision.** Less visible surface area at the mid-point review.
 **Approval required.** This is a scope change relative to the master prompt and must not be made
 unilaterally.
+
+## ADR-016 — A container runtime is required for the runner sandbox
+
+**Problem.** `ARCHITECTURE.md §9` selects "Docker + `nsjail`/`firejail`" for the runner, and
+`NFR-SEC-2` verifies isolation via "compose inspection". `ENVIRONMENT_AUDIT.md` records that **Docker is
+absent** from the current environment. No ADR made the dependency explicit, so the isolation claim rested
+on an unrecorded assumption (A-07).
+
+**Decision.** A container runtime is a **hard prerequisite for anything that touches an untrusted APK**.
+Without one, the runner may still be used for trusted fixtures, and the isolation claim must be reported
+as degraded wherever it appears — in the UI, in the report's methodology section, and in
+`IMPLEMENTATION_STATUS.md`. It must not be silently assumed.
+
+**Rationale.** Specialist G's critique is correct: process separation (`setrlimit` + unprivileged UID)
+bounds resource exhaustion and filesystem damage, but it does **not** contain a code-execution
+vulnerability in a decompiler — and a decompiler is a large native/JVM parser fed adversarial input by
+design. Claiming otherwise would repeat the exact overstatement this project criticises in others.
+
+**Consequences.** (a) `THREAT_MODEL.md` AR-1 is upgraded from "accepted residual risk" to "a residual risk
+that becomes unacceptable once a container host is available and therefore must be fixed at that point".
+(b) The `tools.lock.yaml` and `GET /system/tools` capability report gains a `sandbox` field so the
+degradation is visible before a scan starts, not after. (c) The demo plan must not claim isolation that
+the demo host does not provide.
+
+**Reversal trigger.** None foreseen. The only way to relax this is to replace the container with a
+stronger boundary (gVisor, microVM), which is a superset, not an exception.
+
+**Related.** ADR-002 (configurable tool plane), R-01, A-07, `THREAT_MODEL.md` B4/AR-1.
+
+## ADR-017 — Pause is a flag, not an FSM state
+
+**Problem.** Three documents disagreed. `EVENT_ARCHITECTURE.md §7` said a pause puts the FSM in `PAUSED`
+"a sub-state of `SELECTING`"; `DATABASE_SCHEMA.md`'s `state_known` CHECK did not include `PAUSED` and
+would have **rejected** the row; `ARCHITECTURE.md`'s FSM had no pause transition at all. Meanwhile
+`FR-NEXUS-7` requires pause/resume with fully persisted state and `API_SPECIFICATION.md` exposes
+`/pause` and `/resume`.
+
+**Options.** (a) Add `PAUSED` as a 16th state. Requires a `resume_to` column to remember where to return,
+and roughly doubles the transition table because every state can be paused. (b) Make pause a flag:
+`paused_at`, `paused_by`, `pause_reason`, with state untouched. (c) Derive it from the absence of a worker
+lease.
+
+**Decision.** (b).
+
+**Rationale.** A paused investigation is not in a *different phase* — it is in the same phase, not
+advancing. Modelling it as a state conflates "where am I in the workflow" with "is the workflow
+temporarily stopped", and the cost of that conflation is a `resume_to` column plus a transition matrix
+that must be maintained for every future state. The flag is one column, orthogonal by construction,
+trivially indexable, and it composes with `AWAITING_APPROVAL` (a scan can be paused while awaiting
+approval) — which the state model could not express without a second dimension anyway.
+
+**Consequences.** `state_known` stays at 15 values. `pause_is_coherent` CHECK binds `paused_at` and
+`paused_by` together. `pause`/`resume` emit `investigation_paused`/`investigation_resumed` but **no
+`investigation_updated` state transition**, so a paused scan's state chip does not change. The API returns
+`{state, paused}` so the client can render both facts independently.
+
+**Addendum — `SCOPE_BLOCKED` is retained as a state.** It is genuinely a workflow outcome ("this scan may
+not proceed"), not a temporary stop, and it exists so that a *refused* scan is still an auditable row
+(AC-FR-AUTH-2). That is the distinction between the two: outcome vs interruption.
 
 ---
 

@@ -41,7 +41,7 @@ frontend exclusively (per §17).
 
 **Proposal.** Modular monolith, three entrypoints, one Postgres, Postgres-backed queue and event
 stream, vertical slice first (`ARCHITECTURE.md` §8). Six agents in code, three of which are
-deterministic, no model.
+deterministic, no model. **[Superseded — see §8 reversal #4: v1 ships 3 agents, not 6.]**
 
 **Alternatives.** (a) Follow the master prompt literally → high risk of an unverifiable demo.
 (b) Split into microservices → no benefit, large cost. (c) Ship a scanner + LLM summary → fast, but
