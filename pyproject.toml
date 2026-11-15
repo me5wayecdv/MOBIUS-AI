@@ -16,6 +16,10 @@ dependencies = [
     # RECON decodes binary AndroidManifest.xml with androguard. It is pure Python and needs
     # no JDK, unlike JADX/Apktool - which is why RECON is the one adapter that runs here.
     "androguard>=4.1",
+    # Schema migrations. create_all() is a dev convenience; a deployed database needs an
+    # ordered, replayable history, and `alembic check` is what proves the models and the
+    # migrations still agree.
+    "alembic>=1.13",
 ]
 
 [project.optional-dependencies]
