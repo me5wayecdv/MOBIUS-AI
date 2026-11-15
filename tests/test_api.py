@@ -479,6 +479,9 @@ def test_upload_read_is_bounded_before_service_validation(client, monkeypatch):
     import mobius.api.routes as routes
 
     monkeypatch.setattr(routes, "MAX_APK_BYTES", 4)
+    # The route read limit and service validation limit must agree in this test.
+    import mobius.services.intake as intake
+    monkeypatch.setattr(intake, "MAX_APK_BYTES", 4)
     response = _upload(client)
     assert response.status_code == 413
     assert response.json()["code"] == "APK_TOO_LARGE"
