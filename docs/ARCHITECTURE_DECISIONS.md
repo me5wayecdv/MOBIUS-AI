@@ -427,6 +427,54 @@ descriptor, which the first real APK exposed.
 
 ---
 
+## ADR-023 — NEXUS is a deterministic dispatcher, not an adaptive planner
+
+**Problem.** Something has to move an investigation from RECON's queue of candidates to a
+closed, reported scan. The master prompt and `AGENT_DESIGN.md` describe an agent that picks
+work, observes the result, and *re-plans* when the result is uninformative.
+
+**Options.** (a) a model-driven planner that scores and re-scores the frontier as evidence
+arrives; (b) a deterministic dispatcher over the arithmetic scorer in `core/frontier.py`; (c)
+no loop - each tool invoked by hand through its own endpoint.
+
+**Decision.** (b), named precisely as a dispatcher.
+
+**Rationale.**
+1. *Re-planning is the only part that needs a model, and no model is called in this build.*
+   Building (a) now would mean either a stub that pretends to plan, or a live dependency on a
+   provider key that does not exist here (R-14) and an unresolved ethics decision about
+   sending decompiled proprietary code to a third party (R-09, Q3).
+2. *The parts that matter are deterministic.* Ranking is arithmetic, the dispatch table is a
+   dict, and the step budget is a counter. That makes the whole loop replayable: the same APK
+   with the same budget produces the same dispatch order and the same verdicts - verified by
+   running the same scan twice and comparing, not by assertion.
+3. *This resolves escalated disagreement C-5 by conceding it.* The frontier is best-first
+   search with a hand-written objective, not adaptive planning. The status file now says so,
+   and so does the response body.
+
+**The budget is a stop, not a hint.** `max_steps` bounds dispatches. When it is reached the
+FSM moves to `BUDGET_EXHAUSTED`, the remaining entries stay `queued`, and the response and
+`nexus_complete` event both name them. A loop that cannot say what it skipped is not
+auditable, and a budget that is quietly ignored during a demo is worse than none.
+
+**What it refuses to fake.** A frontier entry whose agent does not exist in this build
+(PHANTOM, VECTOR, ORACLE, ARCHIVIST) is marked `dropped` with the reason. Entries forbidden
+by the current intensity are dropped with *that* reason, which is the decisive one: an
+analyst can widen an authorisation, but cannot conjure PHANTOM. Nothing is silently skipped
+and nothing is counted as done.
+
+**Cost.** The loop cannot discover work that no tool queued for it. If RECON enqueues one
+candidate, one candidate is dispatched, and no amount of stepping will find a second. This is
+the honest ceiling of the current build: coverage grows with the tools that enqueue work, not
+with the loop.
+
+**Consequences.** `POST /scans/{id}/nexus` owns the path from `SURFACE_READY` to `CLOSED`,
+including the `code_analysis_complete` event the stream contract expects, whoever drove the
+analysis. The single-shot `POST /spectre` remains for targeted code analysis. The model-driven
+planner is phase 5 work and is **not implemented** - `IMPLEMENTATION_STATUS.md` says so.
+
+---
+
 ## Sources
 
 - [S1] Enumerated failure modes of unconstrained agent loops: https://blog.llmgo.top/en/articles/agent-loop-state-machine/

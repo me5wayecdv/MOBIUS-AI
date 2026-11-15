@@ -140,14 +140,32 @@ def score(entry: FrontierEntry, ctx: ScoreContext) -> float:
     return (p_informative * info_gain * impact * decay) / (ctx.cost_of(entry.action) * (1.0 + risk))
 
 
+def _stable_key(entry: FrontierEntry) -> tuple[str, str]:
+    """Content-derived identity, for breaking ties.
+
+    Ids are ULIDs: unique, but generated from a clock and randomness, so they differ between
+    two runs of the same APK. Breaking ties on an id made the dispatch order unreproducible -
+    found by a NEXUS test that ran the same investigation twice and got a different order.
+    Action and the thing the action is about are properties of the artefact, not of the run.
+    """
+    target = entry.action_args.get("component") or entry.action_args.get("class") or ""
+    return (entry.action, str(target))
+
+
 def rank(entries: list[FrontierEntry], ctx: ScoreContext) -> list[FrontierEntry]:
     """Return entries best-first, with a deterministic tie-break.
 
-    Ties are broken newest-first then by id, so two runs over the same frontier produce the
-    same order. Non-deterministic ranking would make an investigation unreproducible.
+    Ties break on depth, then on content (action, target), then on id. The first three are
+    reproducible from the artefact; the id is only reached by two entries that name the same
+    action on the same target, which would be a duplicate, not an ordering question.
     """
     scored = [(score(e, ctx), e) for e in entries]
-    return [e for s, e in sorted(scored, key=lambda p: (-p[0], -p[1].depth, p[1].id))]
+    return [
+        e
+        for s, e in sorted(
+            scored, key=lambda p: (-p[0], -p[1].depth, _stable_key(p[1]), p[1].id)
+        )
+    ]
 
 
 def pop_best(entries: list[FrontierEntry], ctx: ScoreContext) -> FrontierEntry | None:

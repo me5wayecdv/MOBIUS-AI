@@ -333,3 +333,44 @@ def test_spectre_rejects_an_unparseable_dex_with_a_typed_error(client):
     resp = client.post(f"/api/v1/scans/{scan['id']}/spectre")
     assert resp.status_code == 422
     assert resp.json()["code"] == "CODE_INDEX_FAILED"
+
+
+def test_nexus_drives_the_whole_loop_over_http(client):
+    """RECON -> NEXUS -> CLOSED, with the budget and the stop reason in the response."""
+    manifest = (
+        '<manifest xmlns:android="http://schemas.android.com/apk/res/android" '
+        'package="com.example.demo"><application>'
+        '<activity android:name="AnalysisTest" android:exported="true"/>'
+        "</application></manifest>"
+    )
+    app = client.post(
+        "/api/v1/applications",
+        files={"file": ("demo.apk", _apk_with_fixture_dex(manifest),
+                        "application/vnd.android.package-archive")},
+    ).json()
+    auth = _authorize(client, app["sha256"]).json()
+    scan = _scan(client, app["id"], auth["id"]).json()
+    assert client.post(f"/api/v1/scans/{scan['id']}/recon").status_code == 200
+
+    resp = client.post(f"/api/v1/scans/{scan['id']}/nexus?max_steps=5")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["state"] == "CLOSED"
+    assert body["stop_reason"] == "completed"
+    assert body["dispatched"] == 1
+    assert body["budget"] == {"max_steps": 5, "steps_used": 1, "steps_remaining": 4}
+    assert body["findings"]["confirmed"] == 0
+    assert body["steps"][0]["agent"] == "SPECTRE"
+
+    detail = client.get(f"/api/v1/scans/{scan['id']}").json()
+    assert detail["state"] == "CLOSED"
+
+
+def test_nexus_refuses_a_scan_that_has_not_run_recon(client):
+    app = _upload(client).json()
+    auth = _authorize(client, app["sha256"]).json()
+    scan = _scan(client, app["id"], auth["id"]).json()
+
+    resp = client.post(f"/api/v1/scans/{scan['id']}/nexus")
+    assert resp.status_code == 409
+    assert resp.json()["code"] == "SCAN_STATE_CONFLICT"

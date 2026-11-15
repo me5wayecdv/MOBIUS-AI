@@ -32,7 +32,6 @@ from ..adapters.models import (
     InvestigationRow,
     ObservationRow,
 )
-from ..core import fsm
 from ..core.enums import (
     EvidenceKind,
     FindingStatus,
@@ -46,6 +45,7 @@ from ..core.sinks import entry_methods_for
 from .artifacts import ArtifactStore
 from .errors import CodeIndexFailed, NotFound, ScanStateConflict
 from .evidence import EvidenceService
+from .state import advance
 from .validation import ValidationService
 
 AGENT = "SPECTRE"
@@ -96,18 +96,16 @@ class SpectreService:
                 f"SPECTRE runs after RECON; investigation is in {state.value}"
             )
 
-        application = self._session.get(ApplicationRow, row.application_id)
-        index = self._build_index(application)
-        evidence = self._record_index_evidence(investigation_id, index)
+        index, evidence = self.prepare(investigation_id)
 
         self._advance(row, InvestigationState.SELECTING)
-        candidates = self._candidates(investigation_id)
+        candidates = self.candidates(investigation_id)
         self._advance(row, InvestigationState.DISPATCHING)
 
         results: list[dict[str, object]] = []
         self._advance(row, InvestigationState.OBSERVING)
         for entry in candidates:
-            outcome = self._investigate(investigation_id, entry, index, evidence.id)
+            outcome = self.investigate(investigation_id, entry, index, evidence.id)
             if outcome is not None:
                 results.append(outcome)
             entry.state = "done"
@@ -148,6 +146,24 @@ class SpectreService:
             "manual_review": review,
             "results": results,
         }
+
+    def prepare(self, investigation_id: str) -> tuple[CodeIndex, object]:
+        """Index the APK and record the evidence, without moving the state.
+
+        Separated from ``analyse`` so NEXUS can build the graph once and then dispatch
+        candidates one at a time under its own budget, instead of this service deciding how
+        much work to do.
+        """
+        row = self._row(investigation_id)
+        if InvestigationState(row.state) is not InvestigationState.SURFACE_READY:
+            raise ScanStateConflict(
+                f"code analysis runs after RECON; investigation is in {row.state}"
+            )
+        application = self._session.get(ApplicationRow, row.application_id)
+        index = self._build_index(application)
+        evidence = self._record_index_evidence(investigation_id, index)
+        self._session.flush()
+        return index, evidence
 
     # -- internals -----------------------------------------------------------------
 
@@ -194,7 +210,7 @@ class SpectreService:
             produced_by=AGENT,
         )
 
-    def _candidates(self, investigation_id: str) -> list[FrontierEntryRow]:
+    def candidates(self, investigation_id: str) -> list[FrontierEntryRow]:
         return (
             self._session.query(FrontierEntryRow)
             .filter(
@@ -205,7 +221,7 @@ class SpectreService:
             .all()
         )
 
-    def _investigate(
+    def investigate(
         self,
         investigation_id: str,
         entry: FrontierEntryRow,
@@ -236,6 +252,12 @@ class SpectreService:
 
         attributes: dict[str, object] = {"exported": exported, "permission": permission}
         attributes.update(result.attributes())
+        if index.truncated and attributes.get("caller_check_absent") is not None:
+            # A found path proves its own methods, and guards on it are visible. What a
+            # truncated index cannot rule out is a check in a caller that never made it into
+            # the graph, so "no caller check" stops being established. Found by a NEXUS test
+            # that an incomplete index still produced a confirmed finding.
+            attributes["caller_check_absent"] = None
 
         observation = self._record_observation(
             investigation_id, component, kind, result, index, manifest_evidence_id
@@ -345,11 +367,4 @@ class SpectreService:
         return row
 
     def _advance(self, row: InvestigationRow, target: InvestigationState) -> None:
-        result = fsm.transition(
-            InvestigationState(row.state), target, authorization_id=row.authorization_id
-        )
-        row.state = result.current.value
-        SqlEventStore(self._session).emit(
-            row.id, result.event_type, result.event_payload, actor="NEXUS"
-        )
-        self._session.flush()
+        advance(self._session, row, target, actor="NEXUS")

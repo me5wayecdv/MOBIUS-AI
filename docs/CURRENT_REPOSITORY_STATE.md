@@ -26,7 +26,7 @@
 | `src/mobius/adapters/` | Layer 2 — 14 SQLAlchemy tables, engine/session, event store, AXML decoding, `sql/scope_guard.sql` |
 | `src/mobius/services/` | Layer 3 — intake/authorisation, evidence, gate validation, RECON |
 | `src/mobius/api/` | Layer 4 — FastAPI factory, 16 paths / 17 operations incl. SSE, RFC 9457 errors |
-| `tests/` | 249 tests (243 pass, 6 Postgres-only skips) |
+| `tests/` | 270 tests (264 pass, 6 Postgres-only skips) |
 | `pyproject.toml` | Packaging, deps, pytest config with registered markers |
 
 Still absent: `web/`, `migrations/`, any analysis agent, any Android tool adapter.

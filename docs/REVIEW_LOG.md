@@ -4,6 +4,36 @@ Every review, decision request and supersession is recorded here. Newest first.
 
 ---
 
+## 2026-11-15 · RL-007 · NEXUS — the FSM and the scorer caught two of the three bugs
+
+**Scope:** frontier-driven dispatch loop, `POST /scans/{id}/nexus`, `services/state.py`.
+Tests 243 → 264.
+
+| # | Finding | Resolution |
+|---|---|---|
+| 1 | The loop's first close-out path went `SELECTING -> VALIDATING`, which the FSM does not permit. The state machine **refused to run** rather than putting the investigation in an unreachable combination | Close-out leaves through `OBSERVING -> VALIDATING`, the only edge into it. The FSM catching a design error at runtime is the point of ADR-003 |
+| 2 | **Dispatch order was not deterministic.** Ties in the scorer broke on the entry id, and ids are ULIDs - clock plus randomness - so two runs of the same APK dispatched the same candidates in a different order | Tie-break on depth, then action and target (properties of the artefact), then id. Regression test orders the same frontier with deliberately swapped ids |
+| 3 | **A truncated index could still produce a `confirmed` finding.** Truncation only downgraded `not-reached`; when the sink *was* reached, `caller_check_absent: true` survived and the gate confirmed | A found path proves its own methods, but a truncated graph cannot rule out a guard in a caller that never made it into it. `caller_check_absent` is `None` on an incomplete index |
+| 4 | NEXUS drove SPECTRE's analysis but never emitted `code_analysis_complete`, so a stream client waiting for that marker would hang until the scan closed | NEXUS emits it when it dispatched work, and not when it did not - an "analysis complete" event for analysis that never ran would be a false statement |
+| 5 | A PHANTOM entry at passive intensity reported "PHANTOM is not implemented" and hid the fact that the action was forbidden at this intensity regardless | The intensity gate reports first: it is the constraint an analyst could change. Both reasons are true; the decisive one is stated |
+
+Finding 2 is the one worth keeping. The determinism requirement had been tested *within* one
+run (rank twice, same answer) and had passed for months. It took a test that ran two separate
+investigations and compared their dispatch orders to show the ordering was a function of the
+clock. Determinism across runs and determinism within a run are different claims.
+
+**What is proven now.** A real APK (`com.politedroid_4.apk`) goes upload → RECON → NEXUS →
+`CLOSED` over HTTP: 1 candidate dispatched, 1 rejected, `stop_reason: completed`, budget 1 of
+20 used, and the same scan repeated produced an identical decision payload, step list and
+result set.
+
+**Still unproven.** The loop cannot create work: it dispatches what RECON queued and nothing
+else, so "autonomous investigation" remains unearned prose. No model is called, no re-planning
+happens, PHANTOM/VECTOR/ORACLE are dropped with reasons, and ARCHIVIST writes no report - the
+investigation closes with events and findings only, which the API response says in its `notes`.
+
+---
+
 ## 2026-11-13 · RL-006 · SPECTRE — the real APK found five bugs the fixtures hid
 
 **Scope:** dex indexing, call graph, reachability search, SPECTRE service, `POST

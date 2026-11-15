@@ -1,14 +1,15 @@
 # IMPLEMENTATION STATUS
 
-> A **vertical slice of the backend is implemented and tested** (243 tests passing, 6 skipped).
-> RECON decodes real binary manifests and SPECTRE now reads real dex: it builds a call graph and
-> proves, or fails to prove, that an exported entry point reaches a sensitive sink. **No model is
-> called anywhere** — SPECTRE v1 decides by deterministic graph search (ADR-022). No frontend
-> exists. No confirmed true positive on real code has been produced yet. This file exists to prevent
+> A **vertical slice of the backend is implemented and tested** (264 tests passing, 6 skipped).
+> RECON decodes real binary manifests, SPECTRE reads real dex and proves or fails to prove sink
+> reachability from an exported entry point, and NEXUS drives that work from the frontier to a
+> closed investigation. **No model is called anywhere** — SPECTRE decides by deterministic graph
+> search (ADR-022) and NEXUS is a dispatcher, not a planner (ADR-023). No frontend exists. No
+> confirmed true positive on real code has been produced yet. This file exists to prevent
 > exactly the failure mode the project forbids: describing a proposal as if it were a working system
 > (master prompt §23). Every row states its evidence; a row without a test is not `DONE`.
 
-**Last updated:** 2026-11-13 · **Base commit:** `181bba9` · **Branch:** `arena/e74eccc1-mobius-ai`
+**Last updated:** 2026-11-15 · **Base commit:** `93d799a` · **Branch:** `arena/8c85b008-mobius-ai`
 
 ---
 
@@ -27,10 +28,11 @@
 | Component | Status | Spec | Evidence / limitation |
 |---|---|---|---|
 | Domain core (models, FSM, gates) | `DONE` | `AGENT_DESIGN.md`, `ARCHITECTURE.md §4` | `test_fsm.py` (15 states, no `PAUSED`), `test_gates.py` (10 gates, positive + negative controls), `test_schemas.py` (invariants) |
-| Frontier + scorer | `PARTIAL` | `AGENT_DESIGN.md §4` | `test_frontier.py`: arithmetic, determinism, unauthorised action scores `-inf`. **Never driven by a real agent loop** |
+| Frontier + scorer | `PARTIAL` | `AGENT_DESIGN.md §4` | `test_frontier.py`: arithmetic, determinism, unauthorised action scores `-inf`, ties break on content not on generated ids. **Driven by NEXUS**, which is a dispatcher over this queue and not a planner (ADR-023) |
+| NEXUS (dispatch loop) | `PARTIAL` | `AGENT_DESIGN.md §4`, phase 5 | `test_nexus.py` (19 tests) + 2 HTTP tests: pops the best entry, dispatches to the agent that can run it, records dropped work with reasons, stops on a step budget, closes the investigation. **No re-planning, no model** — a frontier entry no tool queued is never invented |
 | Postgres schema + migrations | `PARTIAL` | `DATABASE_SCHEMA.md` | 14 tables via SQLAlchemy metadata; SQLite + Postgres dialects. **No migration tool**; `create_all` is dev/CI only |
 | Event store + LISTEN/NOTIFY bridge | `PARTIAL` | `EVENT_ARCHITECTURE.md` | `test_events.py`: per-investigation `seq`, row-locked allocation, unique constraint. **No LISTEN/NOTIFY bridge** |
-| API (applications/authorisations/scans) | `PARTIAL` | `API_SPECIFICATION.md` | 17 paths / 18 operations, driven end to end by `test_api.py`. **Auth is a stub** |
+| API (applications/authorisations/scans) | `PARTIAL` | `API_SPECIFICATION.md` | 18 paths / 19 operations, driven end to end by `test_api.py`. **Auth is a stub** |
 | WebSocket/SSE stream + replay | `DONE` | `API_SPECIFICATION.md §4` | `GET /scans/{id}/stream`: SSE with `Last-Event-ID` resume and a definite `stream_end`. `test_stream.py`. Polls the event table, not LISTEN/NOTIFY (ADR-021) |
 | Tool runner sandbox | `NOT STARTED` | `AGENT_DESIGN.md §7` | |
 | RECON adapter (androguard) | `PARTIAL` | `ANDROID_SECURITY_METHODOLOGY.md §2` | Manifest analysis is **real**: binary AXML decoded via androguard 4.1.4, 5 component kinds, permissions, export inference, evidence + observations + frontier. `test_android_manifest.py`, `test_recon.py`. **Manifest only** — no dex, strings, certs or native libs |
@@ -59,7 +61,7 @@
 | 2 | Core platform foundation | **PARTIAL — vertical slice green**; auth, event stream and migrations outstanding |
 | 3 | RECON | NOT STARTED |
 | 4 | SPECTRE | **PARTIAL** — deterministic reachability works on real dex (ADR-022); JADX, data flow and the model pass outstanding |
-| 5 | NEXUS + agent runtime | NOT STARTED |
+| 5 | NEXUS + agent runtime | **PARTIAL** — dispatch loop works end to end (ADR-023); the model-driven planner is NOT implemented |
 | 6 | PHANTOM | NOT STARTED — **likely blocked permanently** |
 | 7 | VECTOR | NOT STARTED |
 | 8 | VERITAS + ARCHIVIST | NOT STARTED |
@@ -74,7 +76,7 @@ Commands run and their observed output, so a reader can distinguish measurement 
 
 | Check | Result |
 |---|---|
-| `pytest` | **243 passed, 6 skipped** in ~6.0 s |
+| `pytest` | **264 passed, 6 skipped** in ~5.5 s |
 | `pytest tests/test_layering.py` | Layer 1 imports no `sqlalchemy`/`fastapi`/outer layer |
 | `uvicorn mobius.api.app:app` | Boots on `0.0.0.0:8000`; `/api/v1/health` → 200 |
 | End-to-end over HTTP | upload (binary AXML, 1 141 B) → authorise → scan → **RECON → `SURFACE_READY`**: 5 components, 4 exported, 3 unguarded, 2 queued, launcher excluded → 9 audit events |
@@ -87,6 +89,9 @@ Commands run and their observed output, so a reader can distinguish measurement 
 | Truncation ≠ refutation | `test_truncation_never_reports_absence`: an exhausted node budget yields `sink_reachable=None` → `insufficient_evidence`, never `not-reachable` |
 | Sink catalogue tightened | A real APK produced a **false positive** (`SharedPreferences.getString`); the sink was removed and a regression test pins its absence |
 | Unparseable dex | 422 `CODE_INDEX_FAILED` over HTTP, typed |
+| NEXUS on a real APK, over HTTP | `com.politedroid_4.apk` → RECON → `POST /nexus` → **`CLOSED`**, `stop_reason: completed`, 1 of 20 steps used, 1 candidate dispatched, 0 confirmed / 1 rejected, `code_analysis_complete` then `nexus_complete`, 409 on a second call |
+| NEXUS determinism | The same APK scanned twice produced an identical decision payload, step list and result set — compared across two investigations, not within one run |
+| NEXUS budget | `max_steps=1` over two candidates → 1 dispatched, 1 left `queued`, `stop_reason: budget_exhausted`, state `CLOSED`, and the skipped entry named in `notes` |
 | `MOBIUS_ENV=production` | process **refuses to start** (stub auth) |
 
 **Not verified anywhere yet:** the PostgreSQL trigger, LISTEN/NOTIFY, androidsdk tooling, any
@@ -112,7 +117,7 @@ Statements that must **not** appear in any document until the corresponding row 
 
 | Claim | Becomes true when |
 |---|---|
-| "MOBIUS investigates autonomously" | FSM + frontier + T-090 complete |
+| "MOBIUS investigates autonomously" | FSM + frontier + T-090 complete. The loop exists and closes scans, but it only dispatches work other tools queued — it cannot discover a new line of enquiry, so **not yet true** |
 | "MOBIUS reduces false positives" | T-111 measured on a held-out set |
 | "MOBIUS validates findings independently" | T-084 + T-085 + T-086 green — gate + verdict **are** green; the independent *agent* is not |
 | "The War Room reflects real activity" | T-087 + T-115 green |
