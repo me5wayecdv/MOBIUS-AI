@@ -18,10 +18,38 @@ def scope_guard_sql() -> str:
     return resources.files(__package__).joinpath(_SQL_DIR, "scope_guard.sql").read_text(encoding="utf-8")
 
 
+def _split_sql_statements(sql: str) -> list[str]:
+    """Split SQL on statement terminators, without splitting PL/pgSQL dollar bodies."""
+    statements: list[str] = []
+    current: list[str] = []
+    in_dollar_quote = False
+    i = 0
+    while i < len(sql):
+        if sql.startswith("$", i):
+            in_dollar_quote = not in_dollar_quote
+            current.append("$")
+            i += 2
+            continue
+        char = sql[i]
+        if char == ";" and not in_dollar_quote:
+            statement = "".join(current).strip()
+            if statement:
+                statements.append(statement)
+            current.clear()
+        else:
+            current.append(char)
+        i += 1
+    trailing = "".join(current).strip()
+    if trailing:
+        statements.append(trailing)
+    if in_dollar_quote:
+        raise ValueError("unterminated PostgreSQL dollar-quoted body in scope guard SQL")
+    return statements
+
+
 def apply_scope_guard(engine: Engine) -> None:
     """Install ``enforce_authorization_scope`` and its trigger. Idempotent."""
-    statements = [s.strip() for s in scope_guard_sql().split("\n\n")]
     with engine.begin() as conn:
-        for statement in statements:
-            if statement and not all(line.startswith("--") or not line.strip() for line in statement.splitlines()):
+        for statement in _split_sql_statements(scope_guard_sql()):
+            if not all(line.startswith("--") or not line.strip() for line in statement.splitlines()):
                 conn.execute(text(statement))
