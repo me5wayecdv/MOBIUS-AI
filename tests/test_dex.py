@@ -179,3 +179,14 @@ def test_duplicate_dex_zip_entries_are_rejected(dex_bytes):
         zf.writestr("classes.dex", dex_bytes)
     with pytest.raises(DexIndexError, match="duplicate"):
         index_apk(buf.getvalue())
+
+
+def test_method_reference_parser_keeps_names_containing_s():
+    from mobius.adapters.dex import _parse_reference
+
+    parsed = _parse_reference("Ljava/lang/String;->getString()Ljava/lang/String;")
+    assert parsed == (
+        "Ljava/lang/String;",
+        "getString",
+        "()Ljava/lang/String;",
+    )
