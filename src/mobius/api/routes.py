@@ -14,6 +14,7 @@ from ..core import fsm, gates
 from ..core.enums import EvidenceKind, InvestigationState, RejectionReason
 from ..services.evidence import EvidenceService
 from ..services.intake import IntakeService
+from ..services.nexus import NexusService
 from ..services.recon import ReconService
 from ..services.spectre import SpectreService
 from ..services.validation import ValidationService
@@ -368,6 +369,22 @@ def run_spectre(scan_id: str, session=Depends(_session)):
     """
     ctx = get_context()
     return SpectreService(session, ctx.store).analyse(scan_id)
+
+
+@router.post("/scans/{scan_id}/nexus", tags=["scans"])
+def run_nexus(
+    scan_id: str,
+    max_steps: int | None = Query(default=None, ge=1, le=200),
+    session=Depends(_session),
+):
+    """Drive the investigation from the frontier to CLOSED, within a step budget.
+
+    A deterministic dispatcher, not an autonomous planner: it pops the best-scoring entry,
+    hands it to the agent that can execute it, and records what it could not do. Closes the
+    investigation even when the budget stops it early. No model is called.
+    """
+    ctx = get_context()
+    return NexusService(session, ctx.store).run(scan_id, max_steps=max_steps)
 
 
 # ------------------------------------------------------------------------------------

@@ -368,3 +368,22 @@ def test_an_unfinished_search_says_so_in_its_title(session, store, surface_ready
     ).one().title
     assert "reachability not established" in title
     assert result["results"][0]["status"] == "manual_review_required"
+
+
+def test_a_truncated_index_cannot_confirm_even_when_the_sink_is_reached(
+    session, store, surface_ready
+):
+    """Regression, found by NEXUS: truncation only downgraded `not-reached`.
+
+    A found path proves its own methods. It does not prove that no *unindexed* caller checks
+    the permission before invoking it, so on an incomplete graph `caller_check_absent` is
+    not established - and a candidate with an unestablished clause is not confirmed.
+    """
+    result = _spectre(session, store, _index(truncated=True)).analyse(surface_ready)
+    entry = result["results"][0]
+
+    assert entry["reachability"] == "reached"
+    assert entry["status"] == "manual_review_required"
+    assert entry["attributes"]["sink_reachable"] is True
+    assert entry["attributes"]["caller_check_absent"] is None
+    assert result["confirmed"] == 0

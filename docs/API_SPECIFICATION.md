@@ -195,6 +195,47 @@ not truncated; a truncated search yields `null`, which becomes `insufficient_evi
 `rejected`. `rejection_reason` is `not-reachable` or `guarded-by-caller-check` — a guard refutes
 the "no caller check" clause, it does not prove the component safe.
 
+#### `POST /scans/{id}/nexus`
+Drives the investigation from the frontier to `CLOSED` within a step budget. Requires
+`state = SURFACE_READY` (or `CORRELATING`, where there is simply nothing left to dispatch).
+Deterministic: the same APK and the same budget produce the same dispatch order and the same
+verdicts, because ranking is arithmetic and no model is called (ADR-023).
+
+This is a **dispatcher, not a planner**. It pops the best-scoring entry, hands it to the
+agent that can execute it, and records what it could not do. It cannot invent a line of
+enquiry that no tool queued.
+
+```
+POST /scans/{id}/nexus?max_steps=20
+```
+
+```json
+{
+  "state": "CLOSED",
+  "stop_reason": "completed",
+  "candidates": 1,
+  "budget": {"max_steps": 20, "steps_used": 1, "steps_remaining": 19},
+  "dispatched": 1, "dropped": 0, "remaining": 0,
+  "findings": {"confirmed": 0, "rejected": 1, "manual_review": 0},
+  "steps": [
+    {"entry_id": "fro_...", "action": "find_api_refs", "agent": "SPECTRE",
+     "disposition": "done", "reason": null}
+  ],
+  "notes": ["no report artefact was written: ARCHIVIST is not implemented, ..."]
+}
+```
+
+`stop_reason` is `completed` or `budget_exhausted`. Entries that were not run keep their state
+so they can be named: `queued` when the budget stopped the loop, `dropped` when nothing could
+execute them. A dropped entry always carries a `reason` — either the agent does not exist in
+this build (`PHANTOM`, `VECTOR`, `ORACLE`, `ARCHIVIST`) or the current intensity forbids the
+action. `max_steps` must be at least 1; a loop that may not dispatch is a no-op, so it is
+rejected rather than silently doing nothing.
+
+Once the scan is `CLOSED`, both `/spectre` and `/nexus` return `SCAN_STATE_CONFLICT`. Recovery
+is a new investigation, not a retry: re-running would append a second finding for the same
+component and the evidence log would claim the analysis happened twice.
+
 #### `GET /scans/{id}/stream` (SSE)
 `text/event-stream`. Replays from `?after=<seq>` or the `Last-Event-ID` header, then follows.
 Frames are `id: <seq>`, `event: <type>`, `data: <json>`. Once the investigation is terminal and

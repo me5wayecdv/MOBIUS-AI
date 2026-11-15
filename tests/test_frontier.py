@@ -133,3 +133,25 @@ def test_scores_are_never_nan():
     for action in ("parse_manifest", "send_intent", "unknown_action"):
         value = score(_entry(action=action), ctx)
         assert not math.isnan(value)
+
+
+def test_ties_break_on_content_not_on_generated_ids():
+    """Regression: two runs over the same APK dispatched in different orders.
+
+    Ids are ULIDs, so a tie broken on id is a tie broken on a clock and a random number.
+    The same frontier must order the same way on a machine that generates different ids.
+    """
+    from mobius.core.frontier import rank
+
+    def frontier(first_id: str, second_id: str):
+        return [
+            _entry(id=first_id, action="find_api_refs", action_args={"component": "com.x.B"}),
+            _entry(id=second_id, action="find_api_refs", action_args={"component": "com.x.A"}),
+        ]
+
+    ctx = ScoreContext()
+    one = rank(frontier("fro_00000000000000000000000000", "fro_00000000000000000000000001"), ctx)
+    two = rank(frontier("fro_00000000000000000000000001", "fro_00000000000000000000000000"), ctx)
+
+    assert [e.action_args["component"] for e in one] == ["com.x.A", "com.x.B"]
+    assert [e.action_args["component"] for e in two] == ["com.x.A", "com.x.B"]
