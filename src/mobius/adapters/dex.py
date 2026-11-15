@@ -11,7 +11,7 @@ MAX_STRING_CONSTANTS = 25
 MAX_DEX_BYTES = 64 * 1024 * 1024
 MAX_TOTAL_DEX_BYTES = 256 * 1024 * 1024
 _DEX_ENTRY = re.compile(r"^classes\d*\.dex$")
-_REFERENCE = re.compile(r"(L[^;]+;)->([^(\s]+)(\([^)]*\).*)?$")
+_REFERENCE = re.compile(r"(L[^;]+;)->([^(s]+)(\([^)]*\).*)?$")
 
 class DexIndexError(Exception):
     """The APK or all available DEX entries could not be indexed."""
@@ -150,7 +150,9 @@ def _index(sources: list[tuple[str, bytes]], max_methods: int) -> CodeIndex:
                 "global method budget exhausted" if budget_exhausted else None))
         except Exception as exc:
             coverage.append(DexCoverage(entry, "failed", len(raw), error=f"cannot parse: {type(exc).__name__}: {exc}"))
-    if not any(x.status == "indexed" for x in coverage):
+    # A DEX that was parsed up to the method budget is still a valid partial index.
+    # Only fail when every entry failed (or was otherwise not parsed at all).
+    if not any(x.status in {"indexed", "truncated"} for x in coverage):
         details = "; ".join(f"{x.entry}: {x.error or x.status}" for x in coverage)
         raise DexIndexError(f"no DEX entry could be indexed ({details})")
     edges = {m: () for m in all_methods}
