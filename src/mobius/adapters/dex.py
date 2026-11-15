@@ -149,7 +149,7 @@ def _index(sources: list[tuple[str, bytes]], max_methods: int) -> CodeIndex:
                 len(raw), len(entry_classes), entry_methods,
                 "global method budget exhausted" if budget_exhausted else None))
         except Exception as exc:
-            coverage.append(DexCoverage(entry, "failed", len(raw), error=f"{type(exc).__name__}: {exc}"))
+            coverage.append(DexCoverage(entry, "failed", len(raw), error=f"cannot parse: {type(exc).__name__}: {exc}"))
     if not any(x.status == "indexed" for x in coverage):
         details = "; ".join(f"{x.entry}: {x.error or x.status}" for x in coverage)
         raise DexIndexError(f"no DEX entry could be indexed ({details})")
