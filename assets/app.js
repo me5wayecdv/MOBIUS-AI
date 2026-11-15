@@ -27,8 +27,13 @@
     const panels = [...root.querySelectorAll("[data-panel]")];
     const status = root.querySelector(".js-status");
     const pct = root.querySelector(".js-pct");
-    const labels = { findings: "analysing", device: "on device", api: "replaying", ci: "proposing fix" };
-    const pcts = { findings: "68%", device: "100%", api: "92%", ci: "86%" };
+    const labels = {
+      sast: "tracing source",
+      dast: "on device",
+      chain: "correlating",
+      agent: "reasoning",
+    };
+    const pcts = { sast: "68%", dast: "100%", chain: "88%", agent: "74%" };
 
     const select = (name) => {
       tabs.forEach((t) => {
@@ -90,6 +95,41 @@
       io.observe(el);
     });
   }
+
+  /* ------------------------------------------- agent log "live" cursor */
+  // Content stays visible for everyone; this only walks a highlight down the rows so the
+  // run reads as a sequence rather than a wall of text. It fires once, on entry.
+  document.querySelectorAll("[data-agentlog]").forEach((log) => {
+    const rows = [...log.children];
+    if (!rows.length) return;
+
+    const play = () => {
+      rows.forEach((row) => row.classList.remove("is-live"));
+      if (reduceMotion) return;
+      rows.forEach((row, i) => {
+        setTimeout(() => {
+          rows.forEach((r) => r.classList.remove("is-live"));
+          row.classList.add("is-live");
+          if (i === rows.length - 1) setTimeout(() => row.classList.remove("is-live"), 1400);
+        }, i * 380);
+      });
+    };
+
+    if (!("IntersectionObserver" in window)) {
+      play();
+      return;
+    }
+    const obs = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          play();
+          obs.disconnect();
+        }
+      },
+      { threshold: 0.25 }
+    );
+    obs.observe(log);
+  });
 
   /* -------------------------------------------------- binary scramble */
   const scramble = (node) => {
