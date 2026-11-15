@@ -17,7 +17,7 @@ from __future__ import annotations
 import pytest
 
 from conftest import make_apk
-from mobius.adapters.dex import CodeIndex
+from mobius.adapters.dex import CodeIndex, DexCoverage
 from mobius.adapters.events import SqlEventStore
 from mobius.adapters.models import FrontierEntryRow, InvestigationRow
 from mobius.core.enums import InvestigationState
@@ -58,6 +58,7 @@ def _index(*, sink_in: str | None = EXPORT, truncated: bool = False) -> CodeInde
         classes=(EXPORT, SECOND),
         methods=2,
         truncated=truncated,
+        dex_coverage=(DexCoverage("fixture.dex", "truncated" if truncated else "indexed", 1),),
     )
 
 

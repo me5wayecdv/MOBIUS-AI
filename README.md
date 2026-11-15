@@ -1,123 +1,89 @@
 # MOBIUS
 
-**Autonomous, evidence-driven Android security investigation platform.**
+**Evidence-driven autonomous Android security investigation platform.**
 University graduation project.
 
-> *Don't just scan the code. Understand it. Investigate it. Challenge it. Prove what's vulnerable.*
+> Don't just scan the code. Understand it. Investigate it. Correlate it. Prove it.
 
----
+## Product goal
 
-## Status
+MOBIUS accepts an explicitly authorized Android APK and investigates it as a security researcher would:
 
-| | |
-|---|---|
-| Phase 0 — environment & repo audit | **Complete** |
-| Phase 1 — research & architecture | **Complete — awaiting Project Director approval** |
-| Phase 2 — core platform foundation | **Vertical slice running**; RECON analyses real APKs |
+1. Inventory the APK and establish code-analysis coverage.
+2. Index and inspect supported code across all discovered DEX files.
+3. Build evidence-backed observations and security hypotheses.
+4. Use NEXUS to select bounded investigation actions and adapt its plan from new evidence.
+5. Correlate weaknesses into candidate attack paths.
+6. Execute safe, reproducible PoCs against a controlled lab target.
+7. Validate findings independently and generate an evidence-backed report.
+8. Show the real investigation in the War Room as it happens.
 
-### What actually runs today
+The War Room is not a decorative dashboard. Agent activity, code locations, tool executions, hypotheses, graph changes and PoC states must come from real backend records/events. No fake progress or simulated agent activity.
 
-Upload an APK, authorise it by SHA-256, open an investigation, let RECON decode the
-binary `AndroidManifest.xml` into evidence-backed observations, let SPECTRE index the real
-dex and search the call graph for a path from an exported entry point to a sensitive sink,
-then let NEXUS drive the worklist until the investigation closes, validating each claim
-through a gate to a confirmed, rejected or *insufficient* verdict — streamed live over SSE. No model is called anywhere: every verdict is reproducible from the
-APK bytes (ADR-022).
+## Current implementation — read before making claims
 
-Measure it on the pinned corpus (fetches 7 public APKs, verifying every SHA-256):
+The current backend is a tested foundation, not yet the complete autonomous system:
+- APK ZIP intake, SHA-256 identity and authorization binding.
+- Real Android binary manifest parsing through androguard.
+- Multi-DEX ZIP enumeration/index aggregation and bounded application-level call-graph reachability (per-method DEX provenance and full data-flow are not yet implemented).
+- Deterministic evidence gates and finding/verdict persistence.
+- NEXUS deterministic frontier dispatcher (not yet model-driven adaptive planning).
+- Durable investigation events and SSE replay.
+- Markdown report generation from persisted records.
+- Basic API-backed War Room page.
 
-```bash
-python scripts/fetch_corpus.py --dest /tmp/mobius-corpus
-.venv/bin/python -m mobius.tools.benchmark /tmp/mobius-corpus/corpus.resolved.json
-```
+**No model is called in the current analysis path.** There is no complete decompilation/data-flow pipeline, safe PoC runner, persisted attack graph UI, PHANTOM runtime agent, VECTOR network agent, or independent model-backed VERITAS reviewer yet. The existing call-graph reachability must not be described as taint analysis or proof of exploitability.
 
-```bash
-python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
-MOBIUS_DB_URL=sqlite+pysqlite:///dev.db .venv/bin/alembic upgrade head   # schema
-.venv/bin/python -m pytest                 # 319 passed, 6 skipped
-.venv/bin/uvicorn mobius.api.app:app --host 0.0.0.0 --port 8000
-curl localhost:8000/api/v1/health
-```
+See [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md) for tested implementation details and limitations.
 
-`GET /api/v1/health` reports which Android tools are present **before** a scan starts, so
-a missing tool is visible rather than inferred from an empty result. `androguard` is present
-and is what RECON and SPECTRE actually use; `jadx`, `apktool` and `adb` are absent, because
-they are, which is why no decompilation is claimed.
+## Graduation-demo engineering strategy
 
-### What is **not** real yet — stated plainly
+The project is demo-first, not production-SaaS-first. We prioritize one complete and reproducible investigation over enterprise infrastructure.
 
-| Not implemented | Consequence |
-|---|---|
-| VERITAS model agent, adaptive planner | No model is called. Gates and verdicts **are** real, and NEXUS drives the loop to `CLOSED` — but it is a deterministic dispatcher: it cannot re-plan or invent a line of enquiry (ADR-023) |
-| Report formats | Reports are Markdown, generated from stored rows and stored as evidence. **No PDF, no template engine** |
-| Measurement depth | A first measurement exists on 7 pinned public APKs: precision 100 % (1/1, 95 % CI 20.6–100 %), recall 25 % (1/4), specificity 100 % (3/3). **Too small to establish a rate**, and the corpus is labelled by the implementer — see [`docs/BENCHMARK_RESULTS.md`](docs/BENCHMARK_RESULTS.md) |
-| Code analysis beyond reachability | Call graph and sink reachability are real (dex, application classes only). **No decompilation** (no JDK, R-01), **no data flow**, **no CFG**, no reflection, no multi-dex |
-| RECON beyond the manifest | Strings are extracted from dex; certificates, native libraries and multi-dex are not |
-| Dynamic analysis | `intensity` 3 is refused globally; ADR-016 still holds |
-| Real authentication | Stub identity header; the app **refuses to start** with `MOBIUS_ENV=production` |
-| War Room depth | One page at `/ui` (scans, surface, findings, replayed events, report). No reachability graph, no attack paths, no browser test |
-| Attack graph, reports, benchmark | Tables and docs exist; no writer, no numbers |
-| `enforce_authorization_scope` trigger | Written and unit-tested as SQL, **never executed** — no PostgreSQL here. Its 6 tests skip |
+**First priorities:**
+1. Full supported code inventory and multi-DEX indexing.
+2. JADX/source navigation and bounded CFG/data-flow analysis for selected vulnerability classes.
+3. Model provider + typed NEXUS reasoning and adaptive re-planning.
+4. Evidence correlation and attack-path graph.
+5. Safe PoC execution on an intentionally vulnerable lab APK/emulator or local harness.
+6. Independent validation and evidence-backed reporting.
+7. A live War Room showing only real backend activity.
 
-`319 passed, 6 skipped` is the real count from this build. The 6 skips are the Postgres
-trigger tests; a skip is not a pass. See [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md)
-for per-component detail and the claims audit.
+PHANTOM and VECTOR remain part of the broader architecture; implement them if the available host and demonstration scenario support them. Production-only work such as billing, multi-tenant SaaS, Kubernetes, HA, autoscaling and enterprise SSO is deferred.
 
-## What MOBIUS is meant to be
+**Detailed product and engineering contract:** [docs/DEMO_FIRST_PRODUCT_PLAN.md](docs/DEMO_FIRST_PRODUCT_PLAN.md)  
+**Prioritized work queue:** [docs/TASK_BOARD.md](docs/TASK_BOARD.md)
 
-Not a scanner. A scanner produces a list. MOBIUS must produce a **defensible argument**: what was
-observed, what evidence supports it, what was done to test it, what could not be determined, and why the
-conclusion follows. If a feature doesn't improve that chain, it isn't core.
+## Run the current backend
 
-## Start here
+    python3 -m venv .venv
+    .venv/bin/pip install -e '.[dev]'
+    MOBIUS_DB_URL=sqlite+pysqlite:///dev.db .venv/bin/alembic upgrade head
+    .venv/bin/python -m pytest
+    .venv/bin/uvicorn mobius.api.app:app --host 127.0.0.1 --port 8000
 
-| If you want… | Read |
-|---|---|
-| The decision summary and what needs approval | [`docs/00_EXECUTIVE_DECISION_REPORT.md`](docs/00_EXECUTIVE_DECISION_REPORT.md) |
-| What this machine can and cannot do | [`docs/ENVIRONMENT_AUDIT.md`](docs/ENVIRONMENT_AUDIT.md) |
-| Scope, non-goals, ethics, authorisation model | [`docs/PROJECT_CONTEXT.md`](docs/PROJECT_CONTEXT.md) |
-| The system design | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) |
-| How the agents and investigation engine work | [`docs/AGENT_DESIGN.md`](docs/AGENT_DESIGN.md) |
-| Android methodology and confirmed false-positive controls | [`docs/ANDROID_SECURITY_METHODOLOGY.md`](docs/ANDROID_SECURITY_METHODOLOGY.md) |
-| Why each technology was chosen (and rejected) | [`docs/ARCHITECTURE_DECISIONS.md`](docs/ARCHITECTURE_DECISIONS.md) |
-| What could go wrong | [`docs/TECHNICAL_RISK_REGISTER.md`](docs/TECHNICAL_RISK_REGISTER.md) |
-| Who does what | [`docs/TEAM_RESPONSIBILITIES.md`](docs/TEAM_RESPONSIBILITIES.md) |
-| What to do next | [`docs/TASK_BOARD.md`](docs/TASK_BOARD.md) |
+Open http://127.0.0.1:8000/ui.
 
-## The four design rules
+The committed CI workflow tests Python 3.11 and 3.12 and runs PostgreSQL integration tests plus a SQLite migration smoke test. Consult the current workflow result rather than relying on historical test counts in older docs.
 
-1. **Control flow is deterministic; judgement is model-driven.** The FSM decides *when* to validate; the
-   model decides *what* to look at. The boundary is enforced in code, not in a prompt.
-2. **A finding is confirmed by a gate predicate over evidence — never by model prose.** This is also the
-   prompt-injection defence: an instruction hidden in an APK cannot satisfy a predicate.
-3. **Severity, confidence and verdict are three independent values.** They are never averaged into a
-   single score.
-4. **Abstention is a legal outcome.** `INSUFFICIENT_EVIDENCE` is reported, counted, and never dressed up
-   as "no vulnerabilities found".
+## Architecture principles
 
-## Scope at a glance (v1)
+1. **Deterministic control, bounded model judgement.** The FSM and policy layer control execution; models propose hypotheses and typed actions.
+2. **Evidence before verdict.** LLM prose or scanner output alone cannot confirm a finding.
+3. **Severity, confidence and verdict are separate.**
+4. **Abstention is valid.** Incomplete analysis and insufficient evidence are reported honestly.
+5. **Coverage is explicit.** Every discovered DEX and unsupported analysis surface is accounted for.
+6. **No fabricated activity.** The War Room reflects actual backend events.
+7. **Authorized lab testing only.** No arbitrary targets, unrestricted shell, destructive testing by default, stealth, persistence, credential theft or covert exfiltration.
 
-**In:** RECON (deterministic) · SPECTRE (targeted code investigation) · NEXUS (FSM + frontier) ·
-VERITAS (independent validation) · evidence chain · reachability view · live console · reports ·
-benchmark with negative controls.
+## Repository map
 
-**Out:** PHANTOM (pending a KVM host) · VECTOR · ORACLE · exploit generation · 9 of 14 proposed screens.
+- src/mobius/core/ — domain models, schemas, FSM, gates and analysis primitives.
+- src/mobius/adapters/ — database and Android/tool adapters.
+- src/mobius/services/ — intake, RECON, SPECTRE, NEXUS, validation, evidence and reports.
+- src/mobius/api/ — FastAPI routes and current War Room.
+- tests/ — unit, API, integration and analysis fixtures.
+- docs/ — architecture, methodology, risks, status and implementation plan.
+- web/ — separate marketing site; not the MOBIUS application.
 
-## Safety and ethics
-
-MOBIUS is for **authorised** Android security testing only. No investigation may start without an
-authorisation record bound to the APK's SHA-256. It does not implement spyware, credential theft, covert
-exfiltration, covert tunnelling, or unrestricted shell execution. Threat-intelligence documents are used
-for **detection** research only — see [`docs/ORACLE_THREAT_INTEL.md §0`](docs/ORACLE_THREAT_INTEL.md).
-
-## Repository conventions
-
-- Analysis artefacts (`*.apk`, `*.dex`, uploads, decompiled output) are **never committed** — see
-  `.gitignore`.
-- Every behaviour-changing PR updates one row of `docs/IMPLEMENTATION_STATUS.md`. No row, no merge.
-- Interface changes require the `interface-change` label and a `docs/REVIEW_LOG.md` entry.
-
-## Marketing site
-
-The static product/design-study site is preserved separately under [`web/`](web/).
-It is not the running application and its console content is demo data; see [`web/README.md`](web/README.md).
+APK files, decompiled output and analysis artifacts must not be committed to the repository.

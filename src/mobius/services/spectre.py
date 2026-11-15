@@ -125,6 +125,8 @@ class SpectreService:
                 "methods": index.methods,
                 "internal_calls": sum(len(v) for v in index.graph.edges.values()),
                 "index_truncated": index.truncated,
+                "index_complete": index.complete,
+                "dex_coverage": [item.describe() for item in index.dex_coverage],
                 "candidates": len(candidates),
                 "confirmed": confirmed,
                 "rejected": rejected,
@@ -197,6 +199,9 @@ class SpectreService:
             "boundary_calls": len(index.boundary),
             "graph_nodes": len(index.graph),
             "truncated": index.truncated,
+            "complete": index.complete,
+            "dex_coverage": [item.describe() for item in index.dex_coverage],
+            "class_sources_sample": {name: list(index.class_sources.get(name, ())) for name in index.classes[:20]},
             "class_sample": list(index.classes[:20]),
         }
         return EvidenceService(self._session, self._store).record(
@@ -205,7 +210,7 @@ class SpectreService:
             content=json.dumps(summary, indent=2).encode(),
             summary=(
                 f"Call graph over {len(index.classes)} classes / {index.methods} methods "
-                f"({len(index.graph)} internal edges)"
+                f"({len(index.graph)} graph nodes; coverage {'complete' if index.complete else 'partial'})"
             ),
             produced_by=AGENT,
         )
@@ -247,12 +252,13 @@ class SpectreService:
             max_nodes=self._max_nodes,
         )
         # An incomplete graph cannot support "no sink exists", however clean the search.
-        if index.truncated and result.status == "not-reached":
+        if not index.complete and result.status == "not-reached":
+            # A failed/skipped DEX or method-budget cut means absence is not established.
             result = ReachabilityResult(status="truncated", visited=result.visited)
 
         attributes: dict[str, object] = {"exported": exported, "permission": permission}
         attributes.update(result.attributes())
-        if index.truncated and attributes.get("caller_check_absent") is not None:
+        if not index.complete and attributes.get("caller_check_absent") is not None:
             # A found path proves its own methods, and guards on it are visible. What a
             # truncated index cannot rule out is a check in a caller that never made it into
             # the graph, so "no caller check" stops being established. Found by a NEXUS test
