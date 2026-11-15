@@ -26,8 +26,8 @@
 
 | # | Task | Owner | State | Acceptance |
 |---|---|---|---|---|
-| D-010 | Enumerate every classes*.dex entry | M2 | [ ] | Coverage record for each DEX: indexed/skipped/failed + reason |
-| D-011 | Index all supported DEX files with stable provenance | M2 | [ ] | Combined class/method/call index; multi-DEX fixtures pass |
+| D-010 | Verify APK multi-DEX enumeration and add per-entry coverage/provenance | M2 | [~] | `index_apk` already enumerates sorted `classes*.dex`; add a real APK fixture with distinct DEX entries and a persisted indexed/skipped/failed record for each |
+| D-011 | Harden multi-DEX aggregation and provenance | M2 | [~] | `index_dex` already merges multiple blobs; ensure class/method provenance retains originating DEX and test duplicate classes, malformed secondary DEX, and budget truncation |
 | D-012 | Add JADX adapter and cache by APK digest/tool version | M2 | [ ] | Source/decompiled references resolve; failures explicit |
 | D-013 | Build class/method/source lookup APIs | M1 + M2 | [ ] | War Room can navigate to actual code locations |
 | D-014 | Add Android sensitive source/sink catalogue | M2 + M5 | [ ] | Catalogue has MASWE/MASVS mapping and positive/negative tests |
