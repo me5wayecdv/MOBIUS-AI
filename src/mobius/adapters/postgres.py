@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from importlib import resources
 
-from sqlalchemy import Engine, text
+from sqlalchemy import Engine
 
 _SQL_DIR = "sql"
 
@@ -20,6 +20,9 @@ def scope_guard_sql() -> str:
 
 def _split_sql_statements(sql: str) -> list[str]:
     """Split SQL on statement terminators, without splitting PL/pgSQL dollar bodies."""
+    sql = "\\n".join(
+        line for line in sql.splitlines() if not line.lstrip().startswith("--")
+    )
     statements: list[str] = []
     current: list[str] = []
     in_dollar_quote = False
@@ -52,4 +55,4 @@ def apply_scope_guard(engine: Engine) -> None:
     with engine.begin() as conn:
         for statement in _split_sql_statements(scope_guard_sql()):
             if not all(line.startswith("--") or not line.strip() for line in statement.splitlines()):
-                conn.execute(text(statement))
+                conn.exec_driver_sql(statement)
