@@ -1,6 +1,6 @@
 # IMPLEMENTATION STATUS
 
-> A **vertical slice of the backend is implemented and tested** (319 tests passing, 6 skipped).
+> A **vertical slice of the backend is implemented and tested**. GitHub Actions CI on main runs the full pytest suite on Python 3.11 and 3.12 with PostgreSQL 16 integration tests, plus a SQLite Alembic migration smoke test (PR #11).
 > RECON decodes real binary manifests, SPECTRE reads real dex and proves or fails to prove sink
 > reachability from an exported entry point, and NEXUS drives that work from the frontier to a
 > closed investigation. **No model is called anywhere** — SPECTRE decides by deterministic graph
@@ -9,7 +9,7 @@
 > exactly the failure mode the project forbids: describing a proposal as if it were a working system
 > (master prompt §23). Every row states its evidence; a row without a test is not `DONE`.
 
-**Last updated:** 2026-11-15 · **Base commit:** `994a215` · **Branch:** `arena/10b04bf9-mobius-ai`
+**Last updated:** 2026-11-15 · **Status baseline:** main after PR #11 (`c8e612a`); verify the current commit before relying on this snapshot.
 
 ---
 
@@ -30,8 +30,8 @@
 | Domain core (models, FSM, gates) | `DONE` | `AGENT_DESIGN.md`, `ARCHITECTURE.md §4` | `test_fsm.py` (15 states, no `PAUSED`), `test_gates.py` (10 gates, positive + negative controls), `test_schemas.py` (invariants) |
 | Frontier + scorer | `PARTIAL` | `AGENT_DESIGN.md §4` | `test_frontier.py`: arithmetic, determinism, unauthorised action scores `-inf`, ties break on content not on generated ids. **Driven by NEXUS**, which is a dispatcher over this queue and not a planner (ADR-023) |
 | NEXUS (dispatch loop) | `PARTIAL` | `AGENT_DESIGN.md §4`, phase 5 | `test_nexus.py` (19 tests) + 2 HTTP tests: pops the best entry, dispatches to the agent that can run it, records dropped work with reasons, stops on a step budget, closes the investigation. **No re-planning, no model** — a frontier entry no tool queued is never invented |
-| Schema + migrations | `DONE` (migration history) | `DATABASE_SCHEMA.md`, ADR-025 | `alembic upgrade head` builds 14 tables + `alembic_version`; upgrade/downgrade/replay tested; `alembic check` fails on model drift. **Trigger applied only on PostgreSQL, still never executed** |
-| Event store + LISTEN/NOTIFY bridge | `PARTIAL` | `EVENT_ARCHITECTURE.md` | `test_events.py`: per-investigation `seq`, row-locked allocation, unique constraint. **No LISTEN/NOTIFY bridge** |
+| Schema + migrations | `DONE` (migration history) | `DATABASE_SCHEMA.md`, ADR-025 | `alembic upgrade head` builds 14 tables + `alembic_version`; upgrade/downgrade/replay tested; `alembic check` fails on model drift. PostgreSQL 16 authorization-trigger integration tests run in CI (PR #11). |
+| Event store + SSE polling | `PARTIAL` | `EVENT_ARCHITECTURE.md`, ADR-021 | `test_events.py`: per-investigation `seq`, row-locked allocation, unique constraint. SSE polls the durable event table and supports replay; no LISTEN/NOTIFY bridge. |
 | API (applications/authorisations/scans) | `PARTIAL` | `API_SPECIFICATION.md` | 19 paths / 22 operations, driven end to end by `test_api.py`. **Auth is a stub** |
 | WebSocket/SSE stream + replay | `DONE` | `API_SPECIFICATION.md §4` | `GET /scans/{id}/stream`: SSE with `Last-Event-ID` resume and a definite `stream_end`. `test_stream.py`. Polls the event table, not LISTEN/NOTIFY (ADR-021) |
 | Tool runner sandbox | `NOT STARTED` | `AGENT_DESIGN.md §7` | |
@@ -43,7 +43,7 @@
 | PHANTOM / emulator | `NOT STARTED` | §7 | **Blocked: no KVM** (R-02) |
 | VECTOR / mitmproxy | `NOT STARTED` | §4 | Blocked: no egress from sandbox |
 | VERITAS + gates | `PARTIAL` | `AGENT_DESIGN.md §6` | Gate evaluation, verdict persistence and `ValidatorMustDiffer` implemented and tested. **The VERITAS model agent does not exist**; attributes come from RECON or over HTTP. `test_recon.py::test_recon_candidates_can_never_confirm` pins the honest outcome |
-| Authorisation enforcement (trigger) | `DESIGNED` | `DATABASE_SCHEMA.md §3.2` | SQL in `adapters/sql/scope_guard.sql`, now **installed by migration 0001 on PostgreSQL only**; 6 tests still **skip — never executed** (Q2) |
+| Authorisation enforcement (trigger) | `PARTIAL` | `DATABASE_SCHEMA.md §3.2` | SQL in `adapters/sql/scope_guard.sql`, installed by migration on PostgreSQL; PostgreSQL 16 trigger integration tests now execute in CI (PR #11). Deployment enforcement and production auth remain unverified. |
 | Attack graph (data model) | `DESIGNED` | `DATABASE_SCHEMA.md §3.8` | Tables `graph_nodes`/`graph_edges` **not created**; only `GraphNode`/`GraphEdge` domain models exist |
 | Attack graph (UI) | `NOT STARTED` | ADR-014 | The War Room lists findings and surface; the reachability *graph* view is not built |
 | ARCHIVIST (report) | `PARTIAL` | `REQUIREMENTS.md §1.9` | `services/archivist.py`: eight sections generated from stored rows, written as evidence, `POST/GET /scans/{id}/report`. **Markdown only** |
