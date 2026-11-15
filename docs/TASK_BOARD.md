@@ -1,143 +1,107 @@
-# TASK BOARD
+# MOBIUS TASK BOARD — GRADUATION DEMO
 
-**State:** Phase 0 complete · Phase 1 documentation complete · **Phase 2 blocked pending Director approval**
-**Legend:** `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[?]` undecided
+**Product direction:** evidence-driven autonomous Android security investigation with a live War Room.
+**Execution strategy:** demo-first; production-only infrastructure is deferred.
+**Detailed product contract:** [DEMO_FIRST_PRODUCT_PLAN.md](DEMO_FIRST_PRODUCT_PLAN.md)
+**Legend:** `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[-]` deferred
 
----
+## Current verified baseline
 
-## W0 — Phase 0 (complete)
+- Backend vertical slice exists: APK intake, SHA-256 authorization binding, binary manifest parsing, single-DEX indexing, bounded application call-graph reachability, deterministic gates, NEXUS dispatcher, SSE replay, Markdown report.
+- Existing War Room is a basic HTML page reading API data. It is not the intended final investigation cockpit.
+- No model is called. NEXUS is not yet an adaptive planner.
+- No multi-DEX indexing, full decompilation workflow, CFG/taint analysis, PoC runner, persisted attack graph, PHANTOM, VECTOR, or independent VERITAS model reviewer.
+- Latest documented audit and status files must be reconciled to current main before using them as live status.
 
-| # | Task | Owner | State | Evidence |
+## Priority 0 — Establish reproducible demo target
+
+| # | Task | Owner | State | Acceptance |
 |---|---|---|---|---|
-| T-001 | Audit execution environment (measured, not assumed) | Arena | `[x]` | `ENVIRONMENT_AUDIT.md` |
-| T-002 | Record repository state | Arena | `[x]` | `ENVIRONMENT_AUDIT.md §3` |
-| T-003 | Establish `.gitignore` incl. APK/artefact exclusion | Arena | `[x]` | `.gitignore` |
-| T-004 | Report actual agent-parallelism capability honestly | Arena | `[x]` | `ENVIRONMENT_AUDIT.md §2` |
-| T-005 | Process supplied C2 research defensively only | Arena | `[x]` | `ORACLE_THREAT_INTEL.md §0` |
+| D-001 | Select one intentionally vulnerable Android APK owned by the team | Director + Android team | [ ] | APK, source, package, version and SHA-256 pinned |
+| D-002 | Define 2–3 demonstration vulnerability scenarios | Director + M2 + M5 | [ ] | Each has source location, expected evidence, positive and negative control |
+| D-003 | Confirm host capabilities: JDK/JADX, Android SDK, emulator/KVM, Docker | Director | [ ] | Tool availability recorded; no assumed capabilities |
+| D-004 | Freeze demo-only scope and fallback recording | All | [ ] | One reproducible live run plus labelled recorded fallback |
 
-## W1 — Phase 1 (documentation complete, awaiting approval)
+## Priority 1 — Full code intelligence (first engineering slice)
 
-| # | Task | Owner | State |
-|---|---|---|---|
-| T-010 | Product context, scope, non-goals, ethics | Arena | `[x]` |
-| T-011 | Requirements with acceptance criteria | Arena | `[x]` |
-| T-012 | System architecture + trust boundaries | Arena | `[x]` |
-| T-013 | Agent design, frontier, gates | Arena | `[x]` |
-| T-014 | Android methodology + tooling research | Arena | `[x]` |
-| T-015 | Database schema | Arena | `[x]` |
-| T-016 | API specification | Arena | `[x]` |
-| T-017 | Event architecture | Arena | `[x]` |
-| T-018 | Threat model incl. prompt injection + abuse cases | Arena | `[x]` |
-| T-019 | Model routing + benchmarking plan (no fabricated results) | Arena | `[x]` |
-| T-020 | Seven specialist analyses + honesty ledger | Arena | `[x]` |
-| T-021 | ADRs + risk register | Arena | `[x]` |
-| T-022 | Team responsibilities + onboarding | Arena | `[x]` |
-| T-023 | Handoff protocol | Arena | `[x]` |
-| T-024 | **Director review & approval of Phase 1** | **Director** | `[ ]` |
+| # | Task | Owner | State | Acceptance |
+|---|---|---|---|---|
+| D-010 | Enumerate every classes*.dex entry | M2 | [ ] | Coverage record for each DEX: indexed/skipped/failed + reason |
+| D-011 | Index all supported DEX files with stable provenance | M2 | [ ] | Combined class/method/call index; multi-DEX fixtures pass |
+| D-012 | Add JADX adapter and cache by APK digest/tool version | M2 | [ ] | Source/decompiled references resolve; failures explicit |
+| D-013 | Build class/method/source lookup APIs | M1 + M2 | [ ] | War Room can navigate to actual code locations |
+| D-014 | Add Android sensitive source/sink catalogue | M2 + M5 | [ ] | Catalogue has MASWE/MASVS mapping and positive/negative tests |
+| D-015 | Add bounded CFG/data-flow for selected source/sink families | M1 + M2 | [ ] | Tainted/untrusted input tracked to selected sensitive sinks; guard order considered |
+| D-016 | Add code coverage/limitations manifest | M1 + M2 | [ ] | Report discloses unsupported reflection/native/obfuscation/truncation |
 
-## W2 — Gates before any implementation
+## Priority 2 — Autonomous reasoning and investigation
 
-These five tasks decide whether the project is viable. None is code.
+| # | Task | Owner | State | Acceptance |
+|---|---|---|---|---|
+| D-020 | Model provider abstraction + structured output validation | M1 | [ ] | Real provider and deterministic mock share same typed interface |
+| D-021 | Evidence package builder for targeted code context | M1 + M2 | [ ] | Context includes relevant code, callers, sinks and evidence refs; bounded |
+| D-022 | NEXUS hypothesis generation | M1 | [ ] | Hypotheses cite observations and declare required evidence before testing |
+| D-023 | Typed action registry and policy validation | M1 | [ ] | Model cannot dispatch arbitrary commands, targets or tools |
+| D-024 | Adaptive re-planning loop | M1 | [ ] | New tool result changes next action in a fixed integration test |
+| D-025 | Persist model/provider/version, prompt version and decisions | M1 | [ ] | Investigation is auditable and replayable |
+| D-026 | Independent VERITAS review | M1 + M5 | [ ] | Separate reviewer execution challenges claim; gates remain final authority |
 
-| # | Task | Owner | Deadline | State | Why it gates everything |
-|---|---|---|---|---|---|
-| T-030 | **Confirm an execution host with a JDK** (+Docker) | Director | week 1–2 | `[!]` | R-01: without it nothing runs |
-| T-031 | **Decide PHANTOM in/out** | Director | week 2 | `[?]` | R-02: changes M3's entire plan and the thesis |
-| T-032 | **Run the BQ-2 benchmark pilot (30 items)** | M1 + M5 | week 3 | `[ ]` | R-03: validates or refutes the core premise |
-| T-033 | Freeze scope; write the "will not build" list | Director | week 2 | `[ ]` | R-04 |
-| T-034 | Provision Postgres (or confirm SQLite-dev fallback) | M1 | week 2 | `[ ]` | ADR-007 |
-| T-035 | Android bootcamp (6 sessions) + DIVA/InjuredAndroid manual write-up by all | M1 | week 3 | `[ ]` | R-05 |
-| T-036 | Hand-label 30-item pilot corpus with negative controls | M2/M5 | week 2–3 | `[ ]` | T-032 depends on it |
+## Priority 3 — Correlation and attack graph
 
-## W3 — Phase 2 core foundation (after approval)
+| # | Task | Owner | State | Acceptance |
+|---|---|---|---|---|
+| D-030 | Persist graph nodes and edges | M1 | [ ] | Graph reconstructable from stored observations/evidence |
+| D-031 | Correlate component, caller, data source, sink and permission evidence | M1 + M2 | [ ] | Relations carry provenance and edge type |
+| D-032 | Build candidate attack-chain reasoning | M1 + M5 | [ ] | Candidate path has explicit prerequisites and missing proof |
+| D-033 | Attack graph API and React Flow view | M6 | [ ] | Observed/inferred/validated edges visually distinct |
 
-| # | Task | Owner | Depends on |
-|---|---|---|---|
-| T-040 | Repo skeleton: packages, layer boundary, import-lint test | M1 | T-024 |
-| T-041 | Pydantic schemas (frozen interface) | M1 | T-040 |
-| T-042 | Alembic migrations for the full schema | M1 | T-041 |
-| T-043 | `events` append + `LISTEN/NOTIFY` bridge | M1 | T-042 |
-| T-044 | `frontier_entries` queue with `SKIP LOCKED` claim | M1 | T-042 |
-| T-045 | FSM with event-on-every-transition + coverage test | M1 | T-043 |
-| T-046 | `ToolAdapter` protocol + `ToolSpec` + runner sandbox | M2 | T-041 |
-| T-047 | `ToolUnavailable` path end-to-end | M2 | T-046 |
-| T-048 | API: applications, authorisations, scans (CRUD + state) | M1 | T-041 |
-| T-049 | Auth (JWT) + authorisation guard middleware | M1 | T-048 |
-| T-050 | Frontend shell, tokens, generated API client | M6 | T-048 |
-| T-051 | Event stream client + idle/empty/error states **first** | M6 | T-043, T-050 |
-| T-052 | `POST /ask` with grounding validator | M1 | T-048 |
+## Priority 4 — Safe PoC lab
 
-## W4 — Phase 3 RECON (first real capability)
+| # | Task | Owner | State | Acceptance |
+|---|---|---|---|---|
+| D-040 | Define typed PoC/TestPlan schema | M1 + M3 | [ ] | Target digest, scope, hypothesis, steps, expected outcome, budgets and cleanup |
+| D-041 | Implement allowlisted non-destructive test adapters | M3 | [ ] | Only prepared lab APK/emulator/local harness targets |
+| D-042 | Capture reproducible PoC evidence | M1 + M3 | [ ] | Tool version, inputs, outputs, logs, timestamps and exit status persisted |
+| D-043 | Add approval, timeout, cancel and cleanup paths | M1 + M3 | [ ] | Out-of-scope or state-changing tests blocked without approval |
+| D-044 | Positive and negative PoC integration tests | M3 + M5 | [ ] | Positive reproduces; negative control does not confirm |
 
-| # | Task | Owner |
-|---|---|---|
-| T-060 | Androguard manifest adapter (pure Python — works without a JDK) | M2 |
-| T-061 | Component/permission/intent-filter extraction + `export_reason` | M2 |
-| T-062 | **API-31 exported-by-implication fixture + test** | M2 |
-| T-063 | Certificate parsing (v1/v2/v3, debug, expiry) | M2 |
-| T-064 | Network security config parser | M2/M4 |
-| T-065 | DEX/native/asset inventory | M2 |
-| T-066 | Evidence write + `source_ref` provenance | M2 |
-| T-067 | Graph nodes/edges from manifest (assertion=`observed`) | M1 |
-| T-068 | RECON acceptance: DIVA component set precision/recall ≥ 0.9 | M2/M5 |
+## Priority 5 — War Room (real backend activity only)
 
-## W5–W6 — Phase 4 SPECTRE (needs JDK host)
+| # | Task | Owner | State | Acceptance |
+|---|---|---|---|---|
+| D-050 | Mission header and investigation coverage panel | M6 | [ ] | APK identity, scan state, tool/coverage limitations shown |
+| D-051 | Agent network with real lifecycle states | M6 + M1 | [ ] | Every state comes from persisted backend events |
+| D-052 | Investigation timeline with replay/reconnect | M6 + M1 | [ ] | Refresh does not lose events; no simulated activity |
+| D-053 | Code Investigation Studio | M6 | [ ] | Real source/DEX references, selected method and evidence |
+| D-054 | Attack graph and hypothesis inspector | M6 | [ ] | Edge semantics and proof state visible |
+| D-055 | PoC Lab panel and report viewer | M6 + M1 | [ ] | Real execution records and report |
+| D-056 | Browser-level E2E for the complete demo | M6 + All | [ ] | Upload → investigation → evidence → PoC → report works |
 
-| # | Task | Owner | Gate |
-|---|---|---|---|
-| T-070 | JADX adapter with cache-by-APK-hash | M2 | T-030 |
-| T-071 | `fidelity` tagging + smali fallback + `decompiler-failed` | M2 | |
-| T-072 | Targeted lookup primitives (class/method/api-refs/string/callers) | M2 | |
-| T-073 | Sensitive-API YAML catalogue → MASWE mapping | M2/M5 | |
-| T-074 | SPECTRE agent (workhorse tier) + prompt v1 | M1 | T-032 |
-| T-075 | First three gates implemented as predicates + pos/neg tests | M1/M5 | |
-| T-076 | Code Studio: real decompiled source + highlight ranges | M6 | T-070 |
+## Priority 6 — Optional capabilities
 
-## W7–W8 — Phase 5 NEXUS + VERITAS + end-to-end slice
+| # | Task | Owner | State | Condition |
+|---|---|---|---|---|
+| D-060 | PHANTOM emulator/runtime adapter | M3 | [-] | Implement only if host has working emulator/KVM and it improves demo |
+| D-061 | VECTOR API/network adapter | M4 | [-] | Implement only against the controlled lab backend |
+| D-062 | PDF export | M6 | [-] | Only if report print/Markdown is insufficient |
+| D-063 | Broader vulnerability catalogue | M2 + M5 | [-] | After the end-to-end slice is reliable |
 
-| # | Task | Owner |
-|---|---|---|
-| T-080 | Frontier scorer + explainable components | M1 |
-| T-081 | Hypothesis generation from observations (templated `required_evidence`) | M1 |
-| T-082 | Decision records incl. rejected alternatives | M1 |
-| T-083 | Budget enforcement + `BUDGET_EXHAUSTED` path | M1 |
-| T-084 | VERITAS agent on a *different* model + startup assertion | M1 |
-| T-085 | Remaining seven gates | M1/M5 |
-| T-086 | `tests/integrity` — the four CI assertions | M5 |
-| T-087 | War Room: battlefield + agent network + feed | M6 |
-| T-088 | Findings view + hypothesis panel (`required` vs `satisfied`) | M6 |
-| T-089 | Markdown report with coverage + unknowns | M1 |
-| T-090 | **Slice acceptance: one real APK investigated end-to-end** | All |
+## Deferred — not graduation-demo blockers
 
-## W8–W10 — Conditional: PHANTOM / VECTOR / graph UI
+- Multi-tenant SaaS, billing, enterprise SSO, Kubernetes, autoscaling, HA, distributed microservices.
+- Production identity provider and enterprise administration.
+- Redis, graph database, fine-tuning, multi-model voting, ORACLE/C2 research UI.
+- Arbitrary exploit generation, destructive tests, stealth, persistence, credential theft, covert exfiltration.
+- Full support for every obfuscator, reflection pattern, native-code path and Android framework behavior.
 
-Only if T-030 and T-031 are resolved favourably **and** the slice is green.
+## Demo definition of done
 
-| # | Task | Owner | Condition |
-|---|---|---|---|
-| T-100 | Emulator harness + isolation + snapshot policy | M3 | KVM host |
-| T-101 | adb + logcat capture → evidence | M3 | T-100 |
-| T-102 | Frida observation scripts (no bypass) | M3 | T-100 |
-| T-103 | PHANTOM agent + runtime gates | M3 | T-102 |
-| T-104 | mitmproxy adapter + request replay | M4 | |
-| T-105 | VECTOR agent + auth/TLS gates | M4 | T-104 |
-| T-106 | Bounded graph view (React Flow) + `truncated` signalling | M6 | |
-
-## W10–W12 — Evaluation, hardening, defence
-
-| # | Task | Owner |
-|---|---|---|
-| T-110 | Full benchmark run on all models; fill `MODEL_BENCHMARKS.md` | M5 |
-| T-111 | Held-out precision measurement; false-positive taxonomy | M5 |
-| T-112 | MobSF baseline comparison (HTTP, ADR-013) | M2 |
-| T-113 | Prompt-injection suite (G7) + results | M5 |
-| T-114 | Fault-injection suite (`AGENT_DESIGN.md §8`) | M1 |
-| T-115 | Playwright anti-fabrication tests | M6 |
-| T-116 | Recorded real scan for demo fallback (labelled as recorded) | M6 |
-| T-117 | Final report + defence script answering §6 questions | All |
-
-## Deliberately not on this board
-
-`ORACLE` agent · C2 threat-research screen · 9 of 14 screens · Redis · graph database · microservices ·
-fine-tuning · multi-model voting · exploit generation · PDF pipeline (Markdown + print). See
-`REQUIREMENTS.md §3`.
+The team can run one pinned lab APK through a reproducible end-to-end investigation where:
+1. All DEX entries are enumerated and coverage gaps are disclosed.
+2. The AI inspects real code and adapts at least one investigation decision based on new evidence.
+3. At least one meaningful security hypothesis cites code and evidence.
+4. Related weaknesses form a candidate attack path with explicit proof requirements.
+5. A safe PoC reproduces one issue and a negative control does not.
+6. VERITAS challenges the result, or the UI clearly labels the deterministic fallback.
+7. The War Room shows only real persisted activity and supports replay.
+8. The final report contains code references, evidence, PoC result, remediation and unknowns.
