@@ -472,3 +472,13 @@ def test_stub_identity_remains_available_in_development_and_test(tmp_path):
         )
         context = AppContext(settings, create_schema=False)
         context.engine.dispose()
+
+
+
+def test_upload_read_is_bounded_before_service_validation(client, monkeypatch):
+    import mobius.api.routes as routes
+
+    monkeypatch.setattr(routes, "MAX_APK_BYTES", 4)
+    response = _upload(client)
+    assert response.status_code == 413
+    assert response.json()["code"] == "APK_TOO_LARGE"
