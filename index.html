@@ -3,8 +3,8 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>MOBIUS — Android AI penetration testing</title>
-<meta name="description" content="One AI platform for Android security: source-to-sink static analysis, on-device exploit validation, coverage-guided native fuzzing and API testing — wired into CI/CD." />
+<title>MOBIUS — open-source AI SAST, AI DAST and bug chains for Android</title>
+<meta name="description" content="An open-source Android security platform: AI SAST reads the code, AI DAST proves it on a device, and agents chain both into one reproducible chain of real bugs." />
 <meta name="theme-color" content="#07080a" />
 <link rel="icon" href="assets/mark.svg" type="image/svg+xml" />
 <link rel="stylesheet" href="assets/styles.css" />
@@ -14,14 +14,14 @@
 <!-- ─────────────────────────────── blueprint strip ─────────────────────────────── -->
 <div class="sheet" aria-hidden="true">
   <div class="sheet__row">
-    <span class="sheet__cell">MOBIUS.AI</span>
+    <span class="sheet__cell">MOBIUS</span>
     <span class="sheet__cell">SHEET 01</span>
-    <span class="sheet__cell">SCALE 1:1</span>
+    <span class="sheet__cell">APACHE-2.0</span>
     <span class="sheet__cell">REV. 26.11</span>
     <span class="sheet__cell sheet__cell--grow">
       <span class="binary" data-binary data-length="120">011011010110111101100010011010010111010101110011</span>
     </span>
-    <span class="sheet__cell sheet__cell--status"><i class="dot"></i> AWAKE</span>
+    <span class="sheet__cell sheet__cell--status"><i class="dot"></i> OPEN</span>
   </div>
 </div>
 
@@ -33,20 +33,20 @@
       <path d="M16 7.5 24.5 16 16 24.5 7.5 16Z" fill="currentColor" opacity=".9"/>
     </svg>
     <span class="brand__word">MOBIUS</span>
-    <span class="brand__tag">android / ai</span>
+    <span class="brand__tag">open source</span>
   </a>
 
   <nav class="nav__links" id="navLinks" aria-label="Primary">
     <a href="#capabilities">Platform</a>
-    <a href="#inside">Inside</a>
-    <a href="#devices">Device lab</a>
-    <a href="#pricing">Pricing</a>
+    <a href="#agents">Agents</a>
+    <a href="#chains">Bug chains</a>
+    <a href="#open">Open source</a>
     <a href="#faq">FAQ</a>
   </nav>
 
   <div class="nav__actions">
     <a class="btn btn--ghost btn--sm" href="#console">Live demo</a>
-    <a class="btn btn--solid btn--sm" href="#start">Start free <span aria-hidden="true">↗</span></a>
+    <a class="btn btn--solid btn--sm" href="#open">Clone the repo <span aria-hidden="true">↗</span></a>
     <button class="nav__burger" id="burger" aria-label="Menu" aria-expanded="false" aria-controls="navLinks">
       <span></span><span></span>
     </button>
@@ -61,34 +61,35 @@
 
   <div class="wrap hero__inner">
     <p class="eyebrow reveal">
-      <span class="chip">ANDROID AI PENETRATION TESTING</span>
-      <span class="eyebrow__note">Find · Prove · Fix</span>
+      <span class="chip">OPEN SOURCE · ANDROID SECURITY</span>
+      <span class="eyebrow__note">SAST · DAST · Chains</span>
     </p>
 
     <h1 class="hero__title reveal">
-      <span class="hero__line">Find the path.</span>
+      <span class="hero__line">SAST finds it.</span>
       <span class="hero__line hero__line--code" aria-hidden="true">
         <span class="binary binary--lg" data-binary data-length="26">101101001011010110010110</span>
       </span>
-      <span class="hero__line">Prove it on the device.</span>
-      <span class="hero__line hero__line--dim">Ship the fix.</span>
+      <span class="hero__line">DAST proves it.</span>
+      <span class="hero__line hero__line--dim">Agents chain it.</span>
     </h1>
 
     <p class="hero__sub reveal">
-      One AI platform for Android. Source-to-sink static analysis, on-device exploit
-      validation, coverage-guided native fuzzing and API testing — with the fix
-      arriving as a pull request your team can review.
+      MOBIUS is an open-source Android security platform. Static analysis reads the
+      code, dynamic analysis runs it on a real device, and agents assemble both into
+      one reproducible chain of real bugs — with the evidence stored for every hop.
     </p>
 
     <div class="hero__cta reveal">
-      <a class="btn btn--solid btn--lg" href="#start">Book an enterprise demo <span aria-hidden="true">↗</span></a>
-      <a class="btn btn--outline btn--lg" href="#console">Start free</a>
+      <a class="btn btn--solid btn--lg" href="#open">Clone the repo <span aria-hidden="true">↗</span></a>
+      <a class="btn btn--outline btn--lg" href="#agents">See an agent work</a>
     </div>
 
     <ul class="hero__facts reveal">
-      <li>Private cloud or on-premise</li>
-      <li>Your models · your devices</li>
-      <li><b>10</b> free AI SAST scans a month</li>
+      <li><b>Apache-2.0</b> · no open-core</li>
+      <li>Self-host in one command</li>
+      <li>BYO model, or run local</li>
+      <li><b>Zero</b> telemetry</li>
     </ul>
   </div>
 
@@ -98,13 +99,13 @@
       <div class="console__bar">
         <div class="console__title">
           <span class="console__lights" aria-hidden="true"><i></i><i></i><i></i></span>
-          <span class="mono">mobius · scan <b class="js-scan-id">#4821</b> · com.insecureshop</span>
+          <span class="mono">mobius · run <b class="js-scan-id">#4821</b> · com.insecureshop · release</span>
         </div>
         <div class="console__tabs" role="tablist" aria-label="Console views">
-          <button class="tab is-active" role="tab" aria-selected="true" data-tab="findings">Findings</button>
-          <button class="tab" role="tab" aria-selected="false" data-tab="device">Device</button>
-          <button class="tab" role="tab" aria-selected="false" data-tab="api">API</button>
-          <button class="tab" role="tab" aria-selected="false" data-tab="ci">CI/CD</button>
+          <button class="tab is-active" role="tab" aria-selected="true" data-tab="sast">AI SAST</button>
+          <button class="tab" role="tab" aria-selected="false" data-tab="dast">AI DAST</button>
+          <button class="tab" role="tab" aria-selected="false" data-tab="chain">Chain</button>
+          <button class="tab" role="tab" aria-selected="false" data-tab="agent">Agent</button>
         </div>
         <div class="console__meta mono">
           <span class="pulse"></span> <span class="js-status">analysing</span>
@@ -112,15 +113,15 @@
         </div>
       </div>
 
-      <!-- findings -->
-      <div class="console__panel is-active" data-panel="findings">
+      <!-- ── AI SAST ── -->
+      <div class="console__panel is-active" data-panel="sast">
         <div class="pane pane--files">
           <p class="pane__label mono">surface · 142 files</p>
           <ul class="filelist mono">
-            <li class="is-open">app/src/main/java/com/insecureshop/DeepLinkRouter.java <em>142</em></li>
+            <li class="is-open">…/com/insecureshop/DeepLinkRouter.java <em>142</em></li>
             <li>WebViewActivity.kt <em>88</em></li>
-            <li>SessionStore.kt <em>41</em></li>
-            <li>network/ApiClient.kt <em>203</em></li>
+            <li>js/Bridge.java <em>61</em></li>
+            <li>storage/SessionStore.kt <em>41</em></li>
             <li>AndroidManifest.xml <em>27</em></li>
           </ul>
           <p class="pane__label mono">gate</p>
@@ -138,17 +139,16 @@
 <span class="ln">140</span>  String t = u.<span class="fn">getQueryParameter</span>(<span class="str">"next"</span>);
 <span class="ln">141</span>  <span class="cm">// no allow-list, no caller check</span>
 <span class="ln">142</span>  <span class="hl"><span class="fn">startActivity</span>(<span class="kw">new</span> <span class="fn">Intent</span>(t));</span>
-<span class="ln">143</span>  prefs.<span class="fn">edit</span>().<span class="fn">putString</span>(<span class="str">"r"</span>, t);
-<span class="ln">144</span>  WebView w = <span class="fn">findView</span>(R.id.web);
-<span class="ln">145</span>  w.<span class="fn">loadUrl</span>(u.<span class="fn">toString</span>());
-<span class="ln">146</span>}</code></pre>
+<span class="ln">143</span>  WebView w = <span class="fn">findView</span>(R.id.web);
+<span class="ln">144</span>  w.<span class="fn">loadUrl</span>(u.<span class="fn">toString</span>());
+<span class="ln">145</span>}</code></pre>
 
           <div class="findings">
             <article class="finding">
               <span class="sev sev--crit">CRITICAL</span>
               <div>
                 <h4>Untrusted deep link → Intent</h4>
-                <p class="mono">CWE-926 · MASVS-PLATFORM-1 · reachable from exported activity</p>
+                <p class="mono">CWE-926 · MASVS-PLATFORM-1 · source traced</p>
               </div>
               <span class="finding__go" aria-hidden="true">↗</span>
             </article>
@@ -156,15 +156,7 @@
               <span class="sev sev--high">HIGH</span>
               <div>
                 <h4>Unvalidated WebView URL</h4>
-                <p class="mono">CWE-939 · 0 hops · no data-flow guard</p>
-              </div>
-              <span class="finding__go" aria-hidden="true">↗</span>
-            </article>
-            <article class="finding">
-              <span class="sev sev--med">MEDIUM</span>
-              <div>
-                <h4>Sensitive data in SharedPreferences</h4>
-                <p class="mono">CWE-312 · written on the same path</p>
+                <p class="mono">CWE-939 · reaches a JS bridge</p>
               </div>
               <span class="finding__go" aria-hidden="true">↗</span>
             </article>
@@ -172,23 +164,25 @@
         </div>
 
         <aside class="pane pane--trace">
-          <p class="pane__label mono">attack path</p>
+          <p class="pane__label mono">source → sink</p>
           <ol class="trace mono">
             <li><span>1</span> exported activity</li>
             <li><span>2</span> getQueryParameter</li>
             <li><span>3</span> Intent(target)</li>
-            <li><span>4</span> startActivity</li>
+            <li><span>4</span> WebView.loadUrl</li>
           </ol>
-          <p class="pane__label mono">reproduce</p>
-          <pre class="cmd mono">adb shell am start \
-  -n com.insecureshop/.DeepLinkRouter \
-  -d "mobius://open?next=https://evil"</pre>
-          <p class="pane__hint">Cross-file chain · 2 files · 0 false positives in this path</p>
+          <p class="pane__label mono">why it is not noise</p>
+          <p class="pane__hint">The path is complete, the manifest makes it reachable, and no
+            caller check exists on any hop. Unproven paths are stored as
+            <b class="mono">undetermined</b>, never promoted.</p>
+          <p class="pane__label mono" style="margin-top:16px">output</p>
+          <pre class="cmd mono">sarif + json
+chain: pending dast</pre>
         </aside>
       </div>
 
-      <!-- device -->
-      <div class="console__panel" data-panel="device">
+      <!-- ── AI DAST ── -->
+      <div class="console__panel" data-panel="dast">
         <div class="pane pane--device">
           <div class="phone">
             <div class="phone__notch"></div>
@@ -205,82 +199,99 @@
           <div class="device__meta">
             <p class="pane__label mono">pixel 8 · android 15 · usb</p>
             <p class="device__status mono"><span class="pulse"></span> exploit confirmed</p>
-            <p class="pane__hint">Intent resolved on device. Evidence, logcat slice and the
-              triggering command are stored with the finding.</p>
+            <p class="pane__hint">The agent launched the activity, hooked the bridge and
+              captured the screen. The evidence is attached to the hop, not to a folder.</p>
           </div>
         </div>
         <div class="pane pane--steps">
-          <p class="pane__label mono">agent log</p>
+          <p class="pane__label mono">runtime log</p>
           <ol class="steps mono">
-            <li class="is-done"><span>tap</span> Open #login</li>
-            <li class="is-done"><span>type</span> credentials</li>
-            <li class="is-done"><span>hook</span> Frida · SessionManager</li>
-            <li class="is-done"><span>run</span> am start -d mobius://…</li>
-            <li class="is-done"><span>cap</span> screenshot + logcat</li>
+            <li class="is-done"><span>run</span> am start -d mobius://open?next=…</li>
+            <li class="is-done"><span>hook</span> Frida · WebView.addJavascriptInterface</li>
+            <li class="is-done"><span>call</span> bridge.readFile("/sdcard/…")</li>
+            <li class="is-done"><span>cap</span> screenshot + logcat slice</li>
+            <li class="is-done"><span>save</span> reproduce.sh · 3 artefacts</li>
           </ol>
+          <p class="pane__hint">DAST never invents reachability: if the device says the
+            activity did not start, the hop stays <b class="mono">undetermined</b>.</p>
         </div>
       </div>
 
-      <!-- api -->
-      <div class="console__panel" data-panel="api">
-        <div class="pane pane--api">
-          <p class="pane__label mono">api.insecureshop · backend</p>
-<pre class="http mono"><span class="verb get">GET</span> /api/orders/8842
-<span class="hdr">Authorization:</span> Bearer <span class="tok">victim-token</span>
-
-<span class="ok">200</span> {"id":8842,"owner":"victim","total":"€41.00"}
-
-<span class="verb post">POST</span> /api/orders
-<span class="hdr">Content-Type:</span> application/json
-{"item":"sku-91","qty":1}
-
-<span class="ok">201</span> {"id":8843,"status":"placed"}</pre>
-          <div class="finding finding--inline">
-            <span class="sev sev--crit">IDOR</span>
-            <div>
-              <h4>Object ownership never checked</h4>
-              <p class="mono">CWE-639 · cross-tenant read · reproduced with a second account</p>
-            </div>
+      <!-- ── CHAIN ── -->
+      <div class="console__panel" data-panel="chain">
+        <div class="pane pane--chain">
+          <p class="pane__label mono">chain · CH-0042 · 5 hops</p>
+          <ol class="chain-mini mono">
+            <li class="is-crit"><i>1</i><div><b>Exported activity</b><span>CWE-926 · DeepLinkRouter</span></div></li>
+            <li class="is-crit"><i>2</i><div><b>Unsanitised intent</b><span>CWE-939 · no allow-list</span></div></li>
+            <li class="is-high"><i>3</i><div><b>WebView JS bridge</b><span>CWE-749 · exported object</span></div></li>
+            <li class="is-high"><i>4</i><div><b>Path traversal in bridge</b><span>CWE-22 · readFile(…)</span></div></li>
+            <li class="is-crit"><i>5</i><div><b>Local file exfiltration</b><span>impact · attacker origin</span></div></li>
+          </ol>
+        </div>
+        <div class="pane pane--steps">
+          <p class="pane__label mono">chain verdict</p>
+          <div class="verdict">
+            <p class="verdict__score"><b>0.94</b><span class="mono"> confidence</span></p>
+            <p class="verdict__line mono">every hop: source ✓ sink ✓ evidence ✓</p>
+            <p class="verdict__line mono">reproduced on 1 device · 1 command</p>
           </div>
-        </div>
-        <div class="pane pane--steps">
-          <p class="pane__label mono">checks</p>
-          <ul class="gates mono">
-            <li><span class="tick">✓</span> auth boundary replay</li>
-            <li><span class="tick">✓</span> object ownership</li>
-            <li><span class="tick">✓</span> business-logic abuse</li>
-            <li><span class="tick">✓</span> rate-limit behaviour</li>
-          </ul>
-          <p class="pane__hint">Same session token, second identity, no guessing: the request
-            that should have returned 403 returned somebody else's order.</p>
+          <p class="pane__label mono" style="margin-top:16px">reproduce</p>
+          <pre class="cmd mono">mobius chain replay CH-0042 \
+  --device pixel8</pre>
+          <p class="pane__hint">A single medium finding is a ticket. Five connected hops are an
+            incident — and the report is written as one narrative, not a list.</p>
         </div>
       </div>
 
-      <!-- ci -->
-      <div class="console__panel" data-panel="ci">
-        <div class="pane pane--ci">
-          <p class="pane__label mono">pipeline · build #318</p>
-          <ol class="pipeline mono">
-            <li class="is-done">Build</li>
-            <li class="is-done">Unit tests</li>
-            <li class="is-done">AI SAST</li>
-            <li class="is-live">Auto-fix</li>
-            <li>Open PR</li>
+      <!-- ── AGENT ── -->
+      <div class="console__panel" data-panel="agent">
+        <div class="pane pane--agentlog">
+          <p class="pane__label mono">agent · recon → hypothesis → proof</p>
+          <ol class="agentlog mono" data-agentlog>
+            <li class="is-done">
+              <span class="agentlog__t">00:00</span>
+              <span class="agentlog__tool">recon</span>
+              <span class="agentlog__msg">manifest parsed · 7 exported components</span>
+            </li>
+            <li class="is-done">
+              <span class="agentlog__t">00:12</span>
+              <span class="agentlog__tool">think</span>
+              <span class="agentlog__msg">H-0142: deep link reaches WebView bridge</span>
+            </li>
+            <li class="is-done">
+              <span class="agentlog__t">00:19</span>
+              <span class="agentlog__tool">sast</span>
+              <span class="agentlog__msg">2 files traced · sink found on hop 4</span>
+            </li>
+            <li class="is-rejected">
+              <span class="agentlog__t">00:31</span>
+              <span class="agentlog__tool">dast</span>
+              <span class="agentlog__msg">H-0143 rejected: bridge absent in release</span>
+            </li>
+            <li class="is-done">
+              <span class="agentlog__t">00:44</span>
+              <span class="agentlog__tool">dast</span>
+              <span class="agentlog__msg">debug variant: bridge present · intent fired</span>
+            </li>
+            <li class="is-done">
+              <span class="agentlog__t">00:52</span>
+              <span class="agentlog__tool">write</span>
+              <span class="agentlog__msg">chain CH-0042 · 5 hops · evidence attached</span>
+            </li>
           </ol>
-          <p class="pane__label mono">proposed change · PR #482</p>
-          <pre class="code code--diff"><code><span class="cm">fix: sanitize deep link target</span>
-<span class="del">- startActivity(new Intent(t));</span>
-<span class="add">+ if (isAllowed(t)) startActivity(safe(t));</span>
-<span class="add">+ if (isAllowed(u)) w.loadUrl(u.toString());</span></pre>
-          <p class="pane__hint">Checks pass. The merge stays a human decision.</p>
         </div>
         <div class="pane pane--steps">
-          <p class="pane__label mono">gate policy</p>
-          <ul class="gates mono">
-            <li><span class="tick">✓</span> fail on critical</li>
-            <li><span class="tick">✓</span> block on new path</li>
-            <li><span class="tick">✓</span> SARIF + JSON</li>
-          </ul>
+          <p class="pane__label mono">run summary</p>
+          <div class="agentstats">
+            <div><b>3</b><span>hypotheses</span></div>
+            <div><b>1</b><span>rejected</span></div>
+            <div><b>5</b><span>hops proven</span></div>
+            <div><b>0</b><span>unsupported claims</span></div>
+          </div>
+          <p class="pane__hint">Every row above is an event in the run log. The rejected
+            hypothesis stays in the report — an agent that only shows its wins is a
+            marketing page, not an investigation.</p>
         </div>
       </div>
 
@@ -292,10 +303,10 @@
     </div>
 
     <div class="statstrip reveal">
-      <div><b>6</b><span>MASVS categories enumerated</span></div>
-      <div><b>SARIF</b><span>and JSON, for the pipeline</span></div>
-      <div><b>0</b><span>agents with write access to your source</span></div>
-      <div><b>1</b><span>investigation, not a dashboard of guesses</span></div>
+      <div><b>SAST</b><span>source-to-sink, manifest-aware</span></div>
+      <div><b>DAST</b><span>on a device, with screenshots</span></div>
+      <div><b>Chains</b><span>findings joined into one exploit</span></div>
+      <div><b>Open</b><span>Apache-2.0, self-hosted, no telemetry</span></div>
     </div>
   </div>
 </section>
@@ -304,287 +315,387 @@
 <section class="band band--paper" id="capabilities">
   <div class="wrap">
     <header class="sect reveal">
-      <p class="sect__no mono">01 / CAPABILITIES</p>
-      <h2>Six instruments.<br /><em>One investigation.</em></h2>
-      <p class="sect__lede">Static analysis that reaches the truth of a path, runtime that
-        proves it, and delivery that closes it — in the same workspace, against the same
-        evidence.</p>
+      <p class="sect__no mono">01 / PLATFORM</p>
+      <h2>Two analyses.<br /><em>One chain of real bugs.</em></h2>
+      <p class="sect__lede">Most tools stop at a list. MOBIUS keeps going: static analysis
+        proposes, dynamic analysis proves, and the agent layer connects the proven parts
+        into the path an attacker would actually take.</p>
     </header>
 
     <div class="cards">
       <article class="card reveal">
-        <p class="card__kicker mono">Source</p>
-        <h3>AI SAST</h3>
-        <p>Follow untrusted input across files, frameworks and trust boundaries. Dex, smali,
-          Kotlin and Java — with the manifest as the map.</p>
-        <a class="card__link" href="#inside">Explore AI SAST <span aria-hidden="true">→</span></a>
+        <p class="card__kicker mono">Static · AI SAST</p>
+        <h3>Reads the code</h3>
+        <p>Manifest-aware source-to-sink tracing across Java, Kotlin, smali and native
+          entry points. Dex, APK or repository — the same analysis.</p>
+        <a class="card__link" href="#console">Explore AI SAST <span aria-hidden="true">→</span></a>
         <span class="card__idx mono">01</span>
       </article>
 
       <article class="card reveal">
-        <p class="card__kicker mono">Runtime</p>
-        <h3>Dynamic testing</h3>
-        <p>Drive the app on a real device or emulator: Frida hooks, intent fuzzing, deep-link
-          replay and the screenshot that proves it happened.</p>
-        <a class="card__link" href="#devices">Explore dynamic testing <span aria-hidden="true">→</span></a>
+        <p class="card__kicker mono">Dynamic · AI DAST</p>
+        <h3>Runs the app</h3>
+        <p>Intent replay, Frida hooks, deep-link fuzzing and UI driving on a real device.
+          If it did not happen on the device, it does not get called confirmed.</p>
+        <a class="card__link" href="#agents">Explore AI DAST <span aria-hidden="true">→</span></a>
         <span class="card__idx mono">02</span>
       </article>
 
       <article class="card reveal">
-        <p class="card__kicker mono">Native</p>
-        <h3>Coverage-guided fuzzing</h3>
-        <p>Push into JNI and vendor blobs where the Java layer stops. Paths, exec/s and
-          crashes — with the crashing input kept.</p>
-        <a class="card__link" href="#inside">Explore fuzzing <span aria-hidden="true">→</span></a>
+        <p class="card__kicker mono">Correlation · Chains</p>
+        <h3>Builds the full path</h3>
+        <p>Individually minor findings become one exploit chain: entry point, trust
+          boundary, sink, impact — each hop with its own evidence.</p>
+        <a class="card__link" href="#chains">Explore chains <span aria-hidden="true">→</span></a>
         <span class="card__idx mono">03</span>
       </article>
 
       <article class="card reveal">
-        <p class="card__kicker mono">Backend</p>
-        <h3>API testing</h3>
-        <p>Authentication, object ownership, business logic and rate limits — the services
-          behind the app, tested with the app's own tokens.</p>
-        <a class="card__link" href="#inside">Explore API testing <span aria-hidden="true">→</span></a>
+        <p class="card__kicker mono">Orchestration · Agents</p>
+        <h3>Decides what to try</h3>
+        <p>Planner, researcher and verifier agents choose the next probe, record the
+          rejected hypotheses, and refuse to close a finding without proof.</p>
+        <a class="card__link" href="#agents">How agents work <span aria-hidden="true">→</span></a>
         <span class="card__idx mono">04</span>
       </article>
 
       <article class="card reveal">
-        <p class="card__kicker mono">Delivery</p>
-        <h3>CI/CD &amp; fix PRs</h3>
-        <p>Scan on every build, fail on real paths, and open a reviewable patch. The merge
-          stays yours; the diff is small enough to read.</p>
-        <a class="card__link" href="#inside">Explore CI/CD <span aria-hidden="true">→</span></a>
+        <p class="card__kicker mono">Automation · Device lab</p>
+        <h3>Runs where it matters</h3>
+        <p>Virtual devices or your own hardware over adb: screen, shell, files and an API
+          so your CI can drive the same lab the agents use.</p>
+        <a class="card__link" href="#open">Run your own <span aria-hidden="true">→</span></a>
         <span class="card__idx mono">05</span>
       </article>
 
       <article class="card reveal">
-        <p class="card__kicker mono">Automation</p>
-        <h3>Device lab</h3>
-        <p>A fleet of Android devices with shell, screen and API access — for your tests,
-          your agents and the products you build.</p>
-        <a class="card__link" href="#devices">Explore device lab <span aria-hidden="true">→</span></a>
+        <p class="card__kicker mono">Delivery · CI/CD</p>
+        <h3>Blocks the path, not the build</h3>
+        <p>SARIF and JSON out, chain-aware policy in. Fail on a new proven path; pass on a
+          theoretical one that the device could not reproduce.</p>
+        <a class="card__link" href="#open">See the pipeline <span aria-hidden="true">→</span></a>
         <span class="card__idx mono">06</span>
       </article>
     </div>
   </div>
 </section>
 
-<!-- ─────────────────────────────── inside ─────────────────────────────── -->
-<section class="band band--ink" id="inside">
+<!-- ─────────────────────────────── agents ─────────────────────────────── -->
+<section class="band band--ink" id="agents">
   <div class="wrap">
     <header class="sect reveal">
-      <p class="sect__no mono">02 / INSIDE THE PRODUCT</p>
-      <h2>The finding. The code.<br /><em>The device. One place.</em></h2>
-      <p class="sect__lede">From a compiled APK or a repository to an actionable workspace:
-        the exact line, its context, the path that connects them, and the console that
-        repeats it.</p>
+      <p class="sect__no mono">02 / HOW AGENTS FIND BUGS</p>
+      <h2>An agent is a loop<br /><em>with a memory of its mistakes.</em></h2>
+      <p class="sect__lede">Each agent has one job and one rule: nothing is a finding until
+        something proves it. The loop is visible, the hypotheses are numbered, and the ones
+        that died are still in the log.</p>
     </header>
 
-    <div class="split">
-      <figure class="panel panel--findings reveal">
-        <div class="panel__head mono">
-          <span>findings · ranked</span><span class="panel__dots" aria-hidden="true">•••</span>
-        </div>
-        <div class="panel__body">
-          <div class="rank">
-            <span class="rank__sev sev--crit">CRITICAL</span>
-            <p>Exported deep link reaches <code>startActivity</code></p>
-            <span class="rank__cwe mono">CWE-926</span>
-          </div>
-          <div class="rank">
-            <span class="rank__sev sev--high">HIGH</span>
-            <p>WebView loads an unvalidated URL</p>
-            <span class="rank__cwe mono">CWE-939</span>
-          </div>
-          <div class="rank">
-            <span class="rank__sev sev--med">MEDIUM</span>
-            <p>Session token written to unencrypted prefs</p>
-            <span class="rank__cwe mono">CWE-312</span>
-          </div>
-          <div class="rank">
-            <span class="rank__sev sev--low">LOW</span>
-            <p>Debug flag left enabled in release manifest</p>
-            <span class="rank__cwe mono">CWE-489</span>
-          </div>
-        </div>
-        <figcaption class="panel__cap mono">InsecureShop · 8 MASVS categories · SARIF ready</figcaption>
-      </figure>
+    <ol class="loop reveal">
+      <li>
+        <span class="loop__n mono">01</span>
+        <h3>Observe</h3>
+        <p>Parse the manifest, map exported surface, read every reachable method.</p>
+      </li>
+      <li>
+        <span class="loop__n mono">02</span>
+        <h3>Hypothesise</h3>
+        <p>Write a falsifiable claim: this entry point reaches that sink.</p>
+      </li>
+      <li>
+        <span class="loop__n mono">03</span>
+        <h3>Probe</h3>
+        <p>Static trace first, then the cheapest dynamic test that could kill it.</p>
+      </li>
+      <li>
+        <span class="loop__n mono">04</span>
+        <h3>Verify</h3>
+        <p>Evidence or nothing. No evidence, no confirmation — mark it undetermined.</p>
+      </li>
+      <li>
+        <span class="loop__n mono">05</span>
+        <h3>Connect</h3>
+        <p>Proven hops are joined into a chain; the chain is retested end to end.</p>
+      </li>
+    </ol>
 
-      <figure class="panel panel--device reveal">
-        <div class="panel__head mono"><span>device console</span><span>android 15</span></div>
-        <div class="panel__body panel__body--split">
-          <pre class="shell mono"><code><span class="prompt">$</span> mobius device attach pixel8
-<span class="ok">✓</span> adb 35.0.2 · root: no
-<span class="prompt">$</span> mobius run --path deeplink
-<span class="ok">✓</span> intent resolved
-<span class="ok">✓</span> target activity launched
-<span class="warn">!</span> exported, no permission
-<span class="prompt">$</span> mobius evidence --save
-<span class="ok">✓</span> screenshot.png
-<span class="ok">✓</span> logcat.slice
-<span class="ok">✓</span> reproduce.sh</code></pre>
-          <div class="mini-phone" aria-hidden="true">
-            <div class="mini-phone__bar"></div>
-            <div class="mini-phone__box"></div>
-            <div class="mini-phone__box mini-phone__box--short"></div>
-            <div class="mini-phone__box mini-phone__box--accent"></div>
-          </div>
+    <div class="agentview reveal">
+      <div class="agentview__head mono">
+        <span>agent trace · run #4821</span>
+        <span class="agentview__legend"><i class="lg-done"></i> kept <i class="lg-no"></i> rejected</span>
+      </div>
+      <div class="agentview__body">
+        <div class="agentview__left">
+          <ol class="agentlog agentlog--big mono" data-agentlog>
+            <li class="is-done">
+              <span class="agentlog__t">00:00</span>
+              <span class="agentlog__tool">planner</span>
+              <span class="agentlog__msg">objective: reach a privileged sink from an exported entry point</span>
+            </li>
+            <li class="is-done">
+              <span class="agentlog__t">00:04</span>
+              <span class="agentlog__tool">recon</span>
+              <span class="agentlog__msg">7 exported · 2 without permission · 6 candidates</span>
+            </li>
+            <li class="is-done">
+              <span class="agentlog__t">00:12</span>
+              <span class="agentlog__tool">think</span>
+              <span class="agentlog__msg">H-0142: DeepLinkRouter → WebView bridge</span>
+            </li>
+            <li class="is-done">
+              <span class="agentlog__t">00:19</span>
+              <span class="agentlog__tool">sast</span>
+              <span class="agentlog__msg">trace complete · 2 files · sink on hop 4</span>
+            </li>
+            <li class="is-rejected">
+              <span class="agentlog__t">00:26</span>
+              <span class="agentlog__tool">think</span>
+              <span class="agentlog__msg">H-0143: bridge reachable in release build</span>
+            </li>
+            <li class="is-rejected">
+              <span class="agentlog__t">00:31</span>
+              <span class="agentlog__tool">dast</span>
+              <span class="agentlog__msg">rejected — addJavascriptInterface only in debug source set</span>
+            </li>
+            <li class="is-done">
+              <span class="agentlog__t">00:44</span>
+              <span class="agentlog__tool">dast</span>
+              <span class="agentlog__msg">debug variant installed · intent fired · bridge answered</span>
+            </li>
+            <li class="is-done">
+              <span class="agentlog__t">00:52</span>
+              <span class="agentlog__tool">verifier</span>
+              <span class="agentlog__msg">4/4 hop evidence present · chain CH-0042 written</span>
+            </li>
+            <li class="is-done">
+              <span class="agentlog__t">00:53</span>
+              <span class="agentlog__tool">report</span>
+              <span class="agentlog__msg">1 chain · 1 rejected hypothesis · 0 unproven claims</span>
+            </li>
+          </ol>
         </div>
-        <figcaption class="panel__cap mono">the evidence your developer can act on</figcaption>
-      </figure>
+
+        <aside class="agentview__right">
+          <p class="pane__label mono">current hypothesis</p>
+          <div class="hypo">
+            <p class="hypo__id mono">H-0142</p>
+            <p class="hypo__claim">An exported deep link without a caller check reaches
+              <code>startActivity</code> and then a JavaScript bridge.</p>
+            <ul class="hypo__clauses">
+              <li class="ok"><span>exported</span><b class="mono">evidence · e_881</b></li>
+              <li class="ok"><span>no permission</span><b class="mono">evidence · e_882</b></li>
+              <li class="ok"><span>caller check absent</span><b class="mono">evidence · e_903</b></li>
+              <li class="ok"><span>sink reachable</span><b class="mono">evidence · e_917</b></li>
+            </ul>
+          </div>
+          <p class="pane__label mono" style="margin-top:18px">policy</p>
+          <ul class="gates mono">
+            <li><span class="tick">✓</span> evidence required per clause</li>
+            <li><span class="tick">✓</span> rejected hypotheses retained</li>
+            <li><span class="tick">✓</span> no model output used as evidence</li>
+            <li><span class="tick">✓</span> run is replayable from the log</li>
+          </ul>
+        </aside>
+      </div>
     </div>
 
-    <div class="rows">
-      <article class="row reveal">
-        <div class="row__copy">
-          <p class="sect__no mono">FIND / CONTEXTUAL ANALYSIS</p>
-          <h3>A change lands. MOBIUS goes deep.</h3>
-          <p>Reason across files and functions, connect application logic to the sink that
-            matters, and surface the weakness that only exists because two innocent lines
-            met.</p>
-          <ul class="ticks">
-            <li>Cross-file attack chains</li>
-            <li>Manifest-aware entry points</li>
-            <li>CWE, OWASP and MASVS mapping</li>
-          </ul>
-        </div>
-        <div class="row__art row__art--trace">
-          <div class="tracecard">
-            <p class="mono">DeepLinkRouter.java</p>
-            <p class="mono mono--dim">handleDeepLink(Uri)</p>
-            <div class="tracecard__line"><i></i> getQueryParameter("next")</div>
-            <div class="tracecard__gap mono">2 files · 1 hop</div>
-            <div class="tracecard__line tracecard__line--end"><i></i> startActivity(Intent)</div>
-            <span class="tracecard__tag mono">reachable · unguarded</span>
-          </div>
-        </div>
+    <div class="rules">
+      <article class="rule reveal">
+        <h3>Claims need artefacts</h3>
+        <p>A model may propose. Only a trace, a manifest fact or a device capture may
+          confirm. The distinction is enforced in code, not in a prompt.</p>
       </article>
-
-      <article class="row row--flip reveal">
-        <div class="row__copy">
-          <p class="sect__no mono">PROVE / EXPLOIT VALIDATION</p>
-          <h3>From "possible" to "here's how".</h3>
-          <p>Chain the path, run it on a device, and keep what it left behind: the exact
-            command, the screen, the log line. A finding you can replay is a finding nobody
-            argues with.</p>
-          <ul class="ticks">
-            <li>Android runtime testing</li>
-            <li>Reproducible proof of exploitation</li>
-            <li>Evidence stored with the row, not in a screenshot folder</li>
-          </ul>
-        </div>
-        <div class="row__art row__art--proof">
-          <div class="proofcard mono">
-            <p class="proofcard__title">reproduce.sh</p>
-            <pre><code>adb shell am start \
-  -d "mobius://open?next=https://evil" \
-  -n com.insecureshop/.DeepLinkRouter</code></pre>
-            <p class="ok">✓ activity launched</p>
-            <p class="ok">✓ evidence attached</p>
-          </div>
-        </div>
+      <article class="rule reveal">
+        <h3>Uncertainty is a result</h3>
+        <p>Reflection, packed code, dynamic loading: the agent records what it could not
+          resolve instead of filling the gap with a guess.</p>
       </article>
-
-      <article class="row reveal">
-        <div class="row__copy">
-          <p class="sect__no mono">FIX / CONTINUOUS SECURITY</p>
-          <h3>Close the loop. Ship the fix.</h3>
-          <p>Turn a finding into a patch, open the pull request, and retest the original
-            path before merge. Review stays in your hands, which is where it belongs.</p>
-          <ul class="ticks">
-            <li>Start from your pipeline</li>
-            <li>Contextual, minimal diffs</li>
-            <li>Retest the attack path, not the unit test</li>
-          </ul>
-        </div>
-        <div class="row__art row__art--diff">
-          <div class="diffcard mono">
-            <p class="diffcard__head">PR #482 · fix: sanitize deep link target</p>
-            <pre><code><span class="del">- startActivity(new Intent(t));</span>
-<span class="add">+ if (isAllowed(t)) startActivity(safe(t));</span></code></pre>
-            <p class="diffcard__meta">+2 −1 · 1 file · checks passed</p>
-          </div>
-        </div>
+      <article class="rule reveal">
+        <h3>The loop is auditable</h3>
+        <p>Every step is an event with a timestamp. Replay the run and you get the same
+          chain, the same rejections, the same bytes in the report.</p>
       </article>
     </div>
   </div>
 </section>
 
-<!-- ─────────────────────────────── devices ─────────────────────────────── -->
-<section class="band band--paper" id="devices">
+<!-- ─────────────────────────────── chains ─────────────────────────────── -->
+<section class="band band--paper" id="chains">
   <div class="wrap">
     <header class="sect sect--split reveal">
       <div>
-        <p class="sect__no mono">03 / DEVICE LAB</p>
-        <h2>Every screen.<br /><em>One command center.</em></h2>
+        <p class="sect__no mono">03 / ANATOMY OF A CHAIN</p>
+        <h2>One medium bug<br /><em>is a ticket.</em><br />Five connected<br />are an incident.</h2>
       </div>
-      <p class="sect__lede">Virtual devices or your own hardware, with screen, shell, file and
-        API access for your agents and your tests. No device rack to maintain.</p>
+      <p class="sect__lede">Triage kills real bugs one at a time. MOBIUS models the chain:
+        which entry point an attacker controls, which trust boundary is crossed, which sink
+        turns it into access — and whether the next hop exists at all.</p>
     </header>
 
-    <div class="devices">
-      <article class="dev reveal">
-        <div class="dev__frame"><span class="dev__screen"></span><i class="dev__dot"></i></div>
-        <p class="dev__name">Pixel 8</p>
-        <p class="dev__meta mono">android 15 · arm64 · online</p>
+    <div class="chainbig reveal">
+      <div class="chainbig__rail" aria-hidden="true"></div>
+
+      <article class="hop hop--crit">
+        <p class="hop__n mono">HOP 01</p>
+        <h3>Exported activity</h3>
+        <p>Any app on the device can start <code>DeepLinkRouter</code>. No permission, no
+          caller check.</p>
+        <p class="hop__meta mono">CWE-926 · static + dynamic</p>
       </article>
-      <article class="dev reveal">
-        <div class="dev__frame dev__frame--tall"><span class="dev__screen"></span><i class="dev__dot"></i></div>
-        <p class="dev__name">Pixel Fold</p>
-        <p class="dev__meta mono">android 14 · foldable · online</p>
+
+      <article class="hop hop--crit">
+        <p class="hop__n mono">HOP 02</p>
+        <h3>Unsanitised deep link</h3>
+        <p><code>next=</code> is handed to <code>Intent()</code> unmodified. The attacker
+          chooses the target.</p>
+        <p class="hop__meta mono">CWE-939 · taint confirmed</p>
       </article>
-      <article class="dev reveal">
-        <div class="dev__frame"><span class="dev__screen"></span><i class="dev__dot"></i></div>
-        <p class="dev__name">Galaxy S24</p>
-        <p class="dev__meta mono">android 14 · one ui · busy</p>
+
+      <article class="hop hop--high">
+        <p class="hop__n mono">HOP 03</p>
+        <h3>WebView JavaScript bridge</h3>
+        <p>The loaded page exposes a Java object to JavaScript — and the URL is still
+          attacker-controlled.</p>
+        <p class="hop__meta mono">CWE-749 · runtime hook</p>
       </article>
-      <article class="dev dev--add reveal">
-        <div class="dev__frame dev__frame--ghost"><span>+</span></div>
-        <p class="dev__name">Bring your own</p>
-        <p class="dev__meta mono">usb or network adb</p>
+
+      <article class="hop hop--high">
+        <p class="hop__n mono">HOP 04</p>
+        <h3>Path traversal in the bridge</h3>
+        <p><code>readFile()</code> joins a caller-supplied name to the app directory with no
+          normalisation.</p>
+        <p class="hop__meta mono">CWE-22 · sink proven</p>
       </article>
+
+      <article class="hop hop--crit">
+        <p class="hop__n mono">HOP 05</p>
+        <h3>Local data exfiltration</h3>
+        <p>Session tokens leave the sandbox through a URL the attacker already controls.
+          Demonstrated, captured, replayable.</p>
+        <p class="hop__meta mono">IMPACT · device evidence</p>
+      </article>
+
+      <footer class="chainbig__foot mono">
+        <span>CH-0042 · 5 hops · 4 CWEs</span>
+        <span>confidence 0.94</span>
+        <span>reproduced · pixel 8 · android 15</span>
+      </footer>
     </div>
 
-    <ul class="specs reveal">
-      <li><b>shell</b><span>adb, rootless by default</span></li>
-      <li><b>screen</b><span>live view, recorded sessions</span></li>
-      <li><b>files</b><span>push, pull, pulled evidence</span></li>
-      <li><b>api</b><span>keys for your own agents</span></li>
-    </ul>
+    <div class="problems">
+      <div class="problem reveal">
+        <p class="problem__no mono">PROBLEM 01</p>
+        <h3>Every tool reports the leaf</h3>
+        <p>“Exported activity” without the bridge is noise. “Bridge” without the exported
+          entry is unreachable. Chains are what an attacker actually executes.</p>
+      </div>
+      <div class="problem reveal">
+        <p class="problem__no mono">PROBLEM 02</p>
+        <h3>Triage measures volume</h3>
+        <p>A thousand findings train a team to ignore the queue. One proven chain with
+          five evidenced hops gives them something to fix before Friday.</p>
+      </div>
+      <div class="problem reveal">
+        <p class="problem__no mono">PROBLEM 03</p>
+        <h3>Fixes need the whole path</h3>
+        <p>Patch the bridge and hop 2 still leaks. The chain tells you which single hop
+          breaks the most impact — and retests the path after the patch.</p>
+      </div>
+    </div>
   </div>
 </section>
 
-<!-- ─────────────────────────────── terms ─────────────────────────────── -->
-<section class="band band--ink" id="terms">
-  <div class="wrap terms">
-    <div class="terms__copy reveal">
-      <p class="sect__no mono">04 / DEPLOY ON YOUR TERMS</p>
-      <h2>Your devices.<br /><em>Your model. Your call.</em></h2>
-      <p>Run MOBIUS in your private cloud or on-premise. Bring your own model key, connect
-        your own devices, and keep the source and the findings inside your perimeter.</p>
-      <a class="btn btn--outline" href="#start">Read the deployment guide <span aria-hidden="true">↗</span></a>
+<!-- ─────────────────────────────── open source ─────────────────────────────── -->
+<section class="band band--ink" id="open">
+  <div class="wrap">
+    <header class="sect sect--split reveal">
+      <div>
+        <p class="sect__no mono">04 / OPEN SOURCE</p>
+        <h2>Open by default.<br /><em>No open-core.</em></h2>
+      </div>
+      <p class="sect__lede">The analysers, the agent loop, the chain builder and the report
+        writer are all in the repository under Apache-2.0. Bring your own model key — or a
+        local one — and your own devices.</p>
+    </header>
+
+    <div class="open">
+      <div class="open__repo reveal">
+        <div class="repo">
+          <div class="repo__head mono">
+            <span class="repo__owner">github.com /</span> mobius-ai <span class="repo__sep">/</span> mobius
+            <span class="repo__badge">Apache-2.0</span>
+          </div>
+          <pre class="repo__cmd mono"><code><span class="prompt">$</span> git clone https://github.com/mobius-ai/mobius
+<span class="prompt">$</span> cd mobius && ./install.sh
+<span class="ok">✓</span> python 3.11 · androguard · frida-server
+<span class="ok">✓</span> device lab: 2 virtual devices ready
+
+<span class="prompt">$</span> mobius scan app-release.apk --sast --dast
+<span class="ok">✓</span> 142 files · 7 exported components
+<span class="ok">✓</span> chain CH-0042 · 5 hops · evidence stored
+<span class="warn">!</span> 1 hypothesis rejected (documented)</code></pre>
+          <ul class="repo__stats mono">
+            <li><b>6</b> analysers</li>
+            <li><b>3</b> agents</li>
+            <li><b>1</b> command</li>
+            <li><b>0</b> telemetry</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="open__grid">
+        <article class="opencard reveal">
+          <p class="opencard__no mono">01</p>
+          <h3>Self-host</h3>
+          <p>Docker Compose or a single binary. SQLite for a laptop, Postgres for a team.
+            Runs air-gapped; the analysers do not call home.</p>
+        </article>
+        <article class="opencard reveal">
+          <p class="opencard__no mono">02</p>
+          <h3>Bring your model</h3>
+          <p>Point the agent layer at a hosted provider or a local runtime. The model
+            proposes probes; the evidence still has to come from the target.</p>
+        </article>
+        <article class="opencard reveal">
+          <p class="opencard__no mono">03</p>
+          <h3>Write an analyser</h3>
+          <p>Analysers and agents are Python interfaces with explicit inputs and evidence
+            contracts. Add a sink, a framework or a whole new agent without forking.</p>
+        </article>
+        <article class="opencard reveal">
+          <p class="opencard__no mono">04</p>
+          <h3>Own the output</h3>
+          <p>Findings, chains and reports are files on your disk: JSON, SARIF and a
+            readable HTML report. No export paywall, no hosted dashboard required.</p>
+        </article>
+      </div>
     </div>
-    <ul class="terms__list">
-      <li class="reveal"><b>BYOK</b><span>Your provider, your spend. The platform never proxies a
-        model call through someone else's key.</span></li>
-      <li class="reveal"><b>BYOD</b><span>Physical hardware over adb, or managed virtual devices.
-        Nothing leaves your network.</span></li>
-      <li class="reveal"><b>ON-PREM</b><span>Container images, your Postgres, your object store.
-        Air-gapped by configuration.</span></li>
-      <li class="reveal"><b>AUDIT</b><span>Every finding carries its evidence. Every run is a
-        record you can replay.</span></li>
-    </ul>
+
+    <div class="openspec reveal">
+      <p class="openspec__kicker mono">DESIGN NOTES, IN THE OPEN</p>
+      <ul>
+        <li><b>Evidence first.</b> A finding is a row with clauses; each clause names an
+          artefact. No artefact, no clause.</li>
+        <li><b>Rejected hypotheses are data.</b> They tell you where the analyser was wrong
+          — the most useful thing an agent can leave behind.</li>
+        <li><b>No hidden model calls.</b> Every call is logged with its purpose, and can be
+          replaced by a rule for the deterministic parts.</li>
+        <li><b>Reproducible by construction.</b> Same target, same device profile, same
+          chain. If it changes, that is a bug with a test.</li>
+      </ul>
+    </div>
   </div>
 </section>
 
-<!-- ─────────────────────────────── pricing ─────────────────────────────── -->
+<!-- ─────────────────────────────── tiers ─────────────────────────────── -->
 <section class="band band--paper" id="pricing">
   <div class="wrap">
     <header class="sect sect--center reveal">
-      <p class="sect__no mono">05 / PRICING</p>
-      <h2>Start curious. <em>Go deeper.</em></h2>
-      <p class="sect__lede">From the first scan to a security program. Choose how far you want
-        to go.</p>
+      <p class="sect__no mono">05 / HOW IT IS FUNDED</p>
+      <h2>The software is free.<br /><em>Support is the product.</em></h2>
+      <p class="sect__lede">No feature is held back behind a licence. What you can buy is
+        help: a supported build, a private model, or someone on the phone during an
+        incident.</p>
       <div class="toggle mono" data-billing>
         <button class="is-active" data-cycle="month">Monthly</button>
         <button data-cycle="year">Annual <span class="toggle__off">−20%</span></button>
@@ -593,56 +704,55 @@
 
     <div class="prices">
       <article class="price reveal">
-        <p class="price__kicker mono">Meet MOBIUS</p>
-        <h3>Free</h3>
-        <p class="price__amount"><b>€0</b><span>/ month</span></p>
-        <p class="price__sub">Put your first APK to the test.</p>
+        <p class="price__kicker mono">Self-host</p>
+        <h3>Community</h3>
+        <p class="price__amount"><b>€0</b><span>/ forever</span></p>
+        <p class="price__sub">Everything in the repository.</p>
         <ul>
-          <li>10 AI SAST scans a month</li>
-          <li>1 blackbox scan + device run (welcome credit)</li>
+          <li>AI SAST + AI DAST + chain builder</li>
+          <li>Unlimited scans on your hardware</li>
           <li>Bring your own model key</li>
-          <li>No card required</li>
+          <li>SARIF, JSON and HTML reports</li>
+          <li>Community support</li>
         </ul>
-        <a class="btn btn--outline btn--block" href="#start">Start free</a>
+        <a class="btn btn--outline btn--block" href="#open">Clone the repo</a>
       </article>
 
       <article class="price price--featured reveal">
-        <p class="price__kicker mono">Build securely</p>
-        <h3>AppSec</h3>
+        <p class="price__kicker mono">Managed</p>
+        <h3>Cloud</h3>
         <p class="price__amount">
-          <b data-month="€149" data-year="€119">€149</b><span>/ month</span>
+          <b data-month="€79" data-year="€63">€79</b><span>/ month</span>
         </p>
-        <p class="price__sub">Everyday Android security testing.</p>
+        <p class="price__sub">The same engine, without the ops.</p>
         <ul>
-          <li>10 app scans a month</li>
-          <li>Android AppSec + dynamic testing</li>
-          <li>Agentic chats over your findings</li>
-          <li>€100 AI budget a month</li>
-          <li>CI/CD gate + SARIF output</li>
+          <li>Managed device lab included</li>
+          <li>30 scans a month</li>
+          <li>Chain history and diffing</li>
+          <li>CI/CD gate + SARIF upload</li>
+          <li>Your data, your region</li>
         </ul>
         <a class="btn btn--solid btn--block" href="#start">Start free</a>
       </article>
 
       <article class="price reveal">
-        <p class="price__kicker mono">Go beyond</p>
-        <h3>Research</h3>
-        <p class="price__amount">
-          <b data-month="€249" data-year="€199">€249</b><span>/ month</span>
-        </p>
-        <p class="price__sub">Native code and real exploitation.</p>
+        <p class="price__kicker mono">Supported</p>
+        <h3>Enterprise</h3>
+        <p class="price__amount"><b>Talk</b><span>/ to us</span></p>
+        <p class="price__sub">On-premise, with a number to call.</p>
         <ul>
-          <li>All AppSec features</li>
-          <li>Native analysis &amp; coverage-guided fuzzing</li>
-          <li>Autonomous PoC building and testing</li>
-          <li>Bring your own device</li>
-          <li>€150 AI budget a month</li>
+          <li>Private cloud or air-gapped install</li>
+          <li>Custom analysers and sinks</li>
+          <li>Local model hosting</li>
+          <li>Incident support</li>
+          <li>Training for your team</li>
         </ul>
-        <a class="btn btn--outline btn--block" href="#start">Start free</a>
+        <a class="btn btn--outline btn--block" href="#start">Book a call</a>
       </article>
     </div>
 
-    <p class="prices__note mono">AI SAST requires BYOK; model usage is billed by your provider.
-      Device lab capacity depends on plan. Prices shown exclude VAT.</p>
+    <p class="prices__note mono" style="color:#6b6a63">The repository is Apache-2.0 and stays
+      that way. Paid tiers pay for hosting, devices and humans — never for a feature flag.</p>
   </div>
 </section>
 
@@ -655,31 +765,33 @@
     </header>
     <div class="faq__list">
       <details class="reveal" open>
-        <summary>Does it need an emulator to work?</summary>
-        <p>Static analysis does not. Dynamic testing needs a device: a managed virtual device, a
-          physical phone over adb, or your own lab. The platform talks to it; you keep it.</p>
+        <summary>Is it really open source, or open-core?</summary>
+        <p>Apache-2.0 for the whole engine: analysers, agents, chain builder, report writer
+          and API. There is no closed module that the open one needs.</p>
       </details>
       <details class="reveal">
-        <summary>What happens to my source code?</summary>
-        <p>It stays in the deployment you chose. On-premise and private-cloud installs never send
-          code to us; model calls go to the provider whose key you supplied, and you can run a
-          local model instead.</p>
+        <summary>Does SAST need a model key?</summary>
+        <p>The deterministic analysers — manifest, reachability, gates — do not. Agents use a
+          model for planning and hypotheses; you can point them at a hosted provider, a local
+          model, or disable them and drive the same pipeline by hand.</p>
       </details>
       <details class="reveal">
-        <summary>Is this a scanner that dumps a thousand alerts?</summary>
-        <p>No. A finding is only reported when the path is established and the gate is
-          satisfied; anything uncertain is labelled as undetermined rather than promoted to a
-          vulnerability.</p>
+        <summary>What does DAST actually run?</summary>
+        <p>Intent replay, deep-link fuzzing, UI driving and Frida hooks on an Android device
+          or emulator you control. Execution is opt-in per run and bound to a signed
+          authorisation for the target.</p>
       </details>
       <details class="reveal">
-        <summary>Can it open the fix as a pull request?</summary>
-        <p>Yes, from your pipeline. MOBIUS proposes the patch and retests the original path; the
-          review and the merge stay with your team.</p>
+        <summary>How is a “chain” different from a vuln list?</summary>
+        <p>A chain is a sequence where each hop is proven and the sequence itself is replayed
+          end to end. It answers “what can an attacker actually do”, not “what did the scanner
+          match”.</p>
       </details>
       <details class="reveal">
-        <summary>Android only?</summary>
-        <p>The platform is Android-first. The API and device-lab layers are platform-agnostic;
-          iOS support is on the roadmap, not in the box today.</p>
+        <summary>What if the agent is wrong?</summary>
+        <p>Its hypothesis is recorded as rejected, with the probe that killed it. Claims
+          without artefacts cannot be promoted to a finding, so a wrong guess costs a log line,
+          not a false positive in your queue.</p>
       </details>
     </div>
   </div>
@@ -689,14 +801,14 @@
 <section class="band band--cta" id="start">
   <div class="wrap cta">
     <p class="sect__no mono reveal">07 / GET STARTED</p>
-    <h2 class="reveal">Your next finding<br /><em>starts for free.</em></h2>
-    <p class="cta__lede reveal">Ten scans a month, no card, and a workspace that shows you
-      exactly what it knows.</p>
+    <h2 class="reveal">Clone it. Break something.<br /><em>Send a chain.</em></h2>
+    <p class="cta__lede reveal">One command, your own hardware, your own model. The first
+        chain you disagree with is the best issue you will ever file.</p>
     <div class="hero__cta reveal">
-      <a class="btn btn--solid btn--lg" href="#console">Create a free account <span aria-hidden="true">↗</span></a>
-      <a class="btn btn--outline btn--lg" href="#pricing">Talk to us</a>
+      <a class="btn btn--solid btn--lg" href="#open">Clone the repo <span aria-hidden="true">↗</span></a>
+      <a class="btn btn--outline btn--lg" href="#agents">Read how agents work</a>
     </div>
-    <p class="cta__fine mono reveal">✓ No credit card · ✓ BYOK · ✓ Deploy on your own terms</p>
+    <p class="cta__fine mono reveal">✓ Apache-2.0 · ✓ self-hosted · ✓ no telemetry · ✓ contributions welcome</p>
   </div>
 </section>
 
@@ -713,32 +825,34 @@
         </svg>
         <span class="brand__word">MOBIUS</span>
       </a>
-      <p>Android AI penetration testing. Find the path, prove it on the device, ship the fix.</p>
-      <p class="mono foot__status"><i class="dot"></i> all systems nominal · rev 26.11</p>
+      <p>Open-source AI SAST, AI DAST and bug chains for Android. Read the code, prove it on
+        a device, ship the fix.</p>
+      <p class="mono foot__status"><i class="dot"></i> apache-2.0 · rev 26.11</p>
     </div>
 
     <div class="foot__col">
       <p class="mono">Platform</p>
       <a href="#capabilities">AI SAST</a>
-      <a href="#capabilities">Dynamic testing</a>
-      <a href="#capabilities">Fuzzing</a>
-      <a href="#capabilities">API testing</a>
-      <a href="#devices">Device lab</a>
+      <a href="#capabilities">AI DAST</a>
+      <a href="#chains">Bug chains</a>
+      <a href="#agents">Agents</a>
+      <a href="#open">Device lab</a>
     </div>
 
     <div class="foot__col">
-      <p class="mono">Company</p>
+      <p class="mono">Open source</p>
+      <a href="#open">Repository</a>
+      <a href="#open">Install</a>
+      <a href="#open">Contributing</a>
+      <a href="#faq">Licence</a>
+    </div>
+
+    <div class="foot__col">
+      <p class="mono">Project</p>
       <a href="#faq">FAQ</a>
-      <a href="#pricing">Pricing</a>
-      <a href="#terms">Deployment</a>
+      <a href="#pricing">Support</a>
+      <a href="#start">Security policy</a>
       <a href="#start">Contact</a>
-    </div>
-
-    <div class="foot__col">
-      <p class="mono">Legal</p>
-      <a href="#faq">Privacy</a>
-      <a href="#faq">Terms</a>
-      <a href="#faq">Security</a>
     </div>
   </div>
 
