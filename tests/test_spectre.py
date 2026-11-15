@@ -45,8 +45,8 @@ MANIFEST = """<manifest xmlns:android="http://schemas.android.com/apk/res/androi
 """
 
 
-def _index(*, guarded: bool = False, truncated: bool = False, has_entry: bool = True,
-           has_sink: bool = True) -> CodeIndex:
+def _index(*, guarded: bool = False, truncated: bool = False, failed_dex: bool = False,
+           has_entry: bool = True, has_sink: bool = True) -> CodeIndex:
     """A code graph for one exported activity."""
     root = MethodRef(CLS, "onCreate")
     writer = MethodRef(CLS, "writeSecret")
@@ -63,7 +63,7 @@ def _index(*, guarded: bool = False, truncated: bool = False, has_entry: bool = 
         classes=(CLS,),
         methods=2,
         truncated=truncated,
-        dex_coverage=(DexCoverage("fixture.dex", "truncated" if truncated else "indexed", 1),),
+        dex_coverage=(DexCoverage("fixture.dex", "failed" if failed_dex else ("truncated" if truncated else "indexed"), 1),),
     )
 
 
@@ -159,6 +159,14 @@ def test_truncated_index_cannot_support_absence(session, store, surface_ready):
     assert entry["attributes"]["sink_reachable"] is None
     assert entry["status"] == FindingStatus.MANUAL_REVIEW_REQUIRED.value
     assert result["manual_review"] == 1
+
+
+def test_failed_dex_coverage_cannot_support_absence(session, store, surface_ready):
+    result = _spectre(session, store, _index(failed_dex=True, has_sink=False)).analyse(surface_ready)
+    entry = result["results"][0]
+    assert entry["reachability"] == "truncated"
+    assert entry["attributes"]["sink_reachable"] is None
+    assert entry["status"] == FindingStatus.MANUAL_REVIEW_REQUIRED.value
 
 
 def test_component_absent_from_the_graph_is_not_called_safe(session, store, surface_ready):
