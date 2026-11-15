@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import uuid
+import hashlib
 
 import pytest
 from sqlalchemy import text
@@ -50,7 +51,7 @@ def _seed(conn, *, max_intensity: int, expires: str, revoked: str | None = None)
     conn.execute(text(
         "INSERT INTO applications (id, sha256, file_size, artifact_key, uploaded_by, created_at) "
         "VALUES (:id, :sha, 1, 'k', :uid, now())"
-    ), {"id": app_id, "sha": "0" * 64, "uid": uid})
+    ), {"id": app_id, "sha": hashlib.sha256(uid.encode()).hexdigest(), "uid": uid})
     conn.execute(text(
         "INSERT INTO authorizations (id, granted_by, target_package, apk_sha256, scope_text, "
         "max_intensity, statement, expires_at, revoked_at, created_at) VALUES "
@@ -61,7 +62,9 @@ def _seed(conn, *, max_intensity: int, expires: str, revoked: str | None = None)
 
 
 def _insert_investigation(conn, *, app_id: str, auth_id: str | None, state: str, intensity: int = 0):
-    uid = "u"
+    uid = conn.execute(
+        text("SELECT uploaded_by FROM applications WHERE id = :app"), {"app": app_id}
+    ).scalar_one()
     conn.execute(text(
         "INSERT INTO investigations (id, application_id, authorization_id, created_by, objective, "
         "intensity, state, budget_json, used_json, llm_data_sharing, event_seq, created_at) VALUES "
