@@ -25,14 +25,14 @@ The War Room is not a decorative dashboard. Agent activity, code locations, tool
 The current backend is a tested foundation, not yet the complete autonomous system:
 - APK ZIP intake, SHA-256 identity and authorization binding.
 - Real Android binary manifest parsing through androguard.
-- Single-DEX indexing and bounded application-level call-graph reachability.
+- Multi-DEX ZIP enumeration/index aggregation and bounded application-level call-graph reachability (per-method DEX provenance and full data-flow are not yet implemented).
 - Deterministic evidence gates and finding/verdict persistence.
 - NEXUS deterministic frontier dispatcher (not yet model-driven adaptive planning).
 - Durable investigation events and SSE replay.
 - Markdown report generation from persisted records.
 - Basic API-backed War Room page.
 
-**No model is called in the current analysis path.** There is no complete multidex/decompilation/data-flow pipeline, safe PoC runner, persisted attack graph UI, PHANTOM runtime agent, VECTOR network agent, or independent model-backed VERITAS reviewer yet. The existing call-graph reachability must not be described as taint analysis or proof of exploitability.
+**No model is called in the current analysis path.** There is no complete decompilation/data-flow pipeline, safe PoC runner, persisted attack graph UI, PHANTOM runtime agent, VECTOR network agent, or independent model-backed VERITAS reviewer yet. The existing call-graph reachability must not be described as taint analysis or proof of exploitability.
 
 See [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md) for tested implementation details and limitations.
 
