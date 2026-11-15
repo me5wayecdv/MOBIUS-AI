@@ -65,4 +65,6 @@ def apply_scope_guard(engine: Engine) -> None:
     """Install the authorization trigger. Idempotent."""
     with engine.begin() as conn:
         for statement in _split_sql_statements(scope_guard_sql()):
-            conn.exec_driver_sql(statement)
+            # psycopg uses percent-style placeholders even when no parameters are supplied.
+            # Escape PL/pgSQL RAISE format markers so the driver sends literal percent signs.
+            conn.exec_driver_sql(statement.replace("%", "%%"))
