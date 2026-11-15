@@ -19,7 +19,7 @@ class DexIndexError(Exception):
 @dataclass(frozen=True, slots=True)
 class DexCoverage:
     entry: str
-    status: str
+    status: str  # indexed | failed | skipped | truncated
     size_bytes: int
     classes: int = 0
     methods: int = 0
@@ -51,6 +51,7 @@ class CodeIndex:
             "dex_indexed": sum(x.status == "indexed" for x in self.dex_coverage),
             "dex_failed": sum(x.status == "failed" for x in self.dex_coverage),
             "dex_skipped": sum(x.status == "skipped" for x in self.dex_coverage),
+            "dex_truncated": sum(x.status == "truncated" for x in self.dex_coverage),
         }
 
 def _dotted(descriptor: str) -> str:
@@ -144,7 +145,7 @@ def _index(sources: list[tuple[str, bytes]], max_methods: int) -> CodeIndex:
                 if budget_exhausted:
                     break
             coverage.append(DexCoverage(
-                entry, "skipped" if budget_exhausted else "indexed",
+                entry, "truncated" if budget_exhausted else "indexed",
                 len(raw), len(entry_classes), entry_methods,
                 "global method budget exhausted" if budget_exhausted else None))
         except Exception as exc:
