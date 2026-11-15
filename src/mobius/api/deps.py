@@ -36,10 +36,11 @@ class AppContext:
 
     def __init__(self, settings: Settings | None = None, *, create_schema: bool = True) -> None:
         self.settings = settings or Settings.from_env()
-        if self.settings.is_production:
+        if self.settings.env.lower() not in {"development", "dev", "test"}:
             raise RuntimeError(
-                "refusing to start: stub authentication is enabled and MOBIUS_ENV="
-                f"{self.settings.env!r}. Implement real auth (T-049) before deploying."
+                "refusing to start: MOBIUS currently supports stub identity only in "
+                "development/test environments; configure real authentication before "
+                f"using MOBIUS_ENV={self.settings.env!r}."
             )
         # Create the directories the process needs before opening the database. Without
         # this, a fresh checkout fails with `sqlite3.OperationalError: unable to open

@@ -1,15 +1,13 @@
 """Postgres-only DDL that SQLAlchemy models cannot express.
 
-Kept in its own module and its own ``.sql`` file rather than buried in a migration so that
-the trigger which enforces FR-AUTH-2 is reviewable as SQL, executable in a test, and
-applicable by an operator without Python.
+Kept separate so the authorization trigger is reviewable as SQL and executable in tests.
 """
 
 from __future__ import annotations
 
 from importlib import resources
 
-from sqlalchemy import Engine, text
+from sqlalchemy import Engine
 
 _SQL_DIR = "sql"
 
@@ -18,10 +16,55 @@ def scope_guard_sql() -> str:
     return resources.files(__package__).joinpath(_SQL_DIR, "scope_guard.sql").read_text(encoding="utf-8")
 
 
+def _split_sql_statements(sql: str) -> list[str]:
+    """Split SQL at top-level semicolons while preserving dollar-quoted function bodies."""
+    # The bundled DDL uses full-line SQL comments only.
+    sql = "\n".join(
+        line for line in sql.splitlines() if not line.lstrip().startswith("--")
+    )
+    statements: list[str] = []
+    current: list[str] = []
+    dollar_tag: str | None = None
+    i = 0
+
+    while i < len(sql):
+        if sql[i] == "$":
+            if dollar_tag is None:
+                end = sql.find("$", i + 1)
+                if end == -1:
+                    raise ValueError("invalid PostgreSQL dollar-quote delimiter")
+                dollar_tag = sql[i : end + 1]
+                current.append(dollar_tag)
+                i = end + 1
+                continue
+            if sql.startswith(dollar_tag, i):
+                current.append(dollar_tag)
+                i += len(dollar_tag)
+                dollar_tag = None
+                continue
+
+        char = sql[i]
+        if char == ";" and dollar_tag is None:
+            statement = "".join(current).strip()
+            if statement:
+                statements.append(statement)
+            current.clear()
+        else:
+            current.append(char)
+        i += 1
+
+    if dollar_tag is not None:
+        raise ValueError("unterminated PostgreSQL dollar-quoted body in scope guard SQL")
+    trailing = "".join(current).strip()
+    if trailing:
+        statements.append(trailing)
+    return statements
+
+
 def apply_scope_guard(engine: Engine) -> None:
-    """Install ``enforce_authorization_scope`` and its trigger. Idempotent."""
-    statements = [s.strip() for s in scope_guard_sql().split("\n\n")]
+    """Install the authorization trigger. Idempotent."""
     with engine.begin() as conn:
-        for statement in statements:
-            if statement and not all(line.startswith("--") or not line.strip() for line in statement.splitlines()):
-                conn.execute(text(statement))
+        for statement in _split_sql_statements(scope_guard_sql()):
+            # psycopg uses percent-style placeholders even when no parameters are supplied.
+            # Escape PL/pgSQL RAISE format markers so the driver sends literal percent signs.
+            conn.exec_driver_sql(statement.replace("%", "%%"))

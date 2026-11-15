@@ -80,8 +80,11 @@ def test_full_flow(client):
 
 
 def test_duplicate_upload_is_flagged(client):
-    first = _upload(client).json()
-    second = _upload(client).json()
+    # Reuse the exact same bytes: make_apk() writes current ZIP timestamps, so two
+    # independently generated fixtures are not byte-identical APK artefacts.
+    apk = make_apk()
+    first = _upload(client, data=apk).json()
+    second = _upload(client, data=apk).json()
     assert second["id"] == first["id"]
     assert second.get("duplicate") is True
 
@@ -442,3 +445,46 @@ def test_the_war_room_is_served_and_reads_only_real_endpoints(client):
     # And it must say where its numbers come from.
     assert "Every value on this page is read from the API" in html
     assert client.get("/", follow_redirects=False).status_code in (302, 307)
+
+
+
+def test_stub_identity_refuses_staging_and_production(tmp_path):
+    import pytest
+    from mobius.api.config import Settings
+    from mobius.api.deps import AppContext
+
+    for environment in ("staging", "production", "prod"):
+        settings = Settings(
+            db_url="sqlite+pysqlite:///:memory:",
+            artifact_root=tmp_path / environment,
+            env=environment,
+        )
+        with pytest.raises(RuntimeError, match="stub identity only"):
+            AppContext(settings, create_schema=False)
+
+
+def test_stub_identity_remains_available_in_development_and_test(tmp_path):
+    from mobius.api.config import Settings
+    from mobius.api.deps import AppContext
+
+    for environment in ("development", "dev", "test"):
+        settings = Settings(
+            db_url="sqlite+pysqlite:///:memory:",
+            artifact_root=tmp_path / environment,
+            env=environment,
+        )
+        context = AppContext(settings, create_schema=False)
+        context.engine.dispose()
+
+
+
+def test_upload_read_is_bounded_before_service_validation(client, monkeypatch):
+    import mobius.api.routes as routes
+
+    monkeypatch.setattr(routes, "MAX_APK_BYTES", 4)
+    # The route read limit and service validation limit must agree in this test.
+    import mobius.services.intake as intake
+    monkeypatch.setattr(intake, "MAX_APK_BYTES", 4)
+    response = _upload(client)
+    assert response.status_code == 413
+    assert response.json()["code"] == "APK_TOO_LARGE"

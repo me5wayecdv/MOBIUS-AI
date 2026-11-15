@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import uuid
+import hashlib
 
 import pytest
 from sqlalchemy import text
@@ -43,6 +44,7 @@ def engine():
 def _seed(conn, *, max_intensity: int, expires: str, revoked: str | None = None) -> tuple[str, str]:
     """Insert a user, application and authorisation; return (app_id, auth_id)."""
     uid, app_id, auth_id = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    apk_sha256 = hashlib.sha256(uid.encode()).hexdigest()
     conn.execute(text(
         "INSERT INTO users (id, email, display_name, role, password_hash, created_at) "
         "VALUES (:id, :email, 'u', 'analyst', 'x', now())"
@@ -50,18 +52,20 @@ def _seed(conn, *, max_intensity: int, expires: str, revoked: str | None = None)
     conn.execute(text(
         "INSERT INTO applications (id, sha256, file_size, artifact_key, uploaded_by, created_at) "
         "VALUES (:id, :sha, 1, 'k', :uid, now())"
-    ), {"id": app_id, "sha": "0" * 64, "uid": uid})
+    ), {"id": app_id, "sha": apk_sha256, "uid": uid})
     conn.execute(text(
         "INSERT INTO authorizations (id, granted_by, target_package, apk_sha256, scope_text, "
         "max_intensity, statement, expires_at, revoked_at, created_at) VALUES "
         "(:id, :uid, 'com.example', :sha, :scope, :maxi, 's', :exp, :rev, now())"
-    ), {"id": auth_id, "uid": uid, "sha": "0" * 64, "scope": "x" * 40,
+    ), {"id": auth_id, "uid": uid, "sha": apk_sha256, "scope": "x" * 40,
         "maxi": max_intensity, "exp": expires, "rev": revoked})
     return app_id, auth_id
 
 
 def _insert_investigation(conn, *, app_id: str, auth_id: str | None, state: str, intensity: int = 0):
-    uid = "u"
+    uid = conn.execute(
+        text("SELECT uploaded_by FROM applications WHERE id = :app"), {"app": app_id}
+    ).scalar_one()
     conn.execute(text(
         "INSERT INTO investigations (id, application_id, authorization_id, created_by, objective, "
         "intensity, state, budget_json, used_json, llm_data_sharing, event_seq, created_at) VALUES "

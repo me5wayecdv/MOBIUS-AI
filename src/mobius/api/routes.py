@@ -13,7 +13,7 @@ from ..adapters.models import EvidenceRow, FindingRow, InvestigationRow
 from ..core import fsm, gates
 from ..core.enums import EvidenceKind, InvestigationState, RejectionReason
 from ..services.evidence import EvidenceService
-from ..services.intake import IntakeService
+from ..services.intake import IntakeService, MAX_APK_BYTES
 from ..services.archivist import ArchivistService
 from ..services.nexus import NexusService
 from ..services.recon import ReconService
@@ -113,7 +113,10 @@ async def upload_application(
     who: str = Depends(analyst_id),
 ):
     ctx = get_context()
-    data = await file.read()
+    # Bound memory use before the service validates the archive. Reading without a limit
+    # lets a client force an arbitrarily large allocation before MAX_APK_BYTES is checked.
+    data = await file.read(MAX_APK_BYTES + 1)
+    await file.close()
     service = IntakeService(session, ctx.store)
     app, created = service.create_application(data, file.filename or "", uploaded_by=who)
     body = _app_body(app)
