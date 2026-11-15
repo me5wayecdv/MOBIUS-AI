@@ -9,7 +9,7 @@
 > exactly the failure mode the project forbids: describing a proposal as if it were a working system
 > (master prompt §23). Every row states its evidence; a row without a test is not `DONE`.
 
-**Last updated:** 2026-11-16 · **Status baseline:** branch `feat/demo-first-autonomous-investigation` based on main `669ecd5`; verify the current commit before relying on this snapshot.
+**Last updated:** 2026-11-16 · **Status baseline:** main includes PR #13 (demo-first roadmap and DEX coverage/provenance); the isolated tool-runner contract is under review on `feat/isolated-tool-runner-contract`.
 
 ---
 
@@ -34,7 +34,7 @@
 | Event store + SSE polling | `PARTIAL` | `EVENT_ARCHITECTURE.md`, ADR-021 | `test_events.py`: per-investigation `seq`, row-locked allocation, unique constraint. SSE polls the durable event table and supports replay; no LISTEN/NOTIFY bridge. |
 | API (applications/authorisations/scans) | `PARTIAL` | `API_SPECIFICATION.md` | 19 paths / 22 operations, driven end to end by `test_api.py`. **Auth is a stub** |
 | WebSocket/SSE stream + replay | `DONE` | `API_SPECIFICATION.md §4` | `GET /scans/{id}/stream`: SSE with `Last-Event-ID` resume and a definite `stream_end`. `test_stream.py`. Polls the event table, not LISTEN/NOTIFY (ADR-021) |
-| Tool runner sandbox | `NOT STARTED` | `AGENT_DESIGN.md §7` | |
+| Tool runner sandbox | `PARTIAL` | `AGENT_DESIGN.md §7`, `ISOLATED_TOOL_RUNNER.md` | Fail-closed registry/dispatcher, strict argument schemas, server-owned absolute binary paths, fixed argv builders, per-investigation private workspaces, bounded output and resource policy contract. Refuses execution without an injected backend declaring isolation ready. **No concrete container/VM backend, API/NEXUS wiring, subprocess execution, persistence or tool registration yet**; not a sandbox and not production-ready. `tests/test_tool_runner.py` |
 | RECON adapter (androguard) | `PARTIAL` | `ANDROID_SECURITY_METHODOLOGY.md §2` | Manifest analysis is **real**: binary AXML decoded via androguard 4.1.4, 5 component kinds, permissions, export inference, evidence + observations + frontier. `test_android_manifest.py`, `test_recon.py`. **Manifest only** — no dex, strings, certs or native libs |
 | Dex index (androguard) | `PARTIAL` | §5 | `index_apk` enumerates sorted `classes*.dex`; `index_dex` merges multiple DEX blobs. Current PR adds per-entry coverage (`indexed`/`failed`/`skipped`/`truncated`), class/method source provenance, duplicate-entry rejection, and bounded total DEX expansion. SPECTRE now treats incomplete DEX coverage as inconclusive for absence claims. New tests cover provenance, APK multi-entry coverage, partial failure, budget truncation, and method-reference parsing. GitHub Actions passed on Python 3.11 and 3.12 for commit `4501d3f`; the additional parser regression test is being verified in the current CI run. Reflection, CFG and data flow remain unimplemented. |
 | Call graph + reachability | `PARTIAL` | §5 | Bounded deterministic BFS, application classes only, node budget with `truncated`. `test_reachability.py` (24 tests): truncation is never absence, a guard off the path is not counted, same-method guard is conservative regardless of order (R-21). **No data flow, no CFG** |
