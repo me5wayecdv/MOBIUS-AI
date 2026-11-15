@@ -9,7 +9,7 @@
 > exactly the failure mode the project forbids: describing a proposal as if it were a working system
 > (master prompt §23). Every row states its evidence; a row without a test is not `DONE`.
 
-**Last updated:** 2026-11-15 · **Status baseline:** main after PR #11 (`c8e612a`); verify the current commit before relying on this snapshot.
+**Last updated:** 2026-11-16 · **Status baseline:** branch `feat/demo-first-autonomous-investigation` based on main `669ecd5`; verify the current commit before relying on this snapshot.
 
 ---
 
@@ -36,7 +36,7 @@
 | WebSocket/SSE stream + replay | `DONE` | `API_SPECIFICATION.md §4` | `GET /scans/{id}/stream`: SSE with `Last-Event-ID` resume and a definite `stream_end`. `test_stream.py`. Polls the event table, not LISTEN/NOTIFY (ADR-021) |
 | Tool runner sandbox | `NOT STARTED` | `AGENT_DESIGN.md §7` | |
 | RECON adapter (androguard) | `PARTIAL` | `ANDROID_SECURITY_METHODOLOGY.md §2` | Manifest analysis is **real**: binary AXML decoded via androguard 4.1.4, 5 component kinds, permissions, export inference, evidence + observations + frontier. `test_android_manifest.py`, `test_recon.py`. **Manifest only** — no dex, strings, certs or native libs |
-| Dex index (androguard) | `PARTIAL` | §5 | `index_apk`/`index_dex`: real classes, methods, call edges, string literals, boundary calls. `test_dex.py` + a committed real dex fixture. **Single dex only** — no multi-dex, no reflection, no framework entry |
+| Dex index (androguard) | `PARTIAL` | §5 | `index_apk` enumerates sorted `classes*.dex` ZIP entries; `index_dex` accepts multiple DEX blobs and merges classes, methods, call edges, strings and boundary calls. `test_dex.py` covers multiple blobs, but duplicates the same fixture rather than testing a real APK with distinct DEX files. **DEX provenance is not retained per class/method; reflection, CFG and data flow are not implemented** |
 | Call graph + reachability | `PARTIAL` | §5 | Bounded deterministic BFS, application classes only, node budget with `truncated`. `test_reachability.py` (24 tests): truncation is never absence, a guard off the path is not counted, same-method guard is conservative regardless of order (R-21). **No data flow, no CFG** |
 | SPECTRE | `PARTIAL` | §5 | Turns RECON candidates into gate evidence and emits `code_analysis_complete`; `test_spectre.py` + 2 HTTP tests. **Validated on one real APK** (`com.politedroid_4.apk`): 10 classes / 34 methods / 41 calls → `not-reached` over a complete traversal → `REJECTED`. No true positive on real code yet |
 | JADX / smali decompilation | `NOT STARTED` | §5 | Blocked on JDK host (R-01). SPECTRE does not need it for reachability, only for the model-backed pass |
