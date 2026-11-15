@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mobius"
+version = "0.1.0"
+description = "MOBIUS - evidence-driven Android security investigation platform"
+requires-python = ">=3.11"
+dependencies = [
+    "pydantic>=2.7",
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "sqlalchemy>=2.0",
+    "python-multipart>=0.0.9",
+    # RECON decodes binary AndroidManifest.xml with androguard. It is pure Python and needs
+    # no JDK, unlike JADX/Apktool - which is why RECON is the one adapter that runs here.
+    "androguard>=4.1",
+    # Schema migrations. create_all() is a dev convenience; a deployed database needs an
+    # ordered, replayable history, and `alembic check` is what proves the models and the
+    # migrations still agree.
+    "alembic>=1.13",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "httpx>=0.27"]
+
+[tool.setuptools.package-data]
+mobius = ["adapters/sql/*.sql", "api/static/*.html"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "postgres: requires a live PostgreSQL instance (set MOBIUS_TEST_PG_URL)",
+]
+addopts = "-q --strict-markers"
+filterwarnings = ["error::DeprecationWarning"]
