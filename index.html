@@ -1,0 +1,754 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>MOBIUS — Android AI penetration testing</title>
+<meta name="description" content="One AI platform for Android security: source-to-sink static analysis, on-device exploit validation, coverage-guided native fuzzing and API testing — wired into CI/CD." />
+<meta name="theme-color" content="#07080a" />
+<link rel="icon" href="assets/mark.svg" type="image/svg+xml" />
+<link rel="stylesheet" href="assets/styles.css" />
+</head>
+<body>
+
+<!-- ─────────────────────────────── blueprint strip ─────────────────────────────── -->
+<div class="sheet" aria-hidden="true">
+  <div class="sheet__row">
+    <span class="sheet__cell">MOBIUS.AI</span>
+    <span class="sheet__cell">SHEET 01</span>
+    <span class="sheet__cell">SCALE 1:1</span>
+    <span class="sheet__cell">REV. 26.11</span>
+    <span class="sheet__cell sheet__cell--grow">
+      <span class="binary" data-binary data-length="120">011011010110111101100010011010010111010101110011</span>
+    </span>
+    <span class="sheet__cell sheet__cell--status"><i class="dot"></i> AWAKE</span>
+  </div>
+</div>
+
+<!-- ─────────────────────────────── header ─────────────────────────────── -->
+<header class="nav" id="nav">
+  <a class="brand" href="#top" aria-label="MOBIUS home">
+    <svg class="brand__mark" viewBox="0 0 32 32" aria-hidden="true">
+      <path d="M16 1.5 30.5 16 16 30.5 1.5 16Z" fill="none" stroke="currentColor" stroke-width="1.2"/>
+      <path d="M16 7.5 24.5 16 16 24.5 7.5 16Z" fill="currentColor" opacity=".9"/>
+    </svg>
+    <span class="brand__word">MOBIUS</span>
+    <span class="brand__tag">android / ai</span>
+  </a>
+
+  <nav class="nav__links" id="navLinks" aria-label="Primary">
+    <a href="#capabilities">Platform</a>
+    <a href="#inside">Inside</a>
+    <a href="#devices">Device lab</a>
+    <a href="#pricing">Pricing</a>
+    <a href="#faq">FAQ</a>
+  </nav>
+
+  <div class="nav__actions">
+    <a class="btn btn--ghost btn--sm" href="#console">Live demo</a>
+    <a class="btn btn--solid btn--sm" href="#start">Start free <span aria-hidden="true">↗</span></a>
+    <button class="nav__burger" id="burger" aria-label="Menu" aria-expanded="false" aria-controls="navLinks">
+      <span></span><span></span>
+    </button>
+  </div>
+</header>
+
+<main id="top">
+
+<!-- ─────────────────────────────── hero ─────────────────────────────── -->
+<section class="hero">
+  <div class="hero__grid" aria-hidden="true"></div>
+
+  <div class="wrap hero__inner">
+    <p class="eyebrow reveal">
+      <span class="chip">ANDROID AI PENETRATION TESTING</span>
+      <span class="eyebrow__note">Find · Prove · Fix</span>
+    </p>
+
+    <h1 class="hero__title reveal">
+      <span class="hero__line">Find the path.</span>
+      <span class="hero__line hero__line--code" aria-hidden="true">
+        <span class="binary binary--lg" data-binary data-length="26">101101001011010110010110</span>
+      </span>
+      <span class="hero__line">Prove it on the device.</span>
+      <span class="hero__line hero__line--dim">Ship the fix.</span>
+    </h1>
+
+    <p class="hero__sub reveal">
+      One AI platform for Android. Source-to-sink static analysis, on-device exploit
+      validation, coverage-guided native fuzzing and API testing — with the fix
+      arriving as a pull request your team can review.
+    </p>
+
+    <div class="hero__cta reveal">
+      <a class="btn btn--solid btn--lg" href="#start">Book an enterprise demo <span aria-hidden="true">↗</span></a>
+      <a class="btn btn--outline btn--lg" href="#console">Start free</a>
+    </div>
+
+    <ul class="hero__facts reveal">
+      <li>Private cloud or on-premise</li>
+      <li>Your models · your devices</li>
+      <li><b>10</b> free AI SAST scans a month</li>
+    </ul>
+  </div>
+
+  <!-- console -->
+  <div class="wrap">
+    <div class="console reveal" id="console" data-tabs>
+      <div class="console__bar">
+        <div class="console__title">
+          <span class="console__lights" aria-hidden="true"><i></i><i></i><i></i></span>
+          <span class="mono">mobius · scan <b class="js-scan-id">#4821</b> · com.insecureshop</span>
+        </div>
+        <div class="console__tabs" role="tablist" aria-label="Console views">
+          <button class="tab is-active" role="tab" aria-selected="true" data-tab="findings">Findings</button>
+          <button class="tab" role="tab" aria-selected="false" data-tab="device">Device</button>
+          <button class="tab" role="tab" aria-selected="false" data-tab="api">API</button>
+          <button class="tab" role="tab" aria-selected="false" data-tab="ci">CI/CD</button>
+        </div>
+        <div class="console__meta mono">
+          <span class="pulse"></span> <span class="js-status">analysing</span>
+          <span class="console__pct js-pct">68%</span>
+        </div>
+      </div>
+
+      <!-- findings -->
+      <div class="console__panel is-active" data-panel="findings">
+        <div class="pane pane--files">
+          <p class="pane__label mono">surface · 142 files</p>
+          <ul class="filelist mono">
+            <li class="is-open">app/src/main/java/com/insecureshop/DeepLinkRouter.java <em>142</em></li>
+            <li>WebViewActivity.kt <em>88</em></li>
+            <li>SessionStore.kt <em>41</em></li>
+            <li>network/ApiClient.kt <em>203</em></li>
+            <li>AndroidManifest.xml <em>27</em></li>
+          </ul>
+          <p class="pane__label mono">gate</p>
+          <ul class="gates mono">
+            <li><span class="tick">✓</span> exported</li>
+            <li><span class="tick">✓</span> no permission</li>
+            <li><span class="tick">✓</span> caller check absent</li>
+            <li><span class="tick">✓</span> sink reachable</li>
+          </ul>
+        </div>
+
+        <div class="pane pane--code">
+          <p class="pane__label mono">DeepLinkRouter.java · 139–147</p>
+          <pre class="code"><code><span class="ln">139</span><span class="kw">void</span> <span class="fn">handleDeepLink</span>(Uri u) {
+<span class="ln">140</span>  String t = u.<span class="fn">getQueryParameter</span>(<span class="str">"next"</span>);
+<span class="ln">141</span>  <span class="cm">// no allow-list, no caller check</span>
+<span class="ln">142</span>  <span class="hl"><span class="fn">startActivity</span>(<span class="kw">new</span> <span class="fn">Intent</span>(t));</span>
+<span class="ln">143</span>  prefs.<span class="fn">edit</span>().<span class="fn">putString</span>(<span class="str">"r"</span>, t);
+<span class="ln">144</span>  WebView w = <span class="fn">findView</span>(R.id.web);
+<span class="ln">145</span>  w.<span class="fn">loadUrl</span>(u.<span class="fn">toString</span>());
+<span class="ln">146</span>}</code></pre>
+
+          <div class="findings">
+            <article class="finding">
+              <span class="sev sev--crit">CRITICAL</span>
+              <div>
+                <h4>Untrusted deep link → Intent</h4>
+                <p class="mono">CWE-926 · MASVS-PLATFORM-1 · reachable from exported activity</p>
+              </div>
+              <span class="finding__go" aria-hidden="true">↗</span>
+            </article>
+            <article class="finding">
+              <span class="sev sev--high">HIGH</span>
+              <div>
+                <h4>Unvalidated WebView URL</h4>
+                <p class="mono">CWE-939 · 0 hops · no data-flow guard</p>
+              </div>
+              <span class="finding__go" aria-hidden="true">↗</span>
+            </article>
+            <article class="finding">
+              <span class="sev sev--med">MEDIUM</span>
+              <div>
+                <h4>Sensitive data in SharedPreferences</h4>
+                <p class="mono">CWE-312 · written on the same path</p>
+              </div>
+              <span class="finding__go" aria-hidden="true">↗</span>
+            </article>
+          </div>
+        </div>
+
+        <aside class="pane pane--trace">
+          <p class="pane__label mono">attack path</p>
+          <ol class="trace mono">
+            <li><span>1</span> exported activity</li>
+            <li><span>2</span> getQueryParameter</li>
+            <li><span>3</span> Intent(target)</li>
+            <li><span>4</span> startActivity</li>
+          </ol>
+          <p class="pane__label mono">reproduce</p>
+          <pre class="cmd mono">adb shell am start \
+  -n com.insecureshop/.DeepLinkRouter \
+  -d "mobius://open?next=https://evil"</pre>
+          <p class="pane__hint">Cross-file chain · 2 files · 0 false positives in this path</p>
+        </aside>
+      </div>
+
+      <!-- device -->
+      <div class="console__panel" data-panel="device">
+        <div class="pane pane--device">
+          <div class="phone">
+            <div class="phone__notch"></div>
+            <div class="phone__screen">
+              <div class="phone__appbar mono">InsecureShop</div>
+              <div class="phone__body">
+                <div class="phone__field">email</div>
+                <div class="phone__field">••••••••</div>
+                <div class="phone__btn">Sign in</div>
+                <div class="phone__warn">✓ session captured</div>
+              </div>
+            </div>
+          </div>
+          <div class="device__meta">
+            <p class="pane__label mono">pixel 8 · android 15 · usb</p>
+            <p class="device__status mono"><span class="pulse"></span> exploit confirmed</p>
+            <p class="pane__hint">Intent resolved on device. Evidence, logcat slice and the
+              triggering command are stored with the finding.</p>
+          </div>
+        </div>
+        <div class="pane pane--steps">
+          <p class="pane__label mono">agent log</p>
+          <ol class="steps mono">
+            <li class="is-done"><span>tap</span> Open #login</li>
+            <li class="is-done"><span>type</span> credentials</li>
+            <li class="is-done"><span>hook</span> Frida · SessionManager</li>
+            <li class="is-done"><span>run</span> am start -d mobius://…</li>
+            <li class="is-done"><span>cap</span> screenshot + logcat</li>
+          </ol>
+        </div>
+      </div>
+
+      <!-- api -->
+      <div class="console__panel" data-panel="api">
+        <div class="pane pane--api">
+          <p class="pane__label mono">api.insecureshop · backend</p>
+<pre class="http mono"><span class="verb get">GET</span> /api/orders/8842
+<span class="hdr">Authorization:</span> Bearer <span class="tok">victim-token</span>
+
+<span class="ok">200</span> {"id":8842,"owner":"victim","total":"€41.00"}
+
+<span class="verb post">POST</span> /api/orders
+<span class="hdr">Content-Type:</span> application/json
+{"item":"sku-91","qty":1}
+
+<span class="ok">201</span> {"id":8843,"status":"placed"}</pre>
+          <div class="finding finding--inline">
+            <span class="sev sev--crit">IDOR</span>
+            <div>
+              <h4>Object ownership never checked</h4>
+              <p class="mono">CWE-639 · cross-tenant read · reproduced with a second account</p>
+            </div>
+          </div>
+        </div>
+        <div class="pane pane--steps">
+          <p class="pane__label mono">checks</p>
+          <ul class="gates mono">
+            <li><span class="tick">✓</span> auth boundary replay</li>
+            <li><span class="tick">✓</span> object ownership</li>
+            <li><span class="tick">✓</span> business-logic abuse</li>
+            <li><span class="tick">✓</span> rate-limit behaviour</li>
+          </ul>
+          <p class="pane__hint">Same session token, second identity, no guessing: the request
+            that should have returned 403 returned somebody else's order.</p>
+        </div>
+      </div>
+
+      <!-- ci -->
+      <div class="console__panel" data-panel="ci">
+        <div class="pane pane--ci">
+          <p class="pane__label mono">pipeline · build #318</p>
+          <ol class="pipeline mono">
+            <li class="is-done">Build</li>
+            <li class="is-done">Unit tests</li>
+            <li class="is-done">AI SAST</li>
+            <li class="is-live">Auto-fix</li>
+            <li>Open PR</li>
+          </ol>
+          <p class="pane__label mono">proposed change · PR #482</p>
+          <pre class="code code--diff"><code><span class="cm">fix: sanitize deep link target</span>
+<span class="del">- startActivity(new Intent(t));</span>
+<span class="add">+ if (isAllowed(t)) startActivity(safe(t));</span>
+<span class="add">+ if (isAllowed(u)) w.loadUrl(u.toString());</span></pre>
+          <p class="pane__hint">Checks pass. The merge stays a human decision.</p>
+        </div>
+        <div class="pane pane--steps">
+          <p class="pane__label mono">gate policy</p>
+          <ul class="gates mono">
+            <li><span class="tick">✓</span> fail on critical</li>
+            <li><span class="tick">✓</span> block on new path</li>
+            <li><span class="tick">✓</span> SARIF + JSON</li>
+          </ul>
+        </div>
+      </div>
+
+      <div class="console__foot mono">
+        <span>demo data · no application was scanned</span>
+        <span class="console__scrub"><i style="width:68%"></i></span>
+        <span>142 files · 1,204 paths</span>
+      </div>
+    </div>
+
+    <div class="statstrip reveal">
+      <div><b>6</b><span>MASVS categories enumerated</span></div>
+      <div><b>SARIF</b><span>and JSON, for the pipeline</span></div>
+      <div><b>0</b><span>agents with write access to your source</span></div>
+      <div><b>1</b><span>investigation, not a dashboard of guesses</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ─────────────────────────────── capabilities ─────────────────────────────── -->
+<section class="band band--paper" id="capabilities">
+  <div class="wrap">
+    <header class="sect reveal">
+      <p class="sect__no mono">01 / CAPABILITIES</p>
+      <h2>Six instruments.<br /><em>One investigation.</em></h2>
+      <p class="sect__lede">Static analysis that reaches the truth of a path, runtime that
+        proves it, and delivery that closes it — in the same workspace, against the same
+        evidence.</p>
+    </header>
+
+    <div class="cards">
+      <article class="card reveal">
+        <p class="card__kicker mono">Source</p>
+        <h3>AI SAST</h3>
+        <p>Follow untrusted input across files, frameworks and trust boundaries. Dex, smali,
+          Kotlin and Java — with the manifest as the map.</p>
+        <a class="card__link" href="#inside">Explore AI SAST <span aria-hidden="true">→</span></a>
+        <span class="card__idx mono">01</span>
+      </article>
+
+      <article class="card reveal">
+        <p class="card__kicker mono">Runtime</p>
+        <h3>Dynamic testing</h3>
+        <p>Drive the app on a real device or emulator: Frida hooks, intent fuzzing, deep-link
+          replay and the screenshot that proves it happened.</p>
+        <a class="card__link" href="#devices">Explore dynamic testing <span aria-hidden="true">→</span></a>
+        <span class="card__idx mono">02</span>
+      </article>
+
+      <article class="card reveal">
+        <p class="card__kicker mono">Native</p>
+        <h3>Coverage-guided fuzzing</h3>
+        <p>Push into JNI and vendor blobs where the Java layer stops. Paths, exec/s and
+          crashes — with the crashing input kept.</p>
+        <a class="card__link" href="#inside">Explore fuzzing <span aria-hidden="true">→</span></a>
+        <span class="card__idx mono">03</span>
+      </article>
+
+      <article class="card reveal">
+        <p class="card__kicker mono">Backend</p>
+        <h3>API testing</h3>
+        <p>Authentication, object ownership, business logic and rate limits — the services
+          behind the app, tested with the app's own tokens.</p>
+        <a class="card__link" href="#inside">Explore API testing <span aria-hidden="true">→</span></a>
+        <span class="card__idx mono">04</span>
+      </article>
+
+      <article class="card reveal">
+        <p class="card__kicker mono">Delivery</p>
+        <h3>CI/CD &amp; fix PRs</h3>
+        <p>Scan on every build, fail on real paths, and open a reviewable patch. The merge
+          stays yours; the diff is small enough to read.</p>
+        <a class="card__link" href="#inside">Explore CI/CD <span aria-hidden="true">→</span></a>
+        <span class="card__idx mono">05</span>
+      </article>
+
+      <article class="card reveal">
+        <p class="card__kicker mono">Automation</p>
+        <h3>Device lab</h3>
+        <p>A fleet of Android devices with shell, screen and API access — for your tests,
+          your agents and the products you build.</p>
+        <a class="card__link" href="#devices">Explore device lab <span aria-hidden="true">→</span></a>
+        <span class="card__idx mono">06</span>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ─────────────────────────────── inside ─────────────────────────────── -->
+<section class="band band--ink" id="inside">
+  <div class="wrap">
+    <header class="sect reveal">
+      <p class="sect__no mono">02 / INSIDE THE PRODUCT</p>
+      <h2>The finding. The code.<br /><em>The device. One place.</em></h2>
+      <p class="sect__lede">From a compiled APK or a repository to an actionable workspace:
+        the exact line, its context, the path that connects them, and the console that
+        repeats it.</p>
+    </header>
+
+    <div class="split">
+      <figure class="panel panel--findings reveal">
+        <div class="panel__head mono">
+          <span>findings · ranked</span><span class="panel__dots" aria-hidden="true">•••</span>
+        </div>
+        <div class="panel__body">
+          <div class="rank">
+            <span class="rank__sev sev--crit">CRITICAL</span>
+            <p>Exported deep link reaches <code>startActivity</code></p>
+            <span class="rank__cwe mono">CWE-926</span>
+          </div>
+          <div class="rank">
+            <span class="rank__sev sev--high">HIGH</span>
+            <p>WebView loads an unvalidated URL</p>
+            <span class="rank__cwe mono">CWE-939</span>
+          </div>
+          <div class="rank">
+            <span class="rank__sev sev--med">MEDIUM</span>
+            <p>Session token written to unencrypted prefs</p>
+            <span class="rank__cwe mono">CWE-312</span>
+          </div>
+          <div class="rank">
+            <span class="rank__sev sev--low">LOW</span>
+            <p>Debug flag left enabled in release manifest</p>
+            <span class="rank__cwe mono">CWE-489</span>
+          </div>
+        </div>
+        <figcaption class="panel__cap mono">InsecureShop · 8 MASVS categories · SARIF ready</figcaption>
+      </figure>
+
+      <figure class="panel panel--device reveal">
+        <div class="panel__head mono"><span>device console</span><span>android 15</span></div>
+        <div class="panel__body panel__body--split">
+          <pre class="shell mono"><code><span class="prompt">$</span> mobius device attach pixel8
+<span class="ok">✓</span> adb 35.0.2 · root: no
+<span class="prompt">$</span> mobius run --path deeplink
+<span class="ok">✓</span> intent resolved
+<span class="ok">✓</span> target activity launched
+<span class="warn">!</span> exported, no permission
+<span class="prompt">$</span> mobius evidence --save
+<span class="ok">✓</span> screenshot.png
+<span class="ok">✓</span> logcat.slice
+<span class="ok">✓</span> reproduce.sh</code></pre>
+          <div class="mini-phone" aria-hidden="true">
+            <div class="mini-phone__bar"></div>
+            <div class="mini-phone__box"></div>
+            <div class="mini-phone__box mini-phone__box--short"></div>
+            <div class="mini-phone__box mini-phone__box--accent"></div>
+          </div>
+        </div>
+        <figcaption class="panel__cap mono">the evidence your developer can act on</figcaption>
+      </figure>
+    </div>
+
+    <div class="rows">
+      <article class="row reveal">
+        <div class="row__copy">
+          <p class="sect__no mono">FIND / CONTEXTUAL ANALYSIS</p>
+          <h3>A change lands. MOBIUS goes deep.</h3>
+          <p>Reason across files and functions, connect application logic to the sink that
+            matters, and surface the weakness that only exists because two innocent lines
+            met.</p>
+          <ul class="ticks">
+            <li>Cross-file attack chains</li>
+            <li>Manifest-aware entry points</li>
+            <li>CWE, OWASP and MASVS mapping</li>
+          </ul>
+        </div>
+        <div class="row__art row__art--trace">
+          <div class="tracecard">
+            <p class="mono">DeepLinkRouter.java</p>
+            <p class="mono mono--dim">handleDeepLink(Uri)</p>
+            <div class="tracecard__line"><i></i> getQueryParameter("next")</div>
+            <div class="tracecard__gap mono">2 files · 1 hop</div>
+            <div class="tracecard__line tracecard__line--end"><i></i> startActivity(Intent)</div>
+            <span class="tracecard__tag mono">reachable · unguarded</span>
+          </div>
+        </div>
+      </article>
+
+      <article class="row row--flip reveal">
+        <div class="row__copy">
+          <p class="sect__no mono">PROVE / EXPLOIT VALIDATION</p>
+          <h3>From "possible" to "here's how".</h3>
+          <p>Chain the path, run it on a device, and keep what it left behind: the exact
+            command, the screen, the log line. A finding you can replay is a finding nobody
+            argues with.</p>
+          <ul class="ticks">
+            <li>Android runtime testing</li>
+            <li>Reproducible proof of exploitation</li>
+            <li>Evidence stored with the row, not in a screenshot folder</li>
+          </ul>
+        </div>
+        <div class="row__art row__art--proof">
+          <div class="proofcard mono">
+            <p class="proofcard__title">reproduce.sh</p>
+            <pre><code>adb shell am start \
+  -d "mobius://open?next=https://evil" \
+  -n com.insecureshop/.DeepLinkRouter</code></pre>
+            <p class="ok">✓ activity launched</p>
+            <p class="ok">✓ evidence attached</p>
+          </div>
+        </div>
+      </article>
+
+      <article class="row reveal">
+        <div class="row__copy">
+          <p class="sect__no mono">FIX / CONTINUOUS SECURITY</p>
+          <h3>Close the loop. Ship the fix.</h3>
+          <p>Turn a finding into a patch, open the pull request, and retest the original
+            path before merge. Review stays in your hands, which is where it belongs.</p>
+          <ul class="ticks">
+            <li>Start from your pipeline</li>
+            <li>Contextual, minimal diffs</li>
+            <li>Retest the attack path, not the unit test</li>
+          </ul>
+        </div>
+        <div class="row__art row__art--diff">
+          <div class="diffcard mono">
+            <p class="diffcard__head">PR #482 · fix: sanitize deep link target</p>
+            <pre><code><span class="del">- startActivity(new Intent(t));</span>
+<span class="add">+ if (isAllowed(t)) startActivity(safe(t));</span></code></pre>
+            <p class="diffcard__meta">+2 −1 · 1 file · checks passed</p>
+          </div>
+        </div>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ─────────────────────────────── devices ─────────────────────────────── -->
+<section class="band band--paper" id="devices">
+  <div class="wrap">
+    <header class="sect sect--split reveal">
+      <div>
+        <p class="sect__no mono">03 / DEVICE LAB</p>
+        <h2>Every screen.<br /><em>One command center.</em></h2>
+      </div>
+      <p class="sect__lede">Virtual devices or your own hardware, with screen, shell, file and
+        API access for your agents and your tests. No device rack to maintain.</p>
+    </header>
+
+    <div class="devices">
+      <article class="dev reveal">
+        <div class="dev__frame"><span class="dev__screen"></span><i class="dev__dot"></i></div>
+        <p class="dev__name">Pixel 8</p>
+        <p class="dev__meta mono">android 15 · arm64 · online</p>
+      </article>
+      <article class="dev reveal">
+        <div class="dev__frame dev__frame--tall"><span class="dev__screen"></span><i class="dev__dot"></i></div>
+        <p class="dev__name">Pixel Fold</p>
+        <p class="dev__meta mono">android 14 · foldable · online</p>
+      </article>
+      <article class="dev reveal">
+        <div class="dev__frame"><span class="dev__screen"></span><i class="dev__dot"></i></div>
+        <p class="dev__name">Galaxy S24</p>
+        <p class="dev__meta mono">android 14 · one ui · busy</p>
+      </article>
+      <article class="dev dev--add reveal">
+        <div class="dev__frame dev__frame--ghost"><span>+</span></div>
+        <p class="dev__name">Bring your own</p>
+        <p class="dev__meta mono">usb or network adb</p>
+      </article>
+    </div>
+
+    <ul class="specs reveal">
+      <li><b>shell</b><span>adb, rootless by default</span></li>
+      <li><b>screen</b><span>live view, recorded sessions</span></li>
+      <li><b>files</b><span>push, pull, pulled evidence</span></li>
+      <li><b>api</b><span>keys for your own agents</span></li>
+    </ul>
+  </div>
+</section>
+
+<!-- ─────────────────────────────── terms ─────────────────────────────── -->
+<section class="band band--ink" id="terms">
+  <div class="wrap terms">
+    <div class="terms__copy reveal">
+      <p class="sect__no mono">04 / DEPLOY ON YOUR TERMS</p>
+      <h2>Your devices.<br /><em>Your model. Your call.</em></h2>
+      <p>Run MOBIUS in your private cloud or on-premise. Bring your own model key, connect
+        your own devices, and keep the source and the findings inside your perimeter.</p>
+      <a class="btn btn--outline" href="#start">Read the deployment guide <span aria-hidden="true">↗</span></a>
+    </div>
+    <ul class="terms__list">
+      <li class="reveal"><b>BYOK</b><span>Your provider, your spend. The platform never proxies a
+        model call through someone else's key.</span></li>
+      <li class="reveal"><b>BYOD</b><span>Physical hardware over adb, or managed virtual devices.
+        Nothing leaves your network.</span></li>
+      <li class="reveal"><b>ON-PREM</b><span>Container images, your Postgres, your object store.
+        Air-gapped by configuration.</span></li>
+      <li class="reveal"><b>AUDIT</b><span>Every finding carries its evidence. Every run is a
+        record you can replay.</span></li>
+    </ul>
+  </div>
+</section>
+
+<!-- ─────────────────────────────── pricing ─────────────────────────────── -->
+<section class="band band--paper" id="pricing">
+  <div class="wrap">
+    <header class="sect sect--center reveal">
+      <p class="sect__no mono">05 / PRICING</p>
+      <h2>Start curious. <em>Go deeper.</em></h2>
+      <p class="sect__lede">From the first scan to a security program. Choose how far you want
+        to go.</p>
+      <div class="toggle mono" data-billing>
+        <button class="is-active" data-cycle="month">Monthly</button>
+        <button data-cycle="year">Annual <span class="toggle__off">−20%</span></button>
+      </div>
+    </header>
+
+    <div class="prices">
+      <article class="price reveal">
+        <p class="price__kicker mono">Meet MOBIUS</p>
+        <h3>Free</h3>
+        <p class="price__amount"><b>€0</b><span>/ month</span></p>
+        <p class="price__sub">Put your first APK to the test.</p>
+        <ul>
+          <li>10 AI SAST scans a month</li>
+          <li>1 blackbox scan + device run (welcome credit)</li>
+          <li>Bring your own model key</li>
+          <li>No card required</li>
+        </ul>
+        <a class="btn btn--outline btn--block" href="#start">Start free</a>
+      </article>
+
+      <article class="price price--featured reveal">
+        <p class="price__kicker mono">Build securely</p>
+        <h3>AppSec</h3>
+        <p class="price__amount">
+          <b data-month="€149" data-year="€119">€149</b><span>/ month</span>
+        </p>
+        <p class="price__sub">Everyday Android security testing.</p>
+        <ul>
+          <li>10 app scans a month</li>
+          <li>Android AppSec + dynamic testing</li>
+          <li>Agentic chats over your findings</li>
+          <li>€100 AI budget a month</li>
+          <li>CI/CD gate + SARIF output</li>
+        </ul>
+        <a class="btn btn--solid btn--block" href="#start">Start free</a>
+      </article>
+
+      <article class="price reveal">
+        <p class="price__kicker mono">Go beyond</p>
+        <h3>Research</h3>
+        <p class="price__amount">
+          <b data-month="€249" data-year="€199">€249</b><span>/ month</span>
+        </p>
+        <p class="price__sub">Native code and real exploitation.</p>
+        <ul>
+          <li>All AppSec features</li>
+          <li>Native analysis &amp; coverage-guided fuzzing</li>
+          <li>Autonomous PoC building and testing</li>
+          <li>Bring your own device</li>
+          <li>€150 AI budget a month</li>
+        </ul>
+        <a class="btn btn--outline btn--block" href="#start">Start free</a>
+      </article>
+    </div>
+
+    <p class="prices__note mono">AI SAST requires BYOK; model usage is billed by your provider.
+      Device lab capacity depends on plan. Prices shown exclude VAT.</p>
+  </div>
+</section>
+
+<!-- ─────────────────────────────── faq ─────────────────────────────── -->
+<section class="band band--ink" id="faq">
+  <div class="wrap faq">
+    <header class="sect reveal">
+      <p class="sect__no mono">06 / QUESTIONS</p>
+      <h2>Reasonable ones.</h2>
+    </header>
+    <div class="faq__list">
+      <details class="reveal" open>
+        <summary>Does it need an emulator to work?</summary>
+        <p>Static analysis does not. Dynamic testing needs a device: a managed virtual device, a
+          physical phone over adb, or your own lab. The platform talks to it; you keep it.</p>
+      </details>
+      <details class="reveal">
+        <summary>What happens to my source code?</summary>
+        <p>It stays in the deployment you chose. On-premise and private-cloud installs never send
+          code to us; model calls go to the provider whose key you supplied, and you can run a
+          local model instead.</p>
+      </details>
+      <details class="reveal">
+        <summary>Is this a scanner that dumps a thousand alerts?</summary>
+        <p>No. A finding is only reported when the path is established and the gate is
+          satisfied; anything uncertain is labelled as undetermined rather than promoted to a
+          vulnerability.</p>
+      </details>
+      <details class="reveal">
+        <summary>Can it open the fix as a pull request?</summary>
+        <p>Yes, from your pipeline. MOBIUS proposes the patch and retests the original path; the
+          review and the merge stay with your team.</p>
+      </details>
+      <details class="reveal">
+        <summary>Android only?</summary>
+        <p>The platform is Android-first. The API and device-lab layers are platform-agnostic;
+          iOS support is on the roadmap, not in the box today.</p>
+      </details>
+    </div>
+  </div>
+</section>
+
+<!-- ─────────────────────────────── final cta ─────────────────────────────── -->
+<section class="band band--cta" id="start">
+  <div class="wrap cta">
+    <p class="sect__no mono reveal">07 / GET STARTED</p>
+    <h2 class="reveal">Your next finding<br /><em>starts for free.</em></h2>
+    <p class="cta__lede reveal">Ten scans a month, no card, and a workspace that shows you
+      exactly what it knows.</p>
+    <div class="hero__cta reveal">
+      <a class="btn btn--solid btn--lg" href="#console">Create a free account <span aria-hidden="true">↗</span></a>
+      <a class="btn btn--outline btn--lg" href="#pricing">Talk to us</a>
+    </div>
+    <p class="cta__fine mono reveal">✓ No credit card · ✓ BYOK · ✓ Deploy on your own terms</p>
+  </div>
+</section>
+
+</main>
+
+<!-- ─────────────────────────────── footer ─────────────────────────────── -->
+<footer class="foot">
+  <div class="wrap foot__grid">
+    <div class="foot__brand">
+      <a class="brand" href="#top">
+        <svg class="brand__mark" viewBox="0 0 32 32" aria-hidden="true">
+          <path d="M16 1.5 30.5 16 16 30.5 1.5 16Z" fill="none" stroke="currentColor" stroke-width="1.2"/>
+          <path d="M16 7.5 24.5 16 16 24.5 7.5 16Z" fill="currentColor"/>
+        </svg>
+        <span class="brand__word">MOBIUS</span>
+      </a>
+      <p>Android AI penetration testing. Find the path, prove it on the device, ship the fix.</p>
+      <p class="mono foot__status"><i class="dot"></i> all systems nominal · rev 26.11</p>
+    </div>
+
+    <div class="foot__col">
+      <p class="mono">Platform</p>
+      <a href="#capabilities">AI SAST</a>
+      <a href="#capabilities">Dynamic testing</a>
+      <a href="#capabilities">Fuzzing</a>
+      <a href="#capabilities">API testing</a>
+      <a href="#devices">Device lab</a>
+    </div>
+
+    <div class="foot__col">
+      <p class="mono">Company</p>
+      <a href="#faq">FAQ</a>
+      <a href="#pricing">Pricing</a>
+      <a href="#terms">Deployment</a>
+      <a href="#start">Contact</a>
+    </div>
+
+    <div class="foot__col">
+      <p class="mono">Legal</p>
+      <a href="#faq">Privacy</a>
+      <a href="#faq">Terms</a>
+      <a href="#faq">Security</a>
+    </div>
+  </div>
+
+  <div class="wrap foot__bottom mono">
+    <span>© 2026 MOBIUS — demo build</span>
+    <span class="foot__note">Fictional product page · design study · not affiliated with djini.ai</span>
+    <span>sheet 01 / 01</span>
+  </div>
+</footer>
+
+<script src="assets/app.js" defer></script>
+</body>
+</html>
