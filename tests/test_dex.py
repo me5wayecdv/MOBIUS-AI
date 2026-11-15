@@ -132,3 +132,50 @@ def test_no_input_is_rejected():
 def test_edges_are_sorted_for_determinism(index):
     for callees in index.graph.edges.values():
         assert list(callees) == sorted(callees)
+
+
+def test_multiple_dex_files_keep_source_provenance(dex_bytes):
+    merged = index_dex(dex_bytes, dex_bytes)
+    assert merged.complete is True
+    assert merged.dex_coverage[0].entry == "classes1.dex"
+    assert merged.dex_coverage[1].entry == "classes2.dex"
+    assert merged.class_sources["AnalysisTest"] == ("classes1.dex", "classes2.dex")
+    method = next(iter(merged.method_sources))
+    assert merged.method_sources[method] == ("classes1.dex", "classes2.dex")
+
+
+def test_apk_reports_each_dex_entry(dex_bytes):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("classes.dex", dex_bytes)
+        zf.writestr("classes2.dex", dex_bytes)
+    result = index_apk(buf.getvalue())
+    assert [x.entry for x in result.dex_coverage] == ["classes.dex", "classes2.dex"]
+    assert result.describe()["dex_indexed"] == 2
+    assert result.complete is True
+
+
+def test_corrupt_secondary_dex_makes_index_incomplete(dex_bytes):
+    partial = index_dex(dex_bytes, b"not-a-dex")
+    assert partial.classes == ("AnalysisTest",)
+    assert partial.dex_coverage[0].status == "indexed"
+    assert partial.dex_coverage[1].status == "failed"
+    assert partial.complete is False
+    assert partial.describe()["dex_failed"] == 1
+
+
+def test_method_budget_marks_current_dex_truncated_and_later_dex_skipped(dex_bytes):
+    partial = index_dex(dex_bytes, dex_bytes, max_methods=1)
+    assert partial.truncated is True
+    assert partial.dex_coverage[0].status == "truncated"
+    assert partial.dex_coverage[1].status == "skipped"
+    assert partial.complete is False
+
+
+def test_duplicate_dex_zip_entries_are_rejected(dex_bytes):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("classes.dex", dex_bytes)
+        zf.writestr("classes.dex", dex_bytes)
+    with pytest.raises(DexIndexError, match="duplicate"):
+        index_apk(buf.getvalue())
