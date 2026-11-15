@@ -6,7 +6,7 @@ import asyncio
 import json
 
 from fastapi import APIRouter, Depends, Header, Query, Request, UploadFile
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 
 from ..adapters.events import SqlEventStore
 from ..adapters.models import EvidenceRow, FindingRow, InvestigationRow
@@ -14,6 +14,7 @@ from ..core import fsm, gates
 from ..core.enums import EvidenceKind, InvestigationState, RejectionReason
 from ..services.evidence import EvidenceService
 from ..services.intake import IntakeService
+from ..services.archivist import ArchivistService
 from ..services.nexus import NexusService
 from ..services.recon import ReconService
 from ..services.spectre import SpectreService
@@ -172,6 +173,36 @@ def create_scan(
     )
     service.start(inv.id)
     return _scan_body(session, inv.id)
+
+
+@router.get("/scans", tags=["scans"])
+def list_scans(limit: int = Query(default=50, ge=1, le=200), session=Depends(_session)):
+    """Investigations, newest first.
+
+    Exists because a UI cannot show a scan it cannot list, and because the alternative -
+    guessing an id - is how a demo grows a hardcoded one.
+    """
+    rows = (
+        session.query(InvestigationRow)
+        .order_by(InvestigationRow.created_at.desc(), InvestigationRow.id.desc())
+        .limit(limit)
+        .all()
+    )
+    return {
+        "items": [
+            {
+                "id": row.id,
+                "state": row.state,
+                "objective": row.objective,
+                "intensity": row.intensity,
+                "stop_reason": row.stop_reason,
+                "application_id": row.application_id,
+                "created_at": row.created_at,
+            }
+            for row in rows
+        ],
+        "count": len(rows),
+    }
 
 
 @router.get("/scans/{scan_id}", tags=["scans"])
@@ -385,6 +416,37 @@ def run_nexus(
     """
     ctx = get_context()
     return NexusService(session, ctx.store).run(scan_id, max_steps=max_steps)
+
+
+# ------------------------------------------------------------------------------------
+# ARCHIVIST - the report
+# ------------------------------------------------------------------------------------
+
+
+@router.post("/scans/{scan_id}/report", tags=["scans"])
+def write_report(scan_id: str, session=Depends(_session)):
+    """Write the investigation report and store it as evidence.
+
+    Returns the Markdown itself as well as the evidence id, so a caller does not have to make
+    a second request to read what was just written. No model is called: the document is
+    composed from stored rows.
+    """
+    ctx = get_context()
+    return ArchivistService(session, ctx.store).write(scan_id)
+
+
+@router.get("/scans/{scan_id}/report", tags=["scans"], response_class=PlainTextResponse)
+def get_report(scan_id: str, session=Depends(_session)):
+    """The most recently written report, as Markdown.
+
+    Reads the stored artefact rather than rebuilding it, so what a reader downloads is what
+    the scan produced, even if observations were added afterwards.
+    """
+    ctx = get_context()
+    return PlainTextResponse(
+        ArchivistService(session, ctx.store).latest(scan_id),
+        media_type="text/markdown; charset=utf-8",
+    )
 
 
 # ------------------------------------------------------------------------------------

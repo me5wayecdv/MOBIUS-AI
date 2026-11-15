@@ -272,6 +272,7 @@ class SpectreService:
             evidence_refs=(manifest_evidence_id,),
             discovered_by=AGENT,
             validated_by="VERITAS",
+            component_ref=component,
             confidence_cap=_CONFIDENCE[_bucket(result)],
         )
         return {

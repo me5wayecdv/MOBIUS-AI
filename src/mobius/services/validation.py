@@ -235,6 +235,21 @@ class ValidationService:
                 f"All {len(gate.clauses)} gate clauses for '{gate.category}' were satisfied "
                 f"({', '.join(gate.required_evidence())})."
             )
+        # The order here must mirror the decision order above, or a rejected verdict gets
+        # the rationale of a deferral. Found by reading a generated report, where the finding
+        # said `rejected / not-reachable` and the stored rationale said "could not be
+        # decided" - both in the same row.
+        if result.failed_decisively:
+            refuted = ", ".join(result.failed_decisively)
+            undetermined = (
+                f" Clause(s) never established: {', '.join(result.missing_attributes)}."
+                if result.missing_attributes
+                else ""
+            )
+            return (
+                f"Gate '{gate.category}' refuted: failed clause(s) {refuted}."
+                f"{undetermined} One decisive failure is enough to refute the hypothesis."
+            )
         if result.missing_attributes:
             return (
                 f"Gate '{gate.category}' could not be decided: no evidence for "

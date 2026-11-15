@@ -1,6 +1,6 @@
 # IMPLEMENTATION STATUS
 
-> A **vertical slice of the backend is implemented and tested** (264 tests passing, 6 skipped).
+> A **vertical slice of the backend is implemented and tested** (301 tests passing, 6 skipped).
 > RECON decodes real binary manifests, SPECTRE reads real dex and proves or fails to prove sink
 > reachability from an exported entry point, and NEXUS drives that work from the frontier to a
 > closed investigation. **No model is called anywhere** — SPECTRE decides by deterministic graph
@@ -9,7 +9,7 @@
 > exactly the failure mode the project forbids: describing a proposal as if it were a working system
 > (master prompt §23). Every row states its evidence; a row without a test is not `DONE`.
 
-**Last updated:** 2026-11-15 · **Base commit:** `93d799a` · **Branch:** `arena/8c85b008-mobius-ai`
+**Last updated:** 2026-11-15 · **Base commit:** `aa0d327` · **Branch:** `arena/22eec634-mobius-ai`
 
 ---
 
@@ -32,7 +32,7 @@
 | NEXUS (dispatch loop) | `PARTIAL` | `AGENT_DESIGN.md §4`, phase 5 | `test_nexus.py` (19 tests) + 2 HTTP tests: pops the best entry, dispatches to the agent that can run it, records dropped work with reasons, stops on a step budget, closes the investigation. **No re-planning, no model** — a frontier entry no tool queued is never invented |
 | Postgres schema + migrations | `PARTIAL` | `DATABASE_SCHEMA.md` | 14 tables via SQLAlchemy metadata; SQLite + Postgres dialects. **No migration tool**; `create_all` is dev/CI only |
 | Event store + LISTEN/NOTIFY bridge | `PARTIAL` | `EVENT_ARCHITECTURE.md` | `test_events.py`: per-investigation `seq`, row-locked allocation, unique constraint. **No LISTEN/NOTIFY bridge** |
-| API (applications/authorisations/scans) | `PARTIAL` | `API_SPECIFICATION.md` | 18 paths / 19 operations, driven end to end by `test_api.py`. **Auth is a stub** |
+| API (applications/authorisations/scans) | `PARTIAL` | `API_SPECIFICATION.md` | 19 paths / 22 operations, driven end to end by `test_api.py`. **Auth is a stub** |
 | WebSocket/SSE stream + replay | `DONE` | `API_SPECIFICATION.md §4` | `GET /scans/{id}/stream`: SSE with `Last-Event-ID` resume and a definite `stream_end`. `test_stream.py`. Polls the event table, not LISTEN/NOTIFY (ADR-021) |
 | Tool runner sandbox | `NOT STARTED` | `AGENT_DESIGN.md §7` | |
 | RECON adapter (androguard) | `PARTIAL` | `ANDROID_SECURITY_METHODOLOGY.md §2` | Manifest analysis is **real**: binary AXML decoded via androguard 4.1.4, 5 component kinds, permissions, export inference, evidence + observations + frontier. `test_android_manifest.py`, `test_recon.py`. **Manifest only** — no dex, strings, certs or native libs |
@@ -45,7 +45,9 @@
 | VERITAS + gates | `PARTIAL` | `AGENT_DESIGN.md §6` | Gate evaluation, verdict persistence and `ValidatorMustDiffer` implemented and tested. **The VERITAS model agent does not exist**; attributes come from RECON or over HTTP. `test_recon.py::test_recon_candidates_can_never_confirm` pins the honest outcome |
 | Authorisation enforcement (trigger) | `DESIGNED` | `DATABASE_SCHEMA.md §3.2` | SQL written in `adapters/sql/scope_guard.sql`; 6 tests exist but **skip — never executed on PostgreSQL** |
 | Attack graph (data model) | `DESIGNED` | `DATABASE_SCHEMA.md §3.8` | Tables `graph_nodes`/`graph_edges` **not created**; only `GraphNode`/`GraphEdge` domain models exist |
-| Attack graph (UI) | `NOT STARTED` | ADR-014 | Reachability view for v1 |
+| Attack graph (UI) | `NOT STARTED` | ADR-014 | The War Room lists findings and surface; the reachability *graph* view is not built |
+| ARCHIVIST (report) | `PARTIAL` | `REQUIREMENTS.md §1.9` | `services/archivist.py`: eight sections generated from stored rows, written as evidence, `POST/GET /scans/{id}/report`. **Markdown only** |
+| Benchmark harness | `PARTIAL` | `MODEL_BENCHMARKS.md §3` | `services/benchmark.py` + `python -m mobius.tools.benchmark`: precision/recall/specificity with counts, `measured: false` on an empty corpus, errors excluded from rates. **No labelled corpus → unmeasured** |
 | ORACLE | `NOT STARTED` | `ORACLE_THREAT_INTEL.md` | **Deliberately out of v1 scope** |
 | Reports | `NOT STARTED` | `REQUIREMENTS.md §1.9` | Markdown for v1 |
 | Frontend shell | `NOT STARTED` | `SPECIALIST_REPORTS.md F` | |
@@ -64,11 +66,11 @@
 | 5 | NEXUS + agent runtime | **PARTIAL** — dispatch loop works end to end (ADR-023); the model-driven planner is NOT implemented |
 | 6 | PHANTOM | NOT STARTED — **likely blocked permanently** |
 | 7 | VECTOR | NOT STARTED |
-| 8 | VERITAS + ARCHIVIST | NOT STARTED |
-| 9 | War Room | NOT STARTED |
+| 8 | VERITAS + ARCHIVIST | **PARTIAL** — ARCHIVIST writes a real report from stored rows; the VERITAS *model* validator does not exist (gates validate, not a second model) |
+| 9 | War Room | **PARTIAL** — one page at `/ui` reading `/api/v1` only (scans, surface, findings, replayed events, report link). **No browser test**: rendering is asserted at the HTML level, not by clicking |
 | 10 | ORACLE | **DEFERRED — not in v1 scope** |
-| 11 | Reporting | NOT STARTED |
-| 12 | Testing & evaluation | NOT STARTED |
+| 11 | Reporting | **PARTIAL** — Markdown only and stored as evidence; **no PDF, no template engine, no downloadable bundle** |
+| 12 | Testing & evaluation | **PARTIAL** — 301 tests; the benchmark harness runs the real pipeline. **No labelled corpus exists, so precision and recall are UNMEASURED** |
 
 ## Verified in this build
 
@@ -76,7 +78,7 @@ Commands run and their observed output, so a reader can distinguish measurement 
 
 | Check | Result |
 |---|---|
-| `pytest` | **264 passed, 6 skipped** in ~5.5 s |
+| `pytest` | **301 passed, 6 skipped** in ~7 s |
 | `pytest tests/test_layering.py` | Layer 1 imports no `sqlalchemy`/`fastapi`/outer layer |
 | `uvicorn mobius.api.app:app` | Boots on `0.0.0.0:8000`; `/api/v1/health` → 200 |
 | End-to-end over HTTP | upload (binary AXML, 1 141 B) → authorise → scan → **RECON → `SURFACE_READY`**: 5 components, 4 exported, 3 unguarded, 2 queued, launcher excluded → 9 audit events |
@@ -92,6 +94,11 @@ Commands run and their observed output, so a reader can distinguish measurement 
 | NEXUS on a real APK, over HTTP | `com.politedroid_4.apk` → RECON → `POST /nexus` → **`CLOSED`**, `stop_reason: completed`, 1 of 20 steps used, 1 candidate dispatched, 0 confirmed / 1 rejected, `code_analysis_complete` then `nexus_complete`, 409 on a second call |
 | NEXUS determinism | The same APK scanned twice produced an identical decision payload, step list and result set — compared across two investigations, not within one run |
 | NEXUS budget | `max_steps=1` over two candidates → 1 dispatched, 1 left `queued`, `stop_reason: budget_exhausted`, state `CLOSED`, and the skipped entry named in `notes` |
+| Report on a real APK | 4 593 bytes of Markdown, 8 sections, evidence index with SHA-256 prefixes; states "no data-flow analysis" and "absence of a finding is not evidence of absence" |
+| Report is reproducible | Same rows + same timestamp → byte-identical document (`test_the_same_rows_produce_byte_identical_reports`) |
+| War Room served | `GET /ui` → 200 text/html, `GET /` → 307 to `/ui`; every panel reads `/api/v1` (no fixture, no placeholder) |
+| Benchmark with no corpus | `measured: false`, no metrics, and a note saying no number may be cited; **this is the current state** |
+| Benchmark on a control | Real pipeline (upload → RECON → NEXUS) over a synthetic control: 0 confirmed → benign specificity 100 %, precision `undefined` |
 | `MOBIUS_ENV=production` | process **refuses to start** (stub auth) |
 
 **Not verified anywhere yet:** the PostgreSQL trigger, LISTEN/NOTIFY, androidsdk tooling, any
@@ -118,7 +125,7 @@ Statements that must **not** appear in any document until the corresponding row 
 | Claim | Becomes true when |
 |---|---|
 | "MOBIUS investigates autonomously" | FSM + frontier + T-090 complete. The loop exists and closes scans, but it only dispatches work other tools queued — it cannot discover a new line of enquiry, so **not yet true** |
-| "MOBIUS reduces false positives" | T-111 measured on a held-out set |
+| "MOBIUS reduces false positives" | T-111 measured on a held-out set. The harness exists; **it has no corpus, so this remains unmeasured** |
 | "MOBIUS validates findings independently" | T-084 + T-085 + T-086 green — gate + verdict **are** green; the independent *agent* is not |
 | "The War Room reflects real activity" | T-087 + T-115 green |
 | "MOBIUS detects stager/malware patterns" | DCL gate + negative controls (T-075/T-085) |

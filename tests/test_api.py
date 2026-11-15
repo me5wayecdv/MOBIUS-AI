@@ -374,3 +374,71 @@ def test_nexus_refuses_a_scan_that_has_not_run_recon(client):
     resp = client.post(f"/api/v1/scans/{scan['id']}/nexus")
     assert resp.status_code == 409
     assert resp.json()["code"] == "SCAN_STATE_CONFLICT"
+
+
+def test_the_report_is_written_and_read_back_over_http(client):
+    """A closed investigation must produce a document a reviewer can actually open."""
+    manifest = (
+        '<manifest xmlns:android="http://schemas.android.com/apk/res/android" '
+        'package="com.example.demo"><application>'
+        '<activity android:name="AnalysisTest" android:exported="true"/>'
+        "</application></manifest>"
+    )
+    app = client.post(
+        "/api/v1/applications",
+        files={"file": ("demo.apk", _apk_with_fixture_dex(manifest),
+                        "application/vnd.android.package-archive")},
+    ).json()
+    auth = _authorize(client, app["sha256"]).json()
+    scan = _scan(client, app["id"], auth["id"]).json()
+    client.post(f"/api/v1/scans/{scan['id']}/recon")
+    closed = client.post(f"/api/v1/scans/{scan['id']}/nexus").json()
+    assert closed["state"] == "CLOSED"
+
+    written = client.post(f"/api/v1/scans/{scan['id']}/report")
+    assert written.status_code == 200, written.text
+    body = written.json()
+    assert body["evidence_id"].startswith("ev_")
+    assert "# MOBIUS investigation report" in body["markdown"]
+
+    fetched = client.get(f"/api/v1/scans/{scan['id']}/report")
+    assert fetched.status_code == 200
+    assert fetched.headers["content-type"].startswith("text/markdown")
+    assert fetched.text == body["markdown"]
+
+
+def test_reading_a_report_that_was_never_written_is_404(client):
+    app = _upload(client).json()
+    auth = _authorize(client, app["sha256"]).json()
+    scan = _scan(client, app["id"], auth["id"]).json()
+
+    resp = client.get(f"/api/v1/scans/{scan['id']}/report")
+    assert resp.status_code == 404
+
+
+def test_scans_can_be_listed(client):
+    """A UI cannot show a scan it cannot list, and a demo must not hardcode an id."""
+    app = _upload(client).json()
+    auth = _authorize(client, app["sha256"]).json()
+    scan = _scan(client, app["id"], auth["id"]).json()
+
+    body = client.get("/api/v1/scans").json()
+    assert body["count"] >= 1
+    assert any(item["id"] == scan["id"] for item in body["items"])
+    assert body["items"][0]["state"] == "RECON"
+
+
+def test_the_war_room_is_served_and_reads_only_real_endpoints(client):
+    resp = client.get("/ui")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/html")
+
+    html = resp.text
+    # It must talk to the API rather than to baked-in data.
+    assert "/api/v1" in html
+    assert "EventSource" in html
+    # The event panel is replayed from the store, so an unknown event type still shows.
+    assert "/events?limit=200" in html
+    # And it must say where its numbers come from.
+    assert "Every value on this page is read from the API" in html
+    assert client.get("/", follow_redirects=False).status_code in (302, 307)
