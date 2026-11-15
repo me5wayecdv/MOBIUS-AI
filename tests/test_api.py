@@ -80,8 +80,11 @@ def test_full_flow(client):
 
 
 def test_duplicate_upload_is_flagged(client):
-    first = _upload(client).json()
-    second = _upload(client).json()
+    # Reuse the exact same bytes: make_apk() writes current ZIP timestamps, so two
+    # independently generated fixtures are not byte-identical APK artefacts.
+    apk = make_apk()
+    first = _upload(client, data=apk).json()
+    second = _upload(client, data=apk).json()
     assert second["id"] == first["id"]
     assert second.get("duplicate") is True
 
