@@ -21,6 +21,9 @@ from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+#: 95% two-sided normal quantile, used for the Wilson interval below.
+_Z = 1.959963984540054
+
 VULNERABLE = "vulnerable"
 BENIGN = "benign"
 LABELS = (VULNERABLE, BENIGN)
@@ -90,6 +93,25 @@ class Result:
             "outcomes": [o.as_dict() for o in self.outcomes],
             "notes": list(self.notes),
         }
+
+
+def wilson_interval(successes: int, total: int) -> tuple[float, float] | None:
+    """95% Wilson score interval for a proportion, or None when undefined.
+
+    A rate without an interval invites a reader to treat "precision 100%" as a fact when it
+    came from one sample. Wilson rather than the textbook normal approximation because it is
+    defined at 0 and 1 - the two values this harness will produce most often with a corpus
+    this small.
+    """
+    if total <= 0:
+        return None
+    p = successes / total
+    denominator = 1 + _Z * _Z / total
+    centre = (p + _Z * _Z / (2 * total)) / denominator
+    margin = (_Z / denominator) * ((p * (1 - p) / total + _Z * _Z / (4 * total * total)) ** 0.5)
+    low = max(0.0, centre - margin)
+    high = min(1.0, centre + margin)
+    return (round(low, 4), round(high, 4))
 
 
 def measure(samples: Iterable[Sample], analyser: Analyser) -> Result:
@@ -172,10 +194,23 @@ def summarise(outcomes: tuple[Outcome, ...]) -> Result:
     # alone.
     specificity = rate(len(true_neg), len(true_neg) + len(false_pos))
 
+    flagged_total = len(true_pos) + len(false_pos)
+    vulnerable_total = len(true_pos) + len(false_neg)
+    benign_total = len(true_neg) + len(false_pos)
     metrics = {
         "precision": precision,
         "recall": recall,
         "benign_specificity": specificity,
+        # Every rate carries the interval and the denominator it came from, because
+        # "100%" from one sample and "100%" from forty are not the same claim.
+        "precision_ci95": wilson_interval(len(true_pos), flagged_total),
+        "recall_ci95": wilson_interval(len(true_pos), vulnerable_total),
+        "specificity_ci95": wilson_interval(len(true_neg), benign_total),
+        "denominators": {
+            "precision": flagged_total,
+            "recall": vulnerable_total,
+            "specificity": benign_total,
+        },
         "flagged": len(true_pos) + len(false_pos),
         "counts": {
             "true_positive": len(true_pos),
@@ -198,19 +233,34 @@ def summarise(outcomes: tuple[Outcome, ...]) -> Result:
         "rates count samples flagged as a whole, not the correctness of individual "
         "findings: a scan that confirms the wrong weakness still counts as flagged"
     )
+    if flagged_total and flagged_total < 10:
+        notes.append(
+            f"precision rests on {flagged_total} flagged sample(s); read the 95% interval "
+            "before quoting the point estimate"
+        )
 
     return Result(outcomes=outcomes, measured=True, metrics=metrics, notes=tuple(notes))
 
 
 def load_corpus(payload: Mapping[str, Any]) -> list[Sample]:
-    """Parse a corpus manifest: ``{"samples": [...]}``."""
+    """Parse a corpus manifest: ``{"samples": [...]}``.
+
+    Two shapes are accepted because the corpus has two lives: the committed manifest names a
+    public artefact and its hash (``url`` + ``file``), while the fetched manifest resolves that
+    to a local ``apk_path``. Loading either is fine; fetching is what verifies the hash.
+    """
     samples = []
     for raw in payload.get("samples", []):
+        path = raw.get("apk_path") or raw.get("file")
+        if not path:
+            raise ValueError(
+                f"sample {raw.get('name', '?')!r} names neither apk_path nor file"
+            )
         samples.append(
             Sample(
                 name=raw["name"],
                 label=raw["label"],
-                apk_path=raw["apk_path"],
+                apk_path=str(path),
                 note=raw.get("note", ""),
             )
         )

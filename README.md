@@ -24,9 +24,17 @@ then let NEXUS drive the worklist until the investigation closes, validating eac
 through a gate to a confirmed, rejected or *insufficient* verdict — streamed live over SSE. No model is called anywhere: every verdict is reproducible from the
 APK bytes (ADR-022).
 
+Measure it on the pinned corpus (fetches 7 public APKs, verifying every SHA-256):
+
+```bash
+python scripts/fetch_corpus.py --dest /tmp/mobius-corpus
+.venv/bin/python -m mobius.tools.benchmark /tmp/mobius-corpus/corpus.resolved.json
+```
+
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
-.venv/bin/python -m pytest                 # 301 passed, 6 skipped
+MOBIUS_DB_URL=sqlite+pysqlite:///dev.db .venv/bin/alembic upgrade head   # schema
+.venv/bin/python -m pytest                 # 319 passed, 6 skipped
 .venv/bin/uvicorn mobius.api.app:app --host 0.0.0.0 --port 8000
 curl localhost:8000/api/v1/health
 ```
@@ -42,7 +50,7 @@ they are, which is why no decompilation is claimed.
 |---|---|
 | VERITAS model agent, adaptive planner | No model is called. Gates and verdicts **are** real, and NEXUS drives the loop to `CLOSED` — but it is a deterministic dispatcher: it cannot re-plan or invent a line of enquiry (ADR-023) |
 | Report formats | Reports are Markdown, generated from stored rows and stored as evidence. **No PDF, no template engine** |
-| Measurement | The benchmark harness exists and drives the real pipeline, but **no labelled corpus exists, so precision and recall are UNMEASURED** |
+| Measurement depth | A first measurement exists on 7 pinned public APKs: precision 100 % (1/1, 95 % CI 20.6–100 %), recall 25 % (1/4), specificity 100 % (3/3). **Too small to establish a rate**, and the corpus is labelled by the implementer — see [`docs/BENCHMARK_RESULTS.md`](docs/BENCHMARK_RESULTS.md) |
 | Code analysis beyond reachability | Call graph and sink reachability are real (dex, application classes only). **No decompilation** (no JDK, R-01), **no data flow**, **no CFG**, no reflection, no multi-dex |
 | RECON beyond the manifest | Strings are extracted from dex; certificates, native libraries and multi-dex are not |
 | Dynamic analysis | `intensity` 3 is refused globally; ADR-016 still holds |
@@ -51,7 +59,7 @@ they are, which is why no decompilation is claimed.
 | Attack graph, reports, benchmark | Tables and docs exist; no writer, no numbers |
 | `enforce_authorization_scope` trigger | Written and unit-tested as SQL, **never executed** — no PostgreSQL here. Its 6 tests skip |
 
-`301 passed, 6 skipped` is the real count from this build. The 6 skips are the Postgres
+`319 passed, 6 skipped` is the real count from this build. The 6 skips are the Postgres
 trigger tests; a skip is not a pass. See [`docs/IMPLEMENTATION_STATUS.md`](docs/IMPLEMENTATION_STATUS.md)
 for per-component detail and the claims audit.
 

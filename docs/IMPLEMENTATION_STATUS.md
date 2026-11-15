@@ -1,6 +1,6 @@
 # IMPLEMENTATION STATUS
 
-> A **vertical slice of the backend is implemented and tested** (301 tests passing, 6 skipped).
+> A **vertical slice of the backend is implemented and tested** (319 tests passing, 6 skipped).
 > RECON decodes real binary manifests, SPECTRE reads real dex and proves or fails to prove sink
 > reachability from an exported entry point, and NEXUS drives that work from the frontier to a
 > closed investigation. **No model is called anywhere** — SPECTRE decides by deterministic graph
@@ -9,7 +9,7 @@
 > exactly the failure mode the project forbids: describing a proposal as if it were a working system
 > (master prompt §23). Every row states its evidence; a row without a test is not `DONE`.
 
-**Last updated:** 2026-11-15 · **Base commit:** `aa0d327` · **Branch:** `arena/22eec634-mobius-ai`
+**Last updated:** 2026-11-15 · **Base commit:** `994a215` · **Branch:** `arena/10b04bf9-mobius-ai`
 
 ---
 
@@ -30,7 +30,7 @@
 | Domain core (models, FSM, gates) | `DONE` | `AGENT_DESIGN.md`, `ARCHITECTURE.md §4` | `test_fsm.py` (15 states, no `PAUSED`), `test_gates.py` (10 gates, positive + negative controls), `test_schemas.py` (invariants) |
 | Frontier + scorer | `PARTIAL` | `AGENT_DESIGN.md §4` | `test_frontier.py`: arithmetic, determinism, unauthorised action scores `-inf`, ties break on content not on generated ids. **Driven by NEXUS**, which is a dispatcher over this queue and not a planner (ADR-023) |
 | NEXUS (dispatch loop) | `PARTIAL` | `AGENT_DESIGN.md §4`, phase 5 | `test_nexus.py` (19 tests) + 2 HTTP tests: pops the best entry, dispatches to the agent that can run it, records dropped work with reasons, stops on a step budget, closes the investigation. **No re-planning, no model** — a frontier entry no tool queued is never invented |
-| Postgres schema + migrations | `PARTIAL` | `DATABASE_SCHEMA.md` | 14 tables via SQLAlchemy metadata; SQLite + Postgres dialects. **No migration tool**; `create_all` is dev/CI only |
+| Schema + migrations | `DONE` (migration history) | `DATABASE_SCHEMA.md`, ADR-025 | `alembic upgrade head` builds 14 tables + `alembic_version`; upgrade/downgrade/replay tested; `alembic check` fails on model drift. **Trigger applied only on PostgreSQL, still never executed** |
 | Event store + LISTEN/NOTIFY bridge | `PARTIAL` | `EVENT_ARCHITECTURE.md` | `test_events.py`: per-investigation `seq`, row-locked allocation, unique constraint. **No LISTEN/NOTIFY bridge** |
 | API (applications/authorisations/scans) | `PARTIAL` | `API_SPECIFICATION.md` | 19 paths / 22 operations, driven end to end by `test_api.py`. **Auth is a stub** |
 | WebSocket/SSE stream + replay | `DONE` | `API_SPECIFICATION.md §4` | `GET /scans/{id}/stream`: SSE with `Last-Event-ID` resume and a definite `stream_end`. `test_stream.py`. Polls the event table, not LISTEN/NOTIFY (ADR-021) |
@@ -43,16 +43,16 @@
 | PHANTOM / emulator | `NOT STARTED` | §7 | **Blocked: no KVM** (R-02) |
 | VECTOR / mitmproxy | `NOT STARTED` | §4 | Blocked: no egress from sandbox |
 | VERITAS + gates | `PARTIAL` | `AGENT_DESIGN.md §6` | Gate evaluation, verdict persistence and `ValidatorMustDiffer` implemented and tested. **The VERITAS model agent does not exist**; attributes come from RECON or over HTTP. `test_recon.py::test_recon_candidates_can_never_confirm` pins the honest outcome |
-| Authorisation enforcement (trigger) | `DESIGNED` | `DATABASE_SCHEMA.md §3.2` | SQL written in `adapters/sql/scope_guard.sql`; 6 tests exist but **skip — never executed on PostgreSQL** |
+| Authorisation enforcement (trigger) | `DESIGNED` | `DATABASE_SCHEMA.md §3.2` | SQL in `adapters/sql/scope_guard.sql`, now **installed by migration 0001 on PostgreSQL only**; 6 tests still **skip — never executed** (Q2) |
 | Attack graph (data model) | `DESIGNED` | `DATABASE_SCHEMA.md §3.8` | Tables `graph_nodes`/`graph_edges` **not created**; only `GraphNode`/`GraphEdge` domain models exist |
 | Attack graph (UI) | `NOT STARTED` | ADR-014 | The War Room lists findings and surface; the reachability *graph* view is not built |
 | ARCHIVIST (report) | `PARTIAL` | `REQUIREMENTS.md §1.9` | `services/archivist.py`: eight sections generated from stored rows, written as evidence, `POST/GET /scans/{id}/report`. **Markdown only** |
-| Benchmark harness | `PARTIAL` | `MODEL_BENCHMARKS.md §3` | `services/benchmark.py` + `python -m mobius.tools.benchmark`: precision/recall/specificity with counts, `measured: false` on an empty corpus, errors excluded from rates. **No labelled corpus → unmeasured** |
+| Benchmark harness | `DONE` (harness) | `BENCHMARK_RESULTS.md` | `services/benchmark.py` + `python -m mobius.tools.benchmark`: precision/recall/specificity with **Wilson 95% intervals and denominators**, `measured: false` on an empty corpus, errors never counted as rejections. **First measurement: 7 pinned samples, precision 100% (1/1, CI 20.6–100%), recall 25% (1/4), specificity 100% (3/3)** |
 | ORACLE | `NOT STARTED` | `ORACLE_THREAT_INTEL.md` | **Deliberately out of v1 scope** |
 | Reports | `NOT STARTED` | `REQUIREMENTS.md §1.9` | Markdown for v1 |
 | Frontend shell | `NOT STARTED` | `SPECIALIST_REPORTS.md F` | |
-| Benchmark corpus | `NOT STARTED` | `MODEL_BENCHMARKS.md §3` | Nothing labelled yet |
-| Benchmark results | `NOT STARTED` | `MODEL_BENCHMARKS.md §6–7` | **No results exist. Do not cite any.** |
+| Benchmark corpus (code analysis)\* | `PARTIAL` | `BENCHMARK_RESULTS.md` | 7 public APKs, every SHA-256 pinned in `corpus/corpus.json`, fetched by `scripts/fetch_corpus.py`. **Labelled by the implementer** — T-036 (independent labelling) is not satisfied, and the corpus is too small to establish a rate |
+| Model benchmark results | `NOT STARTED` | `MODEL_BENCHMARKS.md §6–7` | **No model results exist. Do not cite any.** | Code-analysis results are in `BENCHMARK_RESULTS.md` and measure a tool, not a model |
 
 ## Phase status
 
@@ -60,7 +60,7 @@
 |---|---|---|
 | 0 | Environment & repository audit | **DONE** |
 | 1 | Research & architecture | **DONE (awaiting Director approval)** |
-| 2 | Core platform foundation | **PARTIAL — vertical slice green**; auth, event stream and migrations outstanding |
+| 2 | Core platform foundation | **PARTIAL** — vertical slice green, event stream and migrations done (ADR-025); **auth is still a stub** |
 | 3 | RECON | NOT STARTED |
 | 4 | SPECTRE | **PARTIAL** — deterministic reachability works on real dex (ADR-022); JADX, data flow and the model pass outstanding |
 | 5 | NEXUS + agent runtime | **PARTIAL** — dispatch loop works end to end (ADR-023); the model-driven planner is NOT implemented |
@@ -70,7 +70,7 @@
 | 9 | War Room | **PARTIAL** — one page at `/ui` reading `/api/v1` only (scans, surface, findings, replayed events, report link). **No browser test**: rendering is asserted at the HTML level, not by clicking |
 | 10 | ORACLE | **DEFERRED — not in v1 scope** |
 | 11 | Reporting | **PARTIAL** — Markdown only and stored as evidence; **no PDF, no template engine, no downloadable bundle** |
-| 12 | Testing & evaluation | **PARTIAL** — 301 tests; the benchmark harness runs the real pipeline. **No labelled corpus exists, so precision and recall are UNMEASURED** |
+| 12 | Testing & evaluation | **PARTIAL** — 319 tests; first corpus measurement exists (7 samples, `BENCHMARK_RESULTS.md`). **Corpus too small, labels not independent, recall gap is a coverage gap** |
 
 ## Verified in this build
 
@@ -78,7 +78,7 @@ Commands run and their observed output, so a reader can distinguish measurement 
 
 | Check | Result |
 |---|---|
-| `pytest` | **301 passed, 6 skipped** in ~7 s |
+| `pytest` | **319 passed, 6 skipped** in ~19 s |
 | `pytest tests/test_layering.py` | Layer 1 imports no `sqlalchemy`/`fastapi`/outer layer |
 | `uvicorn mobius.api.app:app` | Boots on `0.0.0.0:8000`; `/api/v1/health` → 200 |
 | End-to-end over HTTP | upload (binary AXML, 1 141 B) → authorise → scan → **RECON → `SURFACE_READY`**: 5 components, 4 exported, 3 unguarded, 2 queued, launcher excluded → 9 audit events |
@@ -96,9 +96,12 @@ Commands run and their observed output, so a reader can distinguish measurement 
 | NEXUS budget | `max_steps=1` over two candidates → 1 dispatched, 1 left `queued`, `stop_reason: budget_exhausted`, state `CLOSED`, and the skipped entry named in `notes` |
 | Report on a real APK | 4 593 bytes of Markdown, 8 sections, evidence index with SHA-256 prefixes; states "no data-flow analysis" and "absence of a finding is not evidence of absence" |
 | Report is reproducible | Same rows + same timestamp → byte-identical document (`test_the_same_rows_produce_byte_identical_reports`) |
+| Migrations build the schema | `alembic upgrade head` on an empty SQLite file → 14 tables + `alembic_version`; `alembic check` → "No new upgrade operations detected"; `downgrade base` leaves only `alembic_version`; upgrade → base → upgrade replays |
 | War Room served | `GET /ui` → 200 text/html, `GET /` → 307 to `/ui`; every panel reads `/api/v1` (no fixture, no placeholder) |
 | Benchmark with no corpus | `measured: false`, no metrics, and a note saying no number may be cited; **this is the current state** |
 | Benchmark on a control | Real pipeline (upload → RECON → NEXUS) over a synthetic control: 0 confirmed → benign specificity 100 %, precision `undefined` |
+| **Corpus measurement** | 7 pinned APKs through the real pipeline: **precision 100 % (1/1, 95 % CI 20.6–100 %), recall 25 % (1/4, CI 4.6–69.9 %), benign specificity 100 % (3/3, CI 43.9–100 %)**, 0 errors. One true positive: exported `ViewStatement.onCreate` → `WebView` loader, no permission, no caller check |
+| Corpus misses explained | All three MASTG crackmes have **one component, the launcher**, which RECON excludes → 0 candidates. The 25 % recall measures coverage of a weakness class this build has no gate for, not detector failure |
 | `MOBIUS_ENV=production` | process **refuses to start** (stub auth) |
 
 **Not verified anywhere yet:** the PostgreSQL trigger, LISTEN/NOTIFY, androidsdk tooling, any
@@ -125,7 +128,7 @@ Statements that must **not** appear in any document until the corresponding row 
 | Claim | Becomes true when |
 |---|---|
 | "MOBIUS investigates autonomously" | FSM + frontier + T-090 complete. The loop exists and closes scans, but it only dispatches work other tools queued — it cannot discover a new line of enquiry, so **not yet true** |
-| "MOBIUS reduces false positives" | T-111 measured on a held-out set. The harness exists; **it has no corpus, so this remains unmeasured** |
+| "MOBIUS reduces false positives" | T-111 measured on a held-out set. **Still not available**: one 7-sample corpus, labelled by the implementer, with no baseline comparison. `BENCHMARK_RESULTS.md` states what may and may not be claimed |
 | "MOBIUS validates findings independently" | T-084 + T-085 + T-086 green — gate + verdict **are** green; the independent *agent* is not |
 | "The War Room reflects real activity" | T-087 + T-115 green |
 | "MOBIUS detects stager/malware patterns" | DCL gate + negative controls (T-075/T-085) |

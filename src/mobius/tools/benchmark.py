@@ -131,9 +131,10 @@ def _render(body: dict[str, Any]) -> str:
     lines += [
         f"  samples          : {body['samples']}",
         f"  flagged          : {metrics['flagged']}",
-        f"  precision        : {_pct(metrics['precision'])}",
-        f"  recall           : {_pct(metrics['recall'])}",
-        f"  benign specificity: {_pct(metrics['benign_specificity'])}",
+        f"  precision        : {_pct(metrics['precision'])}  {_ci(metrics['precision_ci95'])}",
+        f"  recall           : {_pct(metrics['recall'])}  {_ci(metrics['recall_ci95'])}",
+        f"  benign specificity: {_pct(metrics['benign_specificity'])}  "
+        f"{_ci(metrics['specificity_ci95'])}",
         "",
         "  outcomes:",
     ]
@@ -149,6 +150,12 @@ def _render(body: dict[str, Any]) -> str:
         f"fn={counts['false_negative']} tn={counts['true_negative']} err={counts['error']}"
     )
     return "\n".join(lines)
+
+
+def _ci(interval) -> str:
+    if not interval:
+        return ""
+    return f"(95% CI {interval[0]:.1%}–{interval[1]:.1%})"
 
 
 def _pct(value: float | None) -> str:

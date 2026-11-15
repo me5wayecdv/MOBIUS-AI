@@ -115,6 +115,21 @@ Scoring a correct abstention as a miss would train the system toward guessing.
 | Tokens in/out per item | mean | Cost |
 | Verdict instability | items whose 3 runs disagree | Determinism |
 
+## 5a. Code-analysis benchmark — measured, and separate from this plan
+
+This document specifies the **model** benchmark (BQ-2): can an LLM triage Android code at useful
+precision. **No model has been called in this build**, so §6–§8 remain empty by construction.
+
+A different benchmark *has* now been run: the deterministic pipeline (RECON → NEXUS → SPECTRE →
+gate) over a seven-sample labelled corpus of real APKs. Its numbers live in
+[`BENCHMARK_RESULTS.md`](BENCHMARK_RESULTS.md) and must not be merged with this document's
+metrics — they measure a tool, not a model. Headline, with its interval, because the interval is
+the point: precision 100 % (1/1, 95 % CI 20.6–100 %), recall 25 % (1/4), benign specificity 100 %
+(3/3).
+
+The §3 requirement that the corpus be labelled by someone other than the person who wrote the
+detector still stands, and the measured corpus does not yet satisfy it.
+
 ## 6. Results — model A (`reasoning` tier candidate)
 
 | Metric | Value |

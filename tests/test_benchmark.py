@@ -210,3 +210,46 @@ def test_the_harness_drives_the_real_pipeline(tmp_path):
     # AnalysisTest has no lifecycle entry point, so nothing may be confirmed.
     assert result.outcomes[0].confirmed == 0
     assert result.metrics["benign_specificity"] == 1.0
+
+
+# -- intervals --------------------------------------------------------------------------
+
+
+def test_a_perfect_rate_over_one_sample_reports_an_honest_interval():
+    """Precision 100% from a single flagged sample could be as low as ~21%."""
+    from mobius.services.benchmark import wilson_interval
+
+    low, high = wilson_interval(1, 1)
+    assert 0.19 < low < 0.22
+    assert high == 1.0
+
+
+def test_an_interval_narrows_as_the_sample_grows():
+    from mobius.services.benchmark import wilson_interval
+
+    small = wilson_interval(1, 1)
+    larger = wilson_interval(20, 20)
+    assert larger[0] > small[0]
+
+
+def test_an_undefined_rate_has_no_interval():
+    from mobius.services.benchmark import wilson_interval
+
+    assert wilson_interval(0, 0) is None
+
+
+def test_every_rate_is_reported_with_its_denominator():
+    result = summarise(
+        (
+            Outcome("vuln", "vulnerable", confirmed=1),
+            Outcome("clean", "benign", confirmed=0),
+            Outcome("clean2", "benign", confirmed=1),
+        )
+    )
+    assert result.metrics["denominators"] == {
+        "precision": 2,
+        "recall": 1,
+        "specificity": 2,
+    }
+    assert result.metrics["precision_ci95"] is not None
+    assert any("read the 95% interval" in note for note in result.notes)

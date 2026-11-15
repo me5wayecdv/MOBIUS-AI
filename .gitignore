@@ -37,3 +37,5 @@ apk/
 # Tooling
 .DS_Store
 *.log
+# Fetched benchmark corpus: pinned by hash in corpus/corpus.json, never committed.
+corpus-apks/
