@@ -34,6 +34,7 @@ from ..adapters.models import FrontierEntryRow, InvestigationRow
 from ..core import frontier
 from ..core.enums import FindingStatus, InvestigationState, StopReason
 from ..core.schemas import FrontierEntry
+from .archivist import ArchivistService
 from .artifacts import ArtifactStore
 from .errors import NotFound, ScanStateConflict
 from .spectre import SpectreService
@@ -197,11 +198,27 @@ class NexusService:
         if state in (InvestigationState.CORRELATING, InvestigationState.BUDGET_EXHAUSTED):
             self._advance(row, InvestigationState.REPORTING)
             state = InvestigationState.REPORTING
+        report_id: str | None = None
         if state is InvestigationState.REPORTING:
             self._advance(row, InvestigationState.CLOSED, reason=stop.value)
 
         row.stop_reason = stop.value
         self._session.flush()
+
+        # The report is written *after* closure, not during REPORTING. Written inside
+        # REPORTING it described the scan as still reporting, with no stop reason - the one
+        # field a reader most needs, wrong, in the one document they keep.
+        if InvestigationState(row.state) is InvestigationState.CLOSED:
+            try:
+                written = ArchivistService(self._session, self._store).write(investigation_id)
+                report_id = written["evidence_id"]
+            except Exception as exc:  # noqa: BLE001 - closure must not depend on rendering
+                SqlEventStore(self._session).emit(
+                    investigation_id,
+                    "report_failed",
+                    {"error": f"{type(exc).__name__}: {exc}"},
+                    actor=AGENT,
+                )
 
         dispatched = [s for s in steps if s.disposition == "done"]
         dropped = [s for s in steps if s.disposition == "dropped"]
@@ -215,8 +232,10 @@ class NexusService:
                 "the step budget stopped the loop before they ran"
             )
         notes.append(
-            "no report artefact was written: ARCHIVIST is not implemented, so this "
-            "investigation closes with its events and findings only"
+            f"report artefact {report_id} written by ARCHIVIST"
+            if report_id
+            else "no report artefact was written: report generation failed and is recorded "
+            "as report_failed in the event log"
         )
         if dropped:
             notes.append(
@@ -277,6 +296,7 @@ class NexusService:
             "findings": counts,
             "results": outcomes,
             "steps": [s.as_dict() for s in steps],
+            "report_id": report_id,
             "notes": notes,
         }
 

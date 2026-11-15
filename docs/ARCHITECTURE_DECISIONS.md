@@ -475,6 +475,47 @@ planner is phase 5 work and is **not implemented** - `IMPLEMENTATION_STATUS.md` 
 
 ---
 
+## ADR-024 — Presentation is generated from rows, and an unmeasured benchmark reports nothing
+
+**Problem.** Three things now face a reader rather than a program: the investigation report, the
+War Room UI, and the benchmark's precision figure. Each is a place where a plausible-looking
+number or sentence could be composed that no row supports.
+
+**Options.** (a) author the report as a template with analysis written into it at run time;
+(b) generate every section from stored rows and refuse sections the rows cannot fill;
+(c) leave reporting and measurement to whoever writes the dissertation.
+
+**Decision.** (b) for all three artefacts.
+
+**Rationale.**
+1. *The report is evidence, so it is stored as evidence.* It is generated from findings,
+   verdicts, observations, frontier entries and the event log, then written through
+   `EvidenceService` and content-addressed. A reader can tell which document the scan produced.
+   The "not determined" section is not prose an author writes; it is the list of findings in
+   manual review, observations whose reachability was never established, and frontier entries
+   that never ran - each with its stored reason.
+2. *The UI reads the API and nothing else.* One static document, no framework, no fixture. Its
+   event panel replays `/events` rather than listening for a hardcoded list of event names,
+   because a listener list is a UI deciding which parts of the truth it will show.
+3. *A benchmark with no corpus reports `measured: false`.* Reporting `precision: 1.0` over an
+   empty sample set is the exact failure mode the claims audit exists to prevent, and it is the
+   easiest one to ship by accident. Rates are `None` when their denominator is zero, and a
+   sample that failed to analyse is counted as `error`, never as a correct rejection.
+4. *Labels need a basis.* A sample without a recorded note about who labelled it and why is
+   refused, because an unlabelled "benign" is a guess, and a guess multiplied by a corpus size
+   becomes a precision figure.
+
+**Cost.** The report reads more like a ledger than like a narrative, and it cannot say things a
+human would want it to say ("this looks like a credential leak"). That is the trade: the
+narrative layer belongs to the analyst, and the document gives them the facts to write it.
+
+**Consequences.** `POST /scans/{id}/report` writes the document (NEXUS writes one at closure),
+`GET /scans/{id}/report` returns the stored Markdown, `GET /scans` lists investigations so a UI
+never hardcodes an id, and `python -m mobius.tools.benchmark corpus.json` exits non-zero when a
+benign control is flagged. Every rate it prints is accompanied by the counts it came from.
+
+---
+
 ## Sources
 
 - [S1] Enumerated failure modes of unconstrained agent loops: https://blog.llmgo.top/en/articles/agent-loop-state-machine/

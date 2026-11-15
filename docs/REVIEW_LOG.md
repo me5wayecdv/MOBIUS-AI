@@ -4,6 +4,38 @@ Every review, decision request and supersession is recorded here. Newest first.
 
 ---
 
+## 2026-11-15 · RL-008 · The report found a contradiction the tests had not
+
+**Scope:** ARCHIVIST (report), War Room UI, `GET /scans`, benchmark harness. Tests 264 → 301.
+
+| # | Finding | Resolution |
+|---|---|---|
+| 1 | **A stored verdict contradicted its own rationale.** The finding read `rejected / not-reachable` while the rationale in the same row said "could not be decided: no evidence for caller_check_absent". `_rationale` tested missing evidence before decisive failure, the reverse of the decision order | Rationale follows the decision: decisive failure is described as a refutation, and unestablished clauses are admitted alongside it. Found by reading a generated report, not by a failing test - every test asserted the verdict, none asserted the sentence |
+| 2 | The report listed itself in its own evidence index, so every write changed the document and the content hash could never deduplicate | Reports are excluded from the evidence index; `report_written` is excluded from the event summary. A document is not a source for itself |
+| 3 | The report's header pointed at §8 for the evidence index, which is §7 | Corrected; the section numbers are asserted by test against the rendered headings |
+| 4 | The War Room's event panel listened for a hardcoded list of event names, so any event type it did not know about would silently not appear | The panel replays `GET /scans/{id}/events`, then follows the stream. A UI that filters by omission is a UI making claims |
+| 5 | Writing a report appends events, so a second write legitimately produces a different document. An earlier test asserted byte-identical rewrites | The test now asserts what is true: two writes are two documents, each announced once, and `latest` returns the newer one |
+| 6 | **The report described a scan that was still running.** It was written inside `REPORTING`, so the document said `Final state: REPORTING` and `Stop reason: not recorded` - in the one artefact a reader keeps | Written after the transition to `CLOSED`, when both fields are final. Found by reading the live report, not by a test: the test asserted `state == CLOSED` on the *response*, which was correct, while the document disagreed |
+| 7 | Rejected findings carried no `component_ref`, so a report table had an empty column where the component should be | SPECTRE passes the component; the contract already had the field |
+
+Finding 1 is the one to keep. It was invisible to 300 passing tests because the tests checked
+the *verdict* and the *status*, and the contradiction lived in a free-text field that only a
+reader of the report would see. The lesson is narrow and worth recording: whenever a decision and
+its justification are stored separately, something must check that they agree.
+
+**What is proven now.** A real APK produces a 4.6 KB Markdown report with eight sections and a final state of `CLOSED` / `completed`, an
+evidence index of hashes, and a "not determined" section that names what was left open; the War
+Room serves that scan list and those findings from `/api/v1` alone; and the benchmark harness
+drives the real pipeline end to end (upload → RECON → NEXUS) and reports `measured: false` when
+it has no corpus.
+
+**Still unproven.** No labelled corpus exists, so **precision and recall are unmeasured** - the
+harness is machinery without samples. No true positive on real code. The UI has no browser test
+(no Playwright in this environment), so its rendering is asserted at the HTML level only, not by
+clicking it. No model, no dynamic analysis, no Postgres trigger.
+
+---
+
 ## 2026-11-15 · RL-007 · NEXUS — the FSM and the scorer caught two of the three bugs
 
 **Scope:** frontier-driven dispatch loop, `POST /scans/{id}/nexus`, `services/state.py`.

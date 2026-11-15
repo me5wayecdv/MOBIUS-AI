@@ -43,6 +43,14 @@ explains intent; the generated schema is normative. Any divergence is a bug.
 | `IDEMPOTENCY_CONFLICT` | 409 | Same key, different body |
 | `CODE_INDEX_FAILED` | 422 | The APK has no readable `classes.dex`, or androguard could not parse it |
 
+## 2a. War Room
+
+`GET /ui` serves the War Room as one HTML document (no build step, no framework). It reads
+`/api/v1` exclusively: the scan list, the selected scan, RECON's surface, findings with their gate
+evidence, the event log replayed from `GET /scans/{id}/events`, and a link to the stored report.
+`GET /` redirects to `/ui`. Every panel has an empty state that says the data is absent rather
+than filling the space.
+
 ## 3. Endpoints
 
 ### 3.1 Applications
@@ -116,6 +124,11 @@ formality, they are the audit record.
 { "id": "scn_01J8ZR4M2P", "state": "INTAKE", "application_id": "app_01J8ZQ3K7Y", "intensity": 1 }
 ```
 Errors: `AUTH_REQUIRED`, `INTENSITY_NOT_GRANTED`, `APK_DUPLICATE` (n/a here).
+
+#### `GET /scans`
+Investigations, newest first (`?limit=50`, max 200). Returns `{items: [...], count}` with
+`id, state, objective, intensity, stop_reason, application_id, created_at`. Exists so a client can
+find a scan without being told its id — a UI that hardcodes one is a demo, not a product.
 
 #### `POST /scans/{id}/pause` · `/resume` · `/cancel`
 All three are idempotent and return `{state, paused}`. `pause` sets `paused_at`/`paused_by` and leaves
@@ -235,6 +248,29 @@ rejected rather than silently doing nothing.
 Once the scan is `CLOSED`, both `/spectre` and `/nexus` return `SCAN_STATE_CONFLICT`. Recovery
 is a new investigation, not a retry: re-running would append a second finding for the same
 component and the evidence log would claim the analysis happened twice.
+
+#### `POST /scans/{id}/report` · `GET /scans/{id}/report`
+Writes the investigation report and reads it back.
+
+The report is **generated from stored rows**, never authored: scope and authorisation, outcome
+counts, confirmed findings with their gate evidence, rejected hypotheses with their reasons, a
+"Not determined" section listing findings in manual review / observations whose reachability was
+never established / frontier entries that never ran, the method and its limitations, an evidence
+index with SHA-256 prefixes, and an event summary. It is stored as `EvidenceKind.REPORT` and
+content-addressed, so the document a reader downloads is the one the scan produced.
+
+```
+POST /scans/{id}/report   -> {"evidence_id", "sha256", "byte_size", "generated_at",
+                              "markdown", "duplicate"}
+GET  /scans/{id}/report   -> text/markdown; charset=utf-8
+```
+
+`404` if no report has been written. Writing a second report produces a second document: the
+first write appends `report_written` (and evidence) to the investigation, so the second is built
+from a state that includes the first.
+
+NEXUS writes a report automatically during `REPORTING`, before closing the scan. If report
+generation fails the scan still closes, and `report_failed` is recorded.
 
 #### `GET /scans/{id}/stream` (SSE)
 `text/event-stream`. Replays from `?after=<seq>` or the `Last-Event-ID` header, then follows.

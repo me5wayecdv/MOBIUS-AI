@@ -147,3 +147,25 @@ def test_unknown_category_raises_rather_than_confirming(session, scan_id):
 
     with pytest.raises(gates.UnknownGate):
         _validate(session, scan_id, category="invented-category")
+
+
+def test_a_decisive_failure_is_not_described_as_a_deferral(session, scan_id):
+    """Regression from a generated report: the verdict said `rejected`, the rationale said
+    "could not be decided". Both were stored in the same row, and only a reader noticed."""
+    finding, verdict = _validate(
+        session,
+        scan_id,
+        attributes={
+            "exported": True,
+            "permission": None,
+            "sink_reachable": False,  # decisive: refutes the hypothesis
+            "caller_check_absent": None,  # never established
+        },
+    )
+
+    row = session.get(VerdictRow, verdict.id)
+    assert verdict.verdict.value == "rejected"
+    assert "refuted" in row.rationale
+    assert "could not be decided" not in row.rationale
+    # ...and it still admits what was never established.
+    assert "never established" in row.rationale

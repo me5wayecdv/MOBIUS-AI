@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MOBIUS — War Room</title>
+<style>
+  :root { color-scheme: dark; --bg:#0e1116; --panel:#161b22; --line:#232b36; --ink:#d7dee8;
+          --dim:#8b98a9; --ok:#2ea043; --warn:#d29922; --bad:#da3633; --accent:#388bfd; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+         background:var(--bg); color:var(--ink); }
+  header { display:flex; gap:16px; align-items:baseline; padding:14px 20px;
+           border-bottom:1px solid var(--line); background:var(--panel); }
+  header h1 { font-size:15px; margin:0; letter-spacing:.08em; }
+  header .meta { color:var(--dim); font-size:12px; }
+  main { display:grid; grid-template-columns: 300px 1fr; height: calc(100vh - 53px); }
+  aside { border-right:1px solid var(--line); overflow:auto; }
+  section { padding:16px 20px; }
+  h2 { font-size:12px; letter-spacing:.12em; color:var(--dim); margin:18px 0 8px; }
+  .scan { display:block; width:100%; text-align:left; background:none; border:0;
+          border-bottom:1px solid var(--line); color:inherit; font:inherit; padding:10px 14px;
+          cursor:pointer; }
+  .scan:hover { background:#1b2230; }
+  .scan[aria-current="true"] { background:#1f2937; border-left:2px solid var(--accent); }
+  .id { color:var(--dim); font-size:11px; }
+  .row { display:flex; justify-content:space-between; gap:12px; padding:3px 0; }
+  .row span:last-child { color:#fff; }
+  .pill { display:inline-block; padding:1px 8px; border-radius:10px; font-size:11px;
+          border:1px solid var(--line); }
+  .confirmed { color:var(--ok); border-color:var(--ok); }
+  .rejected { color:var(--dim); }
+  .manual { color:var(--warn); border-color:var(--warn); }
+  table { width:100%; border-collapse:collapse; font-size:13px; }
+  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line);
+           vertical-align:top; }
+  th { color:var(--dim); font-weight:normal; font-size:11px; letter-spacing:.08em; }
+  .empty { color:var(--dim); font-style:italic; }
+  .events { max-height:38vh; overflow:auto; border:1px solid var(--line); background:#0b0f14; }
+  .event { padding:3px 10px; border-bottom:1px solid #131922; font-size:12px; }
+  .event b { color:var(--accent); font-weight:normal; }
+  .tools { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
+  button.act { background:#1f6feb22; border:1px solid #1f6feb66; color:#9ecbff;
+               padding:6px 12px; border-radius:6px; font:inherit; cursor:pointer; }
+  button.act:disabled { opacity:.45; cursor:not-allowed; }
+  a { color:var(--accent); }
+  .banner { padding:8px 20px; background:#2d1d00; color:#e6c07b; font-size:12px;
+            border-bottom:1px solid #4a3410; }
+</style>
+</head>
+<body>
+<header>
+  <h1>MOBIUS · WAR ROOM</h1>
+  <span class="meta" id="health">connecting…</span>
+  <span class="meta" id="live"></span>
+</header>
+<div class="banner">
+  Every value on this page is read from the API. There is no demo data, no placeholder
+  finding and no simulated event — an empty panel means the scan genuinely has nothing there.
+</div>
+<main>
+  <aside>
+    <section>
+      <h2>INVESTIGATIONS</h2>
+      <div id="scans"><p class="empty">no scans yet</p></div>
+    </section>
+  </aside>
+  <div style="overflow:auto">
+    <section>
+      <h2>SELECTED SCAN</h2>
+      <div id="scan"><p class="empty">select an investigation</p></div>
+      <div class="tools" id="actions"></div>
+    </section>
+    <section>
+      <h2>SURFACE — WHAT RECON SAW IN THE MANIFEST</h2>
+      <div id="surface"><p class="empty">no analysis yet</p></div>
+    </section>
+    <section>
+      <h2>FINDINGS AND VERDICTS</h2>
+      <div id="findings"><p class="empty">no findings</p></div>
+    </section>
+    <section>
+      <h2>LIVE EVENTS — REPLAYED FROM THE EVENT STORE</h2>
+      <div class="events" id="events"><p class="events"><span class="empty">no events</span></p></div>
+    </section>
+  </div>
+</main>
+<script>
+const API = "/api/v1";
+let current = null;
+let stream = null;
+
+const el = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) =>
+  ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const empty = (t) => `<p class="empty">${esc(t)}</p>`;
+
+async function get(path) {
+  const r = await fetch(API + path, {headers: {"Accept": "application/json"}});
+  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+  return r.json();
+}
+
+async function act(path, method = "POST") {
+  const r = await fetch(API + path, {method});
+  if (!r.ok) {
+    const body = await r.text();
+    el("events").insertAdjacentHTML("afterbegin",
+      `<div class="event"><b>request failed</b> ${esc(method)} ${esc(path)} — ${esc(body)}</div>`);
+    return null;
+  }
+  return r.json();
+}
+
+async function boot() {
+  try {
+    const h = await get("/health");
+    const tools = Object.entries(h.tools || {})
+      .map(([k, v]) => `${k}:${v ? "yes" : "no"}`).join(" · ");
+    el("health").textContent = `env ${h.env} · auth ${h.auth} · ${tools}`;
+  } catch (e) { el("health").textContent = "API unreachable"; }
+
+  try {
+    const scans = await get("/scans");
+    const items = scans.items || [];
+    if (!items.length) return;
+    el("scans").innerHTML = items.map((s) => `
+      <button class="scan" data-id="${esc(s.id)}" aria-current="false">
+        <div>${esc(s.state)} <span class="id">${esc(s.id.slice(-6))}</span></div>
+        <div class="id">${esc(s.objective || "").slice(0, 44)}</div>
+      </button>`).join("");
+    document.querySelectorAll(".scan").forEach((b) =>
+      b.addEventListener("click", () => select(b.dataset.id)));
+    select(items[0].id);
+  } catch (e) { el("scans").innerHTML = empty("could not list scans: " + e.message); }
+}
+
+async function select(id) {
+  current = id;
+  document.querySelectorAll(".scan").forEach((b) =>
+    b.setAttribute("aria-current", String(b.dataset.id === id)));
+  await render();
+  openStream(id);
+}
+
+async function render() {
+  if (!current) return;
+  try {
+    const s = await get(`/scans/${current}`);
+    el("scan").innerHTML = `
+      <div class="row"><span>id</span><span>${esc(s.id)}</span></div>
+      <div class="row"><span>state</span><span>${esc(s.state)}</span></div>
+      <div class="row"><span>objective</span><span>${esc(s.objective)}</span></div>
+      <div class="row"><span>intensity</span><span>${esc(s.intensity)}</span></div>
+      <div class="row"><span>stop reason</span><span>${esc(s.stop_reason ?? "—")}</span></div>`;
+    el("actions").innerHTML = `
+      <button class="act" data-act="recon">run RECON</button>
+      <button class="act" data-act="nexus">run NEXUS</button>
+      <button class="act" data-act="report">write report</button>
+      <a href="${API}/scans/${encodeURIComponent(current)}/report" target="_blank"
+         rel="noreferrer">open report (markdown)</a>`;
+    document.querySelectorAll("button.act").forEach((b) =>
+      b.addEventListener("click", async () => {
+        b.disabled = true;
+        await act(`/scans/${current}/${b.dataset.act}`);
+        b.disabled = false;
+        await render();
+      }));
+  } catch (e) { el("scan").innerHTML = empty("could not read scan: " + e.message); }
+
+  try {
+    const surface = await get(`/scans/${current}/surface`);
+    const obs = surface.observations || [];
+    el("surface").innerHTML = obs.length ? `<table><thead><tr>
+      <th>SUBJECT</th><th>KIND</th><th>EXPORTED</th><th>PERMISSION</th><th>STATEMENT</th>
+      </tr></thead><tbody>${obs.map((o) => `<tr>
+      <td>${esc(o.subject_ref)}</td><td>${esc(o.attributes?.kind ?? o.subject_type)}</td>
+      <td>${esc(o.attributes?.exported)}</td><td>${esc(o.attributes?.permission ?? "none")}</td>
+      <td>${esc(o.statement)}</td></tr>`).join("")}</tbody></table>`
+      : empty("RECON has not run for this scan");
+  } catch (e) {
+    el("surface").innerHTML = empty(e.message.includes("409")
+      ? "RECON has not run for this scan" : "could not read surface: " + e.message);
+  }
+
+  try {
+    const findings = (await get(`/scans/${current}/findings`)).items || [];
+    el("findings").innerHTML = findings.length ? `<table><thead><tr>
+      <th>STATUS</th><th>FINDING</th><th>CONFIDENCE</th><th>GATE EVIDENCE</th>
+      </tr></thead><tbody>${findings.map((f) => `<tr>
+      <td><span class="pill ${esc(f.status === "manual_review_required" ? "manual" : f.status)}">
+      ${esc(f.status)}</span></td>
+      <td>${esc(f.title)}<div class="id">${esc(f.severity)} · ${esc(f.maswe.join(", "))}</div></td>
+      <td>${esc(f.confidence)}</td>
+      <td class="id">${Object.entries(f.gate_evidence || {})
+        .map(([k, v]) => `${esc(k)}=${v === null ? "∅" : esc(v)}`).join(" ")}</td>
+      </tr>`).join("")}</tbody></table>`
+      : empty("no finding has been produced for this scan");
+  } catch (e) { el("findings").innerHTML = empty("could not read findings: " + e.message); }
+}
+
+async function loadEvents(id) {
+  // Rendered from the store, not from a hardcoded list of listeners: an event type this
+  // page has never heard of still appears, because dropping it would be the UI deciding
+  // what happened.
+  try {
+    const body = await get(`/scans/${id}/events?limit=200`);
+    const items = body.items || [];
+    el("events").innerHTML = items.length
+      ? items.map((e) => `<div class="event"><span class="id">#${esc(e.seq)}</span>
+          <b>${esc(e.type)}</b> ${esc(JSON.stringify(e.payload))}</div>`).join("")
+      : empty("this scan has emitted no events");
+    return body.current_seq || 0;
+  } catch (e) {
+    el("events").innerHTML = empty("could not read the event log: " + e.message);
+    return 0;
+  }
+}
+
+async function openStream(id) {
+  if (stream) stream.close();
+  el("events").innerHTML = "";
+  await loadEvents(id);
+  stream = new EventSource(`${API}/scans/${id}/stream?after=0`);
+  const types = ["investigation_started", "investigation_updated", "evidence_collected",
+    "surface_ready", "nexus_started", "frontier_dispatched", "frontier_dropped",
+    "validation_started", "finding_created", "finding_confirmed", "finding_rejected",
+    "code_analysis_complete", "nexus_complete", "report_written", "report_failed",
+    "stream_end"];
+  types.forEach((t) => stream.addEventListener(t, (ev) => {
+    el("events").insertAdjacentHTML("afterbegin",
+      `<div class="event"><b>${esc(ev.type)}</b> ${esc(ev.data)}</div>`);
+  }));
+  stream.onerror = () => { el("live").textContent = "stream closed"; };
+}
+
+boot();
+</script>
+</body>
+</html>

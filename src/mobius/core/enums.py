@@ -79,6 +79,7 @@ class EvidenceKind(StrEnum):
     CONFIG = "config"
     CERTIFICATE = "certificate"
     SCREENSHOT = "screenshot"
+    REPORT = "report"
 
 
 class Severity(StrEnum):
