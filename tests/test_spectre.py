@@ -16,7 +16,7 @@ from __future__ import annotations
 import pytest
 
 from conftest import make_apk
-from mobius.adapters.dex import CodeIndex
+from mobius.adapters.dex import CodeIndex, DexCoverage
 from mobius.adapters.events import SqlEventStore
 from mobius.adapters.models import FindingRow, FrontierEntryRow, ObservationRow, VerdictRow
 from mobius.core.enums import FindingStatus, InvestigationState, RejectionReason, Verdict
@@ -51,7 +51,8 @@ def _index(*, guarded: bool = False, truncated: bool = False, has_entry: bool = 
     root = MethodRef(CLS, "onCreate")
     writer = MethodRef(CLS, "writeSecret")
     if not has_entry:
-        return CodeIndex(graph=CallGraph(edges={}), boundary={}, classes=(CLS,), methods=0)
+        return CodeIndex(graph=CallGraph(edges={}), boundary={}, classes=(CLS,), methods=0,
+                         dex_coverage=(DexCoverage("fixture.dex", "indexed", 1),))
     if not has_sink:
         boundary = {}
     else:
@@ -62,6 +63,7 @@ def _index(*, guarded: bool = False, truncated: bool = False, has_entry: bool = 
         classes=(CLS,),
         methods=2,
         truncated=truncated,
+        dex_coverage=(DexCoverage("fixture.dex", "truncated" if truncated else "indexed", 1),),
     )
 
 
