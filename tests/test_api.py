@@ -565,3 +565,23 @@ def test_isolated_recon_job_is_queued_polled_and_applied(client, ctx):
 
     duplicate = client.post(f"/api/v1/scans/{scan['id']}/recon/jobs/{job_id}/apply")
     assert duplicate.status_code == 409
+
+
+
+def test_spectre_and_nexus_are_blocked_outside_test_without_isolated_dex_worker(client, ctx):
+    app = _upload(client).json()
+    auth = _authorize(client, app["sha256"]).json()
+    scan = _scan(client, app["id"], auth["id"]).json()
+    assert client.post(f"/api/v1/scans/{scan['id']}/recon").status_code == 200
+
+    # The test fixture normally enables inline execution. Simulate a shared development
+    # API: neither direct SPECTRE nor NEXUS may parse attacker-supplied DEX in-process.
+    from dataclasses import replace
+    ctx.settings = replace(ctx.settings, env="development")
+    spectre = client.post(f"/api/v1/scans/{scan['id']}/spectre")
+    nexus = client.post(f"/api/v1/scans/{scan['id']}/nexus")
+
+    assert spectre.status_code == 503
+    assert "isolated DEX worker" in spectre.json()["detail"]
+    assert nexus.status_code == 503
+    assert "isolated DEX worker" in nexus.json()["detail"]

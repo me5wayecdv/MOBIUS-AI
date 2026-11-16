@@ -506,6 +506,15 @@ def run_spectre(scan_id: str, session=Depends(_session), who: str = Depends(anal
     with the reachability status and the verdict it produced.
     """
     ctx = get_context()
+    inline_allowed = ctx.settings.env.lower() == "test" or os.environ.get("MOBIUS_SPECTRE_INLINE") == "1"
+    if not inline_allowed:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "in-process SPECTRE is disabled because DEX parsing handles untrusted APK bytes; "
+                "an isolated DEX worker is required (MOBIUS_SPECTRE_INLINE=1 is local-development-only)"
+            ),
+        )
     return SpectreService(session, ctx.store).analyse(scan_id)
 
 
@@ -524,6 +533,15 @@ def run_nexus(
     investigation even when the budget stops it early. No model is called.
     """
     ctx = get_context()
+    inline_allowed = ctx.settings.env.lower() == "test" or os.environ.get("MOBIUS_SPECTRE_INLINE") == "1"
+    if not inline_allowed:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "NEXUS is disabled outside test/local development until its SPECTRE DEX-analysis "
+                "step runs through the isolated DEX worker (MOBIUS_SPECTRE_INLINE=1 is local-development-only)"
+            ),
+        )
     return NexusService(session, ctx.store).run(scan_id, max_steps=max_steps)
 
 

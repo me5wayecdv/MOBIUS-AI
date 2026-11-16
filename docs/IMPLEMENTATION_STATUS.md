@@ -145,6 +145,8 @@ Investigation reads and mutations are now scoped to `created_by`, and list endpo
 
 APK HTTP uploads now have a pre-parser ASGI body cap, including chunked requests, with disk spooling after 8 MiB. Reverse-proxy limits, request timeouts/concurrency controls, and isolated APK parsing remain required.
 
+In-process SPECTRE and NEXUS API execution are now disabled outside test/local development because SPECTRE parses untrusted DEX bytes inside the API process. Set `MOBIUS_SPECTRE_INLINE=1` only for isolated local development. The isolated RECON worker currently handles the manifest only; DEX indexing still needs its own worker job/image before SPECTRE can be enabled in a shared environment. Regression coverage exercises both API gates. The initial PR #30 test run exposed an immutable-settings fixture error and then an assertion wording mismatch; both were corrected on the PR branch. Final verification is against the latest branch HEAD.
+
 
 ## Isolated RECON worker
 
