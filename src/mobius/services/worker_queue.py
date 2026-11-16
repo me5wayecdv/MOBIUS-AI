@@ -42,6 +42,16 @@ class WorkerQueue:
             raise ScanStateConflict("APK authorization is no longer valid for this artifact")
         if artifact_key != application.artifact_key:
             raise ScanStateConflict("worker job artifact does not match the investigation APK")
+        active = self.session.execute(
+            select(WorkerJobRow).where(
+                WorkerJobRow.investigation_id == investigation_id,
+                WorkerJobRow.kind == "recon_manifest",
+                WorkerJobRow.status.in_(("queued", "running", "succeeded")),
+                WorkerJobRow.applied_at.is_(None),
+            ).limit(1)
+        ).scalar_one_or_none()
+        if active is not None:
+            raise ScanStateConflict(f"RECON worker job {active.id} is already active or awaiting application")
         job = WorkerJobRow(
             id=str(uuid4()),
             investigation_id=investigation_id,
