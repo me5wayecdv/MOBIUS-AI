@@ -25,12 +25,12 @@ def test_registry_rejects_unregistered_or_arbitrary_actions(action):
 def test_registry_accepts_known_component_action_and_returns_validated_args():
     spec, args = ActionRegistry().validate(
         "find_api_refs",
-        {"component": "com.example.Entry$Nested"},
+        {"component": "com.example.Entry$Nested", "source": "manifest"},
         required_agent="SPECTRE",
         intensity=0,
     )
     assert spec.agent == "SPECTRE"
-    assert args == {"component": "com.example.Entry$Nested"}
+    assert args == {"component": "com.example.Entry$Nested", "source": "manifest"}
 
 
 @pytest.mark.parametrize(
