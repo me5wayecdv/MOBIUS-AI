@@ -6,9 +6,10 @@ multipart form data. For requests without Content-Length, it bounds the received
 consuming chunks and returns HTTP 413 when the cap is crossed. The cap is the service APK
 limit (200 MiB) plus 1 MiB for multipart framing and headers.
 
-The middleware buffers only bounded request chunks and replays those same chunks to
-FastAPI after the complete body has passed the limit. It does not concatenate a second
-full-size copy of the upload.
+The middleware spools bounded request data to a temporary file, retaining at most 8 MiB
+in memory before rolling over to disk. It replays the bounded body to FastAPI after the
+complete request has passed the limit, and closes the temporary file even if downstream
+processing fails.
 
 This is an application-level guard, not a replacement for a reverse-proxy or ingress body
 limit. Deployments should set an equal or lower cap at the edge, enforce request timeouts,
