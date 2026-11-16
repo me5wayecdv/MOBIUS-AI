@@ -42,6 +42,7 @@ def test_multiple_calls_share_one_cumulative_investigation_budget(
     session, store, future_iso
 ):
     scan_id = _create_scan(session, store, future_iso, max_tokens=100)
+    session.commit()
     ledger = InvestigationTokenBudget(sessionmaker(bind=session.get_bind(), expire_on_commit=False, future=True))
 
     first = ledger.reserve(scan_id, 60)
