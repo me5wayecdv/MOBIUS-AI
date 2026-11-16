@@ -166,7 +166,7 @@ class ModelGateway:
             raise ModelConsentRequired(
                 f"investigation consent must explicitly name provider {self.provider.name!r}"
             )
-        if remaining_tokens < 0:
+        if remaining_tokens <= 0:
             raise ModelBudgetExceeded("model token budget is exhausted")
         result = self.provider.complete_json(
             model=self.model,
@@ -175,8 +175,12 @@ class ModelGateway:
             response_schema=output_model.model_json_schema(),
             timeout_seconds=self.timeout_seconds,
         )
-        used = (result.prompt_tokens or 0) + (result.completion_tokens or 0)
-        if used and used > remaining_tokens:
+        if result.prompt_tokens is None or result.completion_tokens is None:
+            raise ModelBudgetExceeded(
+                "provider did not report token usage; cannot enforce the investigation budget"
+            )
+        used = result.prompt_tokens + result.completion_tokens
+        if used > remaining_tokens:
             raise ModelBudgetExceeded(
                 f"provider used {used} tokens but only {remaining_tokens} remained"
             )
