@@ -40,8 +40,8 @@
 |---|---|---|---|---|
 | D-020 | Model provider abstraction + structured output validation | M1 | [~] | Local Ollama and deterministic mock share the core ModelGateway port; consent, JSON Schema validation and token accounting are tested. Live Ollama execution and NEXUS integration remain |
 | D-021 | Evidence package builder for targeted code context | M1 + M2 | [~] | PR #34 merged with bounded component-scoped observations, method/caller references, sink/guard references, findings and evidence provenance. Actual decompiled source snippets remain blocked on D-012/JADX; do not mark complete until included and tested |
-| D-022 | NEXUS hypothesis generation | M1 | [~] | Structured model-backed hypotheses cite only packaged observation IDs and declare required evidence; deterministic fallback remains default and explicitly labelled. No tool dispatch or PoC execution from model output. CI verification pending |
-| D-023 | Typed action registry and policy validation | M1 | [ ] | Model cannot dispatch arbitrary commands, targets or tools |
+| D-022 | NEXUS hypothesis generation | M1 | [~] | PR #35 merged; Python 3.11/3.12 CI green. Structured model-backed hypotheses cite only packaged observation IDs and declare required evidence; deterministic fallback remains default and explicitly labelled. No tool dispatch or PoC execution from model output. Real Ollama run/model quality benchmark remains unverified |
+| D-023 | Typed action registry and policy validation | M1 | [~] | Closed SPECTRE action allowlist, strict Pydantic argument schemas, agent/intensity checks and API schema discovery added on PR #36; CI pending |
 | D-024 | Adaptive re-planning loop | M1 | [ ] | New tool result changes next action in a fixed integration test |
 | D-025 | Persist model/provider/version, prompt version and decisions | M1 | [ ] | Investigation is auditable and replayable |
 | D-026 | Independent VERITAS review | M1 + M5 | [ ] | Separate reviewer execution challenges claim; gates remain final authority |
