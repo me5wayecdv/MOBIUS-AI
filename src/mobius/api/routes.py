@@ -370,6 +370,14 @@ def set_model_consent(
     return {"investigation_id": scan_id, "llm_data_sharing": scan.llm_data_sharing}
 
 
+@router.get("/nexus/actions", tags=["nexus"])
+def list_nexus_actions():
+    """Expose the closed, server-owned action registry for client inspection."""
+    from ..core.actions import ActionRegistry
+
+    return {"items": ActionRegistry().describe()}
+
+
 @router.post("/scans/{scan_id}/nexus/hypotheses", tags=["nexus"])
 def generate_nexus_hypotheses(
     scan_id: str,

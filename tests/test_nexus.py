@@ -366,3 +366,37 @@ def test_no_analysis_marker_is_emitted_when_nothing_was_dispatched(session, stor
     ]
     # SPECTRE emitted one itself; NEXUS must not add a second.
     assert nexus_scan_events.count("code_analysis_complete") == 1
+
+
+
+def test_nexus_drops_known_action_with_unregistered_arguments(
+    session, store, future_iso
+):
+    scan = _scan(session, store, future_iso)
+    session.add(
+        FrontierEntryRow(
+            id=new_id(IdPrefix.FRONTIER),
+            investigation_id=scan,
+            action="find_api_refs",
+            action_args={"component": EXPORT, "command": "id"},
+            required_agent="SPECTRE",
+            relates_to_maswe=["MASWE-0001"],
+            score=1.0,
+            depth=0,
+            state="queued",
+            attempts=0,
+            inserted_at="2026-11-15T00:00:02Z",
+        )
+    )
+    session.flush()
+
+    result = _nexus(session, store, _index()).run(scan)
+
+    rejected = [
+        step for step in result["steps"]
+        if step["disposition"] == "dropped"
+        and "action policy rejected dispatch" in (step["reason"] or "")
+    ]
+    assert len(rejected) == 1
+    assert "Extra inputs are not permitted" in rejected[0]["reason"]
+    assert result["dispatched"] == 2

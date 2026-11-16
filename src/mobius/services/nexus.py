@@ -32,6 +32,7 @@ from sqlalchemy.orm import Session
 from ..adapters.events import SqlEventStore
 from ..adapters.models import FrontierEntryRow, InvestigationRow
 from ..core import frontier
+from ..core.actions import ActionRegistry, ActionRejected
 from ..core.enums import FindingStatus, InvestigationState, StopReason
 from ..core.schemas import FrontierEntry
 from .archivist import ArchivistService
@@ -91,12 +92,14 @@ class NexusService:
         spectre: SpectreService | None = None,
         max_steps: int = DEFAULT_MAX_STEPS,
         max_depth: int = DEFAULT_MAX_DEPTH,
+        action_registry: ActionRegistry | None = None,
     ) -> None:
         self._session = session
         self._store = store
         self._spectre = spectre or SpectreService(session, store)
         self._max_steps = max_steps
         self._max_depth = max_depth
+        self._action_registry = action_registry or ActionRegistry()
 
     def run(self, investigation_id: str, *, max_steps: int | None = None) -> dict[str, object]:
         """Drive the investigation from the frontier to CLOSED.
@@ -364,6 +367,17 @@ class NexusService:
                 agent, f"no executor is registered for {agent}/{entry.action}"
             )
             return self._drop(entry, reason), None
+
+        try:
+            _spec, validated_args = self._action_registry.validate(
+                entry.action,
+                entry.action_args or {},
+                required_agent=agent,
+                intensity=row.intensity,
+            )
+        except ActionRejected as exc:
+            return self._drop(entry, f"action policy rejected dispatch: {exc}"), None
+        entry.action_args = validated_args
 
         if index is None or evidence_id is None:
             # Arrived already in CORRELATING: the graph was built by an earlier call and is
