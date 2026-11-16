@@ -107,7 +107,7 @@ def test_nexus_dispatches_every_candidate_and_closes(session, store, future_iso)
     result = _nexus(session, store, _index()).run(scan)
 
     assert result["candidates"] == 2
-    assert result["dispatched"] == 2
+    assert result["dispatched"] == 3  # two component checks plus one adaptive callers_of action
     assert result["dropped"] == 0
     assert result["remaining"] == 0
     assert result["stop_reason"] == "completed"
@@ -130,8 +130,9 @@ def test_every_dispatched_entry_is_marked_done_with_one_attempt(session, store, 
     entries = (
         session.query(FrontierEntryRow).filter_by(investigation_id=scan).all()
     )
-    assert len(entries) == 2
+    assert len(entries) == 3
     assert {e.state for e in entries} == {"done"}
+    assert sum(1 for e in entries if e.action == "callers_of") == 1
     assert {e.attempts for e in entries} == {1}
 
 
@@ -400,3 +401,49 @@ def test_nexus_drops_known_action_with_unregistered_arguments(
     assert len(rejected) == 1
     assert "Extra inputs are not permitted" in rejected[0]["reason"]
     assert result["dispatched"] == 2
+
+
+
+def test_reachable_sink_result_changes_next_action_to_direct_caller_inspection(
+    session, store, future_iso
+):
+    from mobius.adapters.models import DecisionRow, EventRow, ObservationRow
+
+    scan = _scan(session, store, future_iso)
+    result = _nexus(session, store, _index()).run(scan)
+
+    assert result["dispatched"] == 3
+    caller_steps = [step for step in result["steps"] if step["action"] == "callers_of"]
+    assert len(caller_steps) == 1
+    caller_rows = (
+        session.query(FrontierEntryRow)
+        .filter_by(investigation_id=scan, action="callers_of", state="done")
+        .all()
+    )
+    assert len(caller_rows) == 1
+    assert caller_rows[0].action_args["target_class"] == EXPORT
+    assert caller_rows[0].action_args["target_method"] == "onCreate"
+
+    decisions = (
+        session.query(DecisionRow)
+        .filter_by(investigation_id=scan, action="adaptive_replan")
+        .all()
+    )
+    assert len(decisions) == 1
+    assert decisions[0].prompt_version == "nexus-adaptive-replan-v1-deterministic"
+
+    events = (
+        session.query(EventRow)
+        .filter_by(investigation_id=scan, type="nexus_replanned")
+        .all()
+    )
+    assert len(events) == 1
+    assert events[0].payload["next_action"] == "callers_of"
+
+    observation = (
+        session.query(ObservationRow)
+        .filter_by(investigation_id=scan, subject_type="method")
+        .one()
+    )
+    assert observation.attributes["target_present"] is True
+    assert observation.attributes["exhaustive"] is True
