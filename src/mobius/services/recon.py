@@ -46,7 +46,7 @@ class ReconService:
         self._store = store
         self._evidence = EvidenceService(session, store)
 
-    def run(self, investigation_id: str) -> dict[str, object]:
+    def run(self, investigation_id: str, *, manifest_xml: bytes | None = None) -> dict[str, object]:
         row = self._session.get(InvestigationRow, investigation_id)
         if row is None:
             raise NotFound(f"investigation {investigation_id} not found")
@@ -60,7 +60,7 @@ class ReconService:
         if application is None:  # pragma: no cover - FK makes this unreachable
             raise NotFound(f"application {row.application_id} not found")
 
-        surface, manifest_xml = self._load_surface(application)
+        surface, manifest_xml = self._load_surface(application, manifest_xml_override=manifest_xml)
 
         # The authorization form's package name is an assertion, not proof. Bind it to
         # the package parsed from the exact APK bytes before recording a usable surface.
@@ -180,18 +180,18 @@ class ReconService:
 
     # -- internals -----------------------------------------------------------------
 
-    def _load_surface(self, application: ApplicationRow) -> tuple[ManifestSurface, bytes]:
+    def _load_surface(
+        self, application: ApplicationRow, *, manifest_xml_override: bytes | None = None
+    ) -> tuple[ManifestSurface, bytes]:
         try:
-            apk = self._store.get(application.artifact_key)
-        except (FileNotFoundError, OSError) as exc:
-            raise ManifestInvalid(
-                f"artefact {application.artifact_key} is missing from storage; "
-                "re-upload the APK before running RECON"
-            ) from exc
-        try:
-            raw = extract_manifest_bytes(apk)
-            binary = is_binary_axml(raw)
-            manifest_xml = to_text_xml(raw)
+            if manifest_xml_override is None:
+                apk = self._store.get(application.artifact_key)
+                raw = extract_manifest_bytes(apk)
+                binary = is_binary_axml(raw)
+                manifest_xml = to_text_xml(raw)
+            else:
+                manifest_xml = manifest_xml_override
+                binary = True
             surface = parse_surface(manifest_xml, decoded_from_binary=binary)
         except ManifestParseError as exc:
             raise ManifestInvalid(str(exc)) from exc
