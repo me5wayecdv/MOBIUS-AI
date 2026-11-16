@@ -27,6 +27,7 @@ from .schemas import (
     PauseRequest,
     ScanCreate,
     ValidationRequest,
+    ModelConsentRequest,
 )
 
 router = APIRouter()
@@ -178,6 +179,11 @@ def create_scan(
     session=Depends(_session),
     who: str = Depends(analyst_id),
 ):
+    if payload.llm_data_sharing:
+        raise HTTPException(
+            status_code=422,
+            detail="model consent must be granted explicitly after scan creation via PUT /scans/{scan_id}/model-consent with provider=ollama",
+        )
     ctx = get_context()
     from ..core.schemas import Budget
 
@@ -334,6 +340,53 @@ def get_evidence(scan_id: str, session=Depends(_session), who: str = Depends(ana
             for e in items
         ]
     }
+
+
+@router.put("/scans/{scan_id}/model-consent", tags=["scans"])
+def set_model_consent(
+    scan_id: str,
+    payload: ModelConsentRequest,
+    session=Depends(_session),
+    who: str = Depends(analyst_id),
+):
+    """Record explicit, revocable per-investigation consent for local model processing."""
+    scan = _require_scan_owner(session, scan_id, who)
+    if payload.enabled and payload.provider != "ollama":
+        from ..services.errors import ScanStateConflict
+        raise ScanStateConflict("enabled model consent must explicitly name the local ollama provider")
+    if not payload.enabled and payload.provider is not None:
+        from ..services.errors import ScanStateConflict
+        raise ScanStateConflict("disabled model consent must not name a provider")
+    scan.llm_data_sharing = {
+        "enabled": payload.enabled,
+        "provider": payload.provider if payload.enabled else None,
+    }
+    SqlEventStore(session).emit(
+        scan_id,
+        "model_consent_updated",
+        {"enabled": payload.enabled, "provider": payload.provider if payload.enabled else None},
+        actor=who,
+    )
+    return {"investigation_id": scan_id, "llm_data_sharing": scan.llm_data_sharing}
+
+
+@router.post("/scans/{scan_id}/nexus/hypotheses", tags=["nexus"])
+def generate_nexus_hypotheses(
+    scan_id: str,
+    component: str | None = Query(default=None, max_length=500),
+    session=Depends(_session),
+    who: str = Depends(analyst_id),
+):
+    """Generate testable hypotheses; model use is consent-gated and budgeted cumulatively."""
+    _require_scan_owner(session, scan_id, who)
+    ctx = get_context()
+    from ..services.nexus_hypotheses import NexusHypothesisService
+
+    return NexusHypothesisService(
+        session,
+        gateway=ctx.model_gateway,
+        session_factory=ctx.session_factory,
+    ).generate(scan_id, component=component)
 
 
 @router.get("/scans/{scan_id}/evidence-package", tags=["scans"])

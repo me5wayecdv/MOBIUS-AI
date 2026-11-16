@@ -52,3 +52,8 @@ APK-derived text is untrusted input. Prompts must explicitly tell the model not 
 - CI does not require an Ollama daemon and does not claim model-quality measurements.
 - No real Ollama server call, NEXUS planner call, prompt version persistence, retry/repair loop, cache, or model benchmark is implemented by this slice.
 - Model calls remain absent from the default scan pipeline until the NEXUS reasoning slice is merged.
+
+
+## Investigation integration update
+
+All investigation-scoped model calls must use `InvestigationModelGateway` with the investigation ID and session factory. It reads live consent on every call and reserves a conservative token ceiling against the investigation's cumulative budget under a database row/write lock before contacting the provider. Measured usage is reconciled to `used_json.model_tokens`; ambiguous provider failures and missing usage consume the full reservation and fail closed. Do not use `with_consent(... remaining_tokens=...)` as an investigation integration because that API represents a per-instance snapshot and is retained only for isolated adapter tests/compatibility. See `INVESTIGATION_MODEL_BUDGET.md`.

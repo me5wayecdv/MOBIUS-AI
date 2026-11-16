@@ -59,3 +59,9 @@ class ValidationRequest(_Base):
     validated_by: str = "VERITAS"
     component_ref: str | None = None
     rejection_reason: str | None = None
+
+
+
+class ModelConsentRequest(_Base):
+    enabled: bool
+    provider: str | None = Field(default=None, pattern=r"^ollama$")
