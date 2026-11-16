@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from importlib.resources import files
+import tempfile
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -51,36 +52,40 @@ class RequestBodyLimitMiddleware:
                 await self._too_large(send)
                 return
 
-        chunks: list[bytes] = []
+        # Spool bounded bodies to disk after 8 MiB. Concurrent near-limit uploads must
+        # not multiply the full APK cap into unbounded process RAM usage.
+        body_file = tempfile.SpooledTemporaryFile(max_size=8 * 1024 * 1024, mode="w+b")
         total = 0
         more_body = True
-        while more_body:
-            message = await receive()
-            if message["type"] == "http.disconnect":
-                return
-            chunk = message.get("body", b"")
-            total += len(chunk)
-            if total > self.max_bytes:
-                await self._too_large(send)
-                return
-            chunks.append(chunk)
-            more_body = message.get("more_body", False)
+        try:
+            while more_body:
+                message = await receive()
+                if message["type"] == "http.disconnect":
+                    return
+                chunk = message.get("body", b"")
+                total += len(chunk)
+                if total > self.max_bytes:
+                    await self._too_large(send)
+                    return
+                body_file.write(chunk)
+                more_body = message.get("more_body", False)
 
-        chunk_index = 0
+            body_file.seek(0)
+            sent_bytes = 0
 
-        async def replay_receive() -> Message:
-            nonlocal chunk_index
-            if chunk_index >= len(chunks):
-                return {"type": "http.request", "body": b"", "more_body": False}
-            chunk = chunks[chunk_index]
-            chunk_index += 1
-            return {
-                "type": "http.request",
-                "body": chunk,
-                "more_body": chunk_index < len(chunks),
-            }
+            async def replay_receive() -> Message:
+                nonlocal sent_bytes
+                chunk = body_file.read(64 * 1024)
+                sent_bytes += len(chunk)
+                return {
+                    "type": "http.request",
+                    "body": chunk,
+                    "more_body": sent_bytes < total,
+                }
 
-        await self.app(scope, replay_receive, send)
+            await self.app(scope, replay_receive, send)
+        finally:
+            body_file.close()
 
     @staticmethod
     async def _too_large(send: Send) -> None:
