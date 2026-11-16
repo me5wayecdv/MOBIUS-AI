@@ -497,6 +497,90 @@ def get_surface(scan_id: str, session=Depends(_session), who: str = Depends(anal
     return ReconService(session, ctx.store).surface(scan_id)
 
 
+@router.post("/scans/{scan_id}/spectre/jobs", status_code=202, tags=["scans"])
+def enqueue_spectre_job(scan_id: str, session=Depends(_session), who: str = Depends(analyst_id)):
+    """Queue DEX indexing in the separately deployed, networkless OCI worker."""
+    scan = _require_scan_owner(session, scan_id, who)
+    app = session.get(ApplicationRow, scan.application_id)
+    if app is None:
+        from ..services.errors import NotFound
+        raise NotFound(f"application {scan.application_id} not found")
+    job = WorkerQueue(session).enqueue_dex_index(scan_id, app.artifact_key)
+    SqlEventStore(session).emit(
+        scan_id, "worker_job_queued",
+        {"job_id": job.id, "kind": job.kind, "status": job.status},
+        actor="NEXUS",
+    )
+    return {
+        "job_id": job.id,
+        "investigation_id": scan_id,
+        "kind": job.kind,
+        "status": job.status,
+        "created_at": job.created_at,
+    }
+
+
+@router.get("/scans/{scan_id}/spectre/jobs/{job_id}", tags=["scans"])
+def get_spectre_job(scan_id: str, job_id: str, session=Depends(_session), who: str = Depends(analyst_id)):
+    _require_scan_owner(session, scan_id, who)
+    job = WorkerQueue(session).get(job_id)
+    if job.investigation_id != scan_id or job.kind != "dex_index":
+        from ..services.errors import NotFound
+        raise NotFound(f"DEX worker job {job_id} not found")
+    return {
+        "job_id": job.id,
+        "kind": job.kind,
+        "status": job.status,
+        "attempts": job.attempts,
+        "worker_id": job.worker_id,
+        "error_code": job.error_code,
+        "error_detail": job.error_detail,
+        "created_at": job.created_at,
+        "started_at": job.started_at,
+        "finished_at": job.finished_at,
+        "applied": job.applied_at is not None,
+    }
+
+
+@router.post("/scans/{scan_id}/spectre/jobs/{job_id}/apply", tags=["scans"])
+def apply_spectre_job(scan_id: str, job_id: str, session=Depends(_session), who: str = Depends(analyst_id)):
+    scan = _require_scan_owner(session, scan_id, who)
+    job = WorkerQueue(session).get(job_id)
+    if job.investigation_id != scan_id or job.kind != "dex_index":
+        from ..services.errors import NotFound
+        raise NotFound(f"DEX worker job {job_id} not found")
+    if job.status != "succeeded" or not job.result_json:
+        from ..services.errors import ScanStateConflict
+        raise ScanStateConflict(f"DEX worker job is not ready to apply (status={job.status})")
+    if job.applied_at is not None:
+        from ..services.errors import ScanStateConflict
+        raise ScanStateConflict("DEX worker result has already been applied")
+    app = session.get(ApplicationRow, scan.application_id)
+    if app is None:
+        from ..services.errors import NotFound
+        raise NotFound(f"application {scan.application_id} not found")
+    try:
+        from ..adapters.dex_payload import validate_dex_index_payload
+        index = validate_dex_index_payload(
+            json.dumps(job.result_json, separators=(",", ":")).encode("utf-8"),
+            app.sha256,
+        )
+    except ValueError as exc:
+        from ..services.errors import CodeIndexFailed
+        raise CodeIndexFailed(str(exc)) from exc
+
+    result = SpectreService(
+        session, get_context().store, indexer=lambda _apk: index
+    ).analyse(scan_id)
+    job.applied_at = utcnow()
+    SqlEventStore(session).emit(
+        scan_id, "worker_job_applied",
+        {"job_id": job.id, "kind": job.kind, "status": job.status},
+        actor="NEXUS",
+    )
+    return result
+
+
 @router.post("/scans/{scan_id}/spectre", tags=["scans"])
 def run_spectre(scan_id: str, session=Depends(_session), who: str = Depends(analyst_id)):
     _require_scan_owner(session, scan_id, who)
