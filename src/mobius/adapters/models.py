@@ -116,6 +116,7 @@ class InvestigationRow(Base):
     paused_by: Mapped[str | None] = mapped_column(String(40), ForeignKey("users.id"))
     pause_reason: Mapped[str | None] = mapped_column(Text)
     started_at: Mapped[str | None] = mapped_column(String(40))
+    lease_until: Mapped[str | None] = mapped_column(String(40))
     finished_at: Mapped[str | None] = mapped_column(String(40))
     stop_reason: Mapped[str | None] = mapped_column(String(30))
     created_at: Mapped[str] = mapped_column(String(40), nullable=False)
