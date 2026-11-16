@@ -16,6 +16,7 @@ from fastapi import Header
 from ..adapters.db import make_engine, make_session_factory
 from ..adapters.models import Base
 from ..services.artifacts import ArtifactStore
+from ..services.model_provider import create_model_gateway
 from .config import Settings
 
 
@@ -52,6 +53,12 @@ class AppContext:
             Base.metadata.create_all(self.engine)
         self.session_factory = make_session_factory(self.engine)
         self.store = ArtifactStore(self.settings.artifact_root)
+        self.model_gateway = create_model_gateway(
+            self.settings.model_provider,
+            base_url=self.settings.model_base_url,
+            model=self.settings.model_name,
+            timeout_seconds=self.settings.model_timeout_seconds,
+        )
 
     def session(self):
         return self.session_factory()
