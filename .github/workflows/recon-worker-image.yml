@@ -1,0 +1,63 @@
+name: Publish isolated RECON worker image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "workers/recon-image/**"
+      - "src/mobius/adapters/android_manifest.py"
+      - "src/mobius/core/manifest.py"
+      - "src/mobius/worker/recon_manifest.py"
+      - "pyproject.toml"
+      - ".github/workflows/recon-worker-image.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: mobius-recon-image-main
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    name: Build and publish digest-pinned RECON image
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: workers/recon-image/Dockerfile
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/mobius-recon:sha-${{ github.sha }}
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.description=MOBIUS isolated Android manifest decoder
+
+      - name: Publish immutable image reference
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE_REPOSITORY: ghcr.io/${{ github.repository_owner }}/mobius-recon
+        run: |
+          echo "### Isolated RECON worker image" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Configure the worker with this immutable reference:" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "`$IMAGE_REPOSITORY@$IMAGE_DIGEST`" >> "$GITHUB_STEP_SUMMARY"

@@ -22,13 +22,15 @@ The old `POST /recon` endpoint is disabled by default. Tests may use the inline 
 
 ## Build and pin the parser image
 
-Build from repository root:
+On changes to the parser, its dependencies, or the Dockerfile, the GitHub Actions workflow `.github/workflows/recon-worker-image.yml` builds and publishes the image to GHCR. It writes the immutable `ghcr.io/<owner>/mobius-recon@sha256:<digest>` reference to the workflow run summary. Copy that exact reference into `MOBIUS_RECON_IMAGE` on the worker host. The workflow requires the repository's Actions token to have package write access. The application intentionally has no default image digest and fails closed without one.
+
+For a local build only:
 
 ```sh
 docker build -f workers/recon-image/Dockerfile -t mobius-recon:local .
 ```
 
-Publish it to a trusted registry, resolve the immutable digest, and configure the worker with the full `registry/repository@sha256:<64-hex>` reference. The application intentionally has no default image digest and will fail closed without one.
+Local mutable tags are not accepted by the worker runtime.
 
 ## Worker process configuration
 
