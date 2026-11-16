@@ -74,7 +74,7 @@ def _validate_zip_container(zf: zipfile.ZipFile) -> None:
         if name in seen:
             raise ApkInvalid(f"APK contains duplicate ZIP entry: {name!r}")
         seen.add(name)
-        if name.startswith("/") or "\\\\" in name or ".." in name.split("/"):
+        if name.startswith("/") or "\\" in name or ".." in name.split("/"):
             raise ApkInvalid(f"APK contains an unsafe ZIP entry path: {name!r}")
         if info.flag_bits & 0x1:
             raise ApkInvalid(f"APK contains an encrypted ZIP entry: {name!r}")
