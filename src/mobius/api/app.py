@@ -66,15 +66,19 @@ class RequestBodyLimitMiddleware:
             chunks.append(chunk)
             more_body = message.get("more_body", False)
 
-        body = b"".join(chunks)
-        delivered = False
+        chunk_index = 0
 
         async def replay_receive() -> Message:
-            nonlocal delivered
-            if delivered:
+            nonlocal chunk_index
+            if chunk_index >= len(chunks):
                 return {"type": "http.request", "body": b"", "more_body": False}
-            delivered = True
-            return {"type": "http.request", "body": body, "more_body": False}
+            chunk = chunks[chunk_index]
+            chunk_index += 1
+            return {
+                "type": "http.request",
+                "body": chunk,
+                "more_body": chunk_index < len(chunks),
+            }
 
         await self.app(scope, replay_receive, send)
 
