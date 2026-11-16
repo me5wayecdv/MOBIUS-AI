@@ -102,7 +102,7 @@ def run_once() -> bool:
         if input_path.exists() or input_path.is_symlink():
             input_path.unlink()
         input_path.write_bytes(payload)
-        input_path.chmod(0o400)
+        input_path.chmod(0o444)
 
         binary, image, spec = _tool_for(kind, runtime)
         backend = OciBackend(runtime=runtime, binary_images={binary: image})
