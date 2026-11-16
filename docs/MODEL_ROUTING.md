@@ -158,3 +158,8 @@ This is only the provider boundary. No current agent invokes it, no prompt versi
 | Q2 | Is an offline demo required? (Decides whether the second provider is a hard requirement or a nice-to-have.) |
 | Q3 | Budget in dollars or tokens? (Tokens are predictable; dollars are what a panel asks about. Track both.) |
 | Q4 | Should `--allow-self-review` exist at all, even for experiments? (Recommendation: yes, but it must stamp the verdict as `self_review=true` so it can never be mistaken for independent.) |
+
+
+## Investigation integration update
+
+All investigation-scoped model calls must use `InvestigationModelGateway` with the investigation ID and session factory. It reads live consent on every call and reserves a conservative token ceiling against the investigation's cumulative budget under a database row/write lock before contacting the provider. Measured usage is reconciled to `used_json.model_tokens`; ambiguous provider failures and missing usage consume the full reservation and fail closed. Do not use `with_consent(... remaining_tokens=...)` as an investigation integration because that API represents a per-instance snapshot and is retained only for isolated adapter tests/compatibility. See `INVESTIGATION_MODEL_BUDGET.md`.
