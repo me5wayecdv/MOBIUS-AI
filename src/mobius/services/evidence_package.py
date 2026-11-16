@@ -1,0 +1,210 @@
+"""Build bounded, provenance-preserving evidence packages for targeted reasoning.
+
+The package contains persisted observations, method references, sink/guard identifiers and
+same-investigation evidence metadata. It does not invent source snippets: this build's
+SPECTRE index stores method references and graph summaries, not decompiled source text.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Any
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from ..adapters.models import (
+    EvidenceRow,
+    FindingRow,
+    InvestigationRow,
+    ObservationRow,
+)
+from .errors import NotFound
+
+
+@dataclass(frozen=True, slots=True)
+class EvidencePackage:
+    investigation_id: str
+    component: str | None
+    observations: tuple[dict[str, Any], ...]
+    findings: tuple[dict[str, Any], ...]
+    evidence: tuple[dict[str, Any], ...]
+    method_references: tuple[str, ...]
+    sink_references: tuple[str, ...]
+    guard_references: tuple[str, ...]
+    limitations: tuple[str, ...]
+    truncated: bool
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "investigation_id": self.investigation_id,
+            "component": self.component,
+            "observations": list(self.observations),
+            "findings": list(self.findings),
+            "evidence": list(self.evidence),
+            "method_references": list(self.method_references),
+            "sink_references": list(self.sink_references),
+            "guard_references": list(self.guard_references),
+            "limitations": list(self.limitations),
+            "truncated": self.truncated,
+            "provenance": "persisted MOBIUS rows only",
+        }
+
+
+class EvidencePackageBuilder:
+    """Collect only persisted, investigation-scoped context under explicit budgets."""
+
+    def __init__(
+        self,
+        session: Session,
+        *,
+        max_observations: int = 40,
+        max_findings: int = 30,
+        max_evidence: int = 40,
+        max_text_chars: int = 48_000,
+        max_methods: int = 500,
+    ) -> None:
+        if min(max_observations, max_findings, max_evidence, max_text_chars, max_methods) < 1:
+            raise ValueError("evidence package limits must be positive")
+        self.session = session
+        self.max_observations = max_observations
+        self.max_findings = max_findings
+        self.max_evidence = max_evidence
+        self.max_text_chars = max_text_chars
+        self.max_methods = max_methods
+
+    def build(self, investigation_id: str, *, component: str | None = None) -> EvidencePackage:
+        investigation = self.session.get(InvestigationRow, investigation_id)
+        if investigation is None:
+            raise NotFound(f"investigation {investigation_id} not found")
+
+        obs_stmt = (
+            select(ObservationRow)
+            .where(ObservationRow.investigation_id == investigation_id)
+            .order_by(ObservationRow.created_at.asc(), ObservationRow.id.asc())
+        )
+        finding_stmt = (
+            select(FindingRow)
+            .where(FindingRow.investigation_id == investigation_id)
+            .order_by(FindingRow.created_at.asc(), FindingRow.id.asc())
+        )
+        if component:
+            obs_stmt = obs_stmt.where(ObservationRow.subject_ref == component)
+            finding_stmt = finding_stmt.where(FindingRow.component_ref == component)
+
+        all_obs = list(self.session.execute(obs_stmt).scalars())
+        all_findings = list(self.session.execute(finding_stmt).scalars())
+        truncated = len(all_obs) > self.max_observations or len(all_findings) > self.max_findings
+        obs_rows = all_obs[: self.max_observations]
+        finding_rows = all_findings[: self.max_findings]
+
+        evidence_ids: set[str] = set()
+        methods: set[str] = set()
+        sinks: set[str] = set()
+        guards: set[str] = set()
+        observations: list[dict[str, Any]] = []
+        for row in obs_rows:
+            refs = [str(ref) for ref in (row.evidence_refs or [])]
+            evidence_ids.update(refs)
+            attrs = row.attributes or {}
+            path = [str(item)[:1000] for item in attrs.get("path", []) if isinstance(item, str)]
+            methods.update(path)
+            sink = attrs.get("sink")
+            if isinstance(sink, str) and sink:
+                sinks.add(sink[:1000])
+            guards.update(str(item)[:1000] for item in attrs.get("guards", []) if isinstance(item, str))
+            observations.append({
+                "id": row.id,
+                "agent": row.agent,
+                "kind": row.kind,
+                "fidelity": row.fidelity,
+                "subject_type": row.subject_type,
+                "subject_ref": row.subject_ref,
+                "statement": row.statement[:4000],
+                "attributes": {
+                    "reachability": attrs.get("reachability"),
+                    "path": path[: self.max_methods],
+                    "sink": sink,
+                    "guards": list(attrs.get("guards", []))[:100],
+                    "index_truncated": bool(attrs.get("index_truncated", False)),
+                    "exhaustive": attrs.get("exhaustive"),
+                },
+                "maswe": list(row.maswe or []),
+                "confidence": row.confidence,
+                "evidence_refs": refs,
+            })
+
+        findings: list[dict[str, Any]] = []
+        for row in finding_rows:
+            refs = [str(ref) for ref in (row.evidence_refs or [])]
+            evidence_ids.update(refs)
+            if isinstance(row.source_ref, dict):
+                for value in row.source_ref.values():
+                    if isinstance(value, str) and ("." in value or "->" in value):
+                        methods.add(value[:1000])
+            findings.append({
+                "id": row.id,
+                "title": row.title[:1000],
+                "category": row.category,
+                "description": row.description[:4000],
+                "component_ref": row.component_ref,
+                "source_ref": row.source_ref,
+                "status": row.status,
+                "severity": row.severity,
+                "confidence": row.confidence,
+                "maswe": list(row.maswe or []),
+                "masvs": list(row.masvs or []),
+                "evidence_refs": refs,
+                "gate_evidence": row.gate_evidence or {},
+            })
+
+        all_evidence = list(self.session.execute(
+            select(EvidenceRow)
+            .where(
+                EvidenceRow.investigation_id == investigation_id,
+                EvidenceRow.id.in_(evidence_ids) if evidence_ids else EvidenceRow.id == "__none__",
+            )
+            .order_by(EvidenceRow.created_at.asc(), EvidenceRow.id.asc())
+        ).scalars())
+        if len(all_evidence) > self.max_evidence:
+            truncated = True
+        evidence_rows = all_evidence[: self.max_evidence]
+        remaining_chars = self.max_text_chars
+        evidence: list[dict[str, Any]] = []
+        for row in evidence_rows:
+            summary = row.summary[: min(2000, remaining_chars)]
+            remaining_chars -= len(summary)
+            evidence.append({
+                "id": row.id,
+                "kind": row.kind,
+                "sha256": row.sha256,
+                "byte_size": row.byte_size,
+                "truncated": row.truncated,
+                "redacted": row.redacted,
+                "summary": summary,
+                "produced_by": row.produced_by,
+                "created_at": row.created_at,
+            })
+        if remaining_chars <= 0:
+            truncated = True
+
+        limitations = [
+            "Package contains persisted observations and evidence metadata, not decompiled source text.",
+            "Method references are bytecode-derived identifiers; reachability does not prove tainted data flow or exploitability.",
+        ]
+        if any(bool((row.attributes or {}).get("index_truncated")) for row in obs_rows):
+            limitations.append("At least one selected observation came from a truncated DEX index.")
+        if truncated:
+            limitations.append("Package limits were reached; omitted rows are not evidence of absence.")
+
+        return EvidencePackage(
+            investigation_id=investigation_id,
+            component=component,
+            observations=tuple(observations),
+            findings=tuple(findings),
+            evidence=tuple(evidence),
+            method_references=tuple(sorted(methods)[: self.max_methods]),
+            sink_references=tuple(sorted(sinks)),
+            guard_references=tuple(sorted(guards)),
+            limitations=tuple(limitations),
+            truncated=truncated,
+        )

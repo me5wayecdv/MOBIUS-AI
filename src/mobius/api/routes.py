@@ -336,6 +336,22 @@ def get_evidence(scan_id: str, session=Depends(_session), who: str = Depends(ana
     }
 
 
+@router.get("/scans/{scan_id}/evidence-package", tags=["scans"])
+def get_evidence_package(
+    scan_id: str,
+    component: str | None = Query(default=None, max_length=500),
+    session=Depends(_session),
+    who: str = Depends(analyst_id),
+):
+    """Build bounded, targeted context from this investigation's persisted evidence."""
+    _require_scan_owner(session, scan_id, who)
+    from ..services.evidence_package import EvidencePackageBuilder
+
+    return EvidencePackageBuilder(session).build(
+        scan_id, component=component
+    ).as_dict()
+
+
 @router.post("/scans/{scan_id}/evidence", status_code=201, tags=["scans"])
 def post_evidence(
     scan_id: str,

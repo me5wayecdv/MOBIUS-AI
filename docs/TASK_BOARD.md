@@ -39,7 +39,7 @@
 | # | Task | Owner | State | Acceptance |
 |---|---|---|---|---|
 | D-020 | Model provider abstraction + structured output validation | M1 | [~] | Local Ollama and deterministic mock share the core ModelGateway port; consent, JSON Schema validation and token accounting are tested. Live Ollama execution and NEXUS integration remain |
-| D-021 | Evidence package builder for targeted code context | M1 + M2 | [ ] | Context includes relevant code, callers, sinks and evidence refs; bounded |
+| D-021 | Evidence package builder for targeted code context | M1 + M2 | [~] | Bounded packages now include persisted method/caller references, sink/guard references, observations, finding gate evidence and evidence refs/hashes. Actual decompiled source snippets remain blocked on D-012/JADX; do not mark complete until included and tested |
 | D-022 | NEXUS hypothesis generation | M1 | [ ] | Hypotheses cite observations and declare required evidence before testing |
 | D-023 | Typed action registry and policy validation | M1 | [ ] | Model cannot dispatch arbitrary commands, targets or tools |
 | D-024 | Adaptive re-planning loop | M1 | [ ] | New tool result changes next action in a fixed integration test |

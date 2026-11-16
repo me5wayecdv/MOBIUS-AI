@@ -48,6 +48,7 @@
 | Attack graph (data model) | `DESIGNED` | `DATABASE_SCHEMA.md §3.8` | Tables `graph_nodes`/`graph_edges` **not created**; only `GraphNode`/`GraphEdge` domain models exist |
 | Attack graph (UI) | `NOT STARTED` | ADR-014 | The War Room lists findings and surface; the reachability *graph* view is not built |
 | ARCHIVIST (report) | `PARTIAL` | `REQUIREMENTS.md §1.9` | `services/archivist.py`: eight sections generated from stored rows, written as evidence, `POST/GET /scans/{id}/report`. **Markdown only** |
+| Evidence package builder (D-021) | `PARTIAL` | `TASK_BOARD.md`, `EVIDENCE_PACKAGE.md` | Bounded component-scoped packages include persisted observations, finding gate evidence, method/caller path identifiers, sink/guard references, evidence IDs/hashes and explicit truncation/coverage limits. Current SPECTRE evidence does not contain decompiled source text; D-012/JADX integration remains required before claiming source snippets are included. |
 | Benchmark harness | `DONE` (harness) | `BENCHMARK_RESULTS.md` | `services/benchmark.py` + `python -m mobius.tools.benchmark`: precision/recall/specificity with **Wilson 95% intervals and denominators**, `measured: false` on an empty corpus, errors never counted as rejections. **First measurement: 7 pinned samples, precision 100% (1/1, CI 20.6–100%), recall 25% (1/4), specificity 100% (3/3)** |
 | ORACLE | `NOT STARTED` | `ORACLE_THREAT_INTEL.md` | **Deliberately out of v1 scope** |
 | Reports | `NOT STARTED` | `REQUIREMENTS.md §1.9` | Markdown for v1 |
