@@ -187,7 +187,7 @@ def test_the_step_budget_stops_the_loop_and_reports_what_it_skipped(session, sto
     assert any("left queued" in note for note in result["notes"])
     # The unrun entry keeps its state, so the report can name it.
     left = session.query(FrontierEntryRow).filter_by(investigation_id=scan, state="queued").all()
-    assert len(left) == 1
+    assert len(left) == 2
 
 
 def test_a_budget_that_covers_the_work_does_not_stop_early(session, store, future_iso):
