@@ -29,7 +29,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from ..adapters.events import SqlEventStore
+from ..adapters.events import SqlEventStore, utcnow
 from ..adapters.models import DecisionRow, FrontierEntryRow, InvestigationRow
 from ..core import frontier
 from ..core.actions import ActionRegistry, ActionRejected
