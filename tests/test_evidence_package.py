@@ -8,6 +8,7 @@ from mobius.core.ids import IdPrefix, new_id
 from mobius.services.evidence import EvidenceService
 from mobius.services.evidence_package import EvidencePackageBuilder
 from mobius.services.intake import IntakeService
+from conftest import make_apk
 
 
 def _investigation(session, store, future_iso):
