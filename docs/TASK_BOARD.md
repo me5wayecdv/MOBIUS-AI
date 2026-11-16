@@ -7,7 +7,7 @@
 
 ## Current verified baseline
 
-- Backend vertical slice exists: APK intake, SHA-256 authorization binding, binary manifest parsing, multi-DEX indexing with per-entry coverage/provenance, bounded application call-graph reachability, deterministic gates, NEXUS dispatcher, SSE replay, Markdown report. Isolated manifest and DEX worker job paths are implemented; DEX image publication/deployment verification is pending.
+- Backend vertical slice exists: APK intake, SHA-256 authorization binding, binary manifest parsing, multi-DEX indexing with per-entry coverage/provenance, bounded application call-graph reachability, deterministic gates, NEXUS dispatcher, SSE replay, Markdown report. Isolated manifest and DEX worker job paths are implemented. The DEX OCI image is published and passed its real-DEX smoke test (PR #32); deployment on a dedicated worker host remains pending.
 - Existing War Room is a basic HTML page reading API data. It is not the intended final investigation cockpit.
 - No model is called. NEXUS is not yet an adaptive planner.
 - No full decompilation workflow, CFG/taint analysis, model-backed adaptive NEXUS, PoC runner, persisted attack graph, PHANTOM, VECTOR, or independent VERITAS model reviewer. The DEX OCI worker is in implementation and is not marked operational until its image smoke test and worker deployment pass.
@@ -27,7 +27,7 @@
 | # | Task | Owner | State | Acceptance |
 |---|---|---|---|---|
 | D-010 | Verify APK multi-DEX enumeration and add per-entry coverage/provenance | M2 | [~] | Implemented parser coverage; isolated `dex_index` queue/image/worker path added on PR branch. Validate against a real multidex APK and deployed worker before marking done |
-| D-011 | Harden multi-DEX aggregation and provenance | M2 | [~] | Parser tests cover provenance, duplicate classes, malformed secondary DEX, and budget truncation; worker payload round-trip and APK digest binding added. Await CI + image/deployment smoke tests |
+| D-011 | Harden multi-DEX aggregation and provenance | M2 | [~] | Parser tests cover provenance, duplicate classes, malformed secondary DEX, and budget truncation; worker payload round-trip and APK digest binding added. CI and published-image smoke tests passed (PR #32); dedicated worker deployment smoke test remains |
 | D-012 | Add JADX adapter and cache by APK digest/tool version | M2 | [ ] | Source/decompiled references resolve; failures explicit |
 | D-013 | Build class/method/source lookup APIs | M1 + M2 | [ ] | War Room can navigate to actual code locations |
 | D-014 | Add Android sensitive source/sink catalogue | M2 + M5 | [ ] | Catalogue has MASWE/MASVS mapping and positive/negative tests |
