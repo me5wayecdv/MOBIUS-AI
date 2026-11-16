@@ -30,6 +30,7 @@ def upgrade() -> None:
         sa.Column("created_at", sa.String(length=40), nullable=False),
         sa.Column("started_at", sa.String(length=40), nullable=True),
         sa.Column("finished_at", sa.String(length=40), nullable=True),
+        sa.Column("applied_at", sa.String(length=40), nullable=True),
         sa.CheckConstraint(
             "status IN ('queued','running','succeeded','failed','cancelled')",
             name="worker_job_status_known",
