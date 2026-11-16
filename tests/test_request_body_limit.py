@@ -7,7 +7,7 @@ import asyncio
 from mobius.api.app import RequestBodyLimitMiddleware
 
 
-def _run(middleware, *, headers=(), chunks=()):
+def _run(middleware, *, headers=(), chunks=(), path='/api/v1/applications'):
     sent = []
     app_called = False
     queue = iter(chunks)
@@ -36,7 +36,7 @@ def _run(middleware, *, headers=(), chunks=()):
     scope = {
         "type": "http",
         "method": "POST",
-        "path": "/api/v1/applications",
+        "path": path,
         "headers": list(headers),
     }
     async def invoke():
@@ -88,13 +88,11 @@ def test_replays_bounded_request_chunks_unchanged():
 
 
 def test_non_upload_routes_are_not_subject_to_apk_allowance():
-    async def passthrough(scope, receive, send):
-        return None
-
-    middleware = RequestBodyLimitMiddleware(passthrough, max_bytes=1)
+    middleware = RequestBodyLimitMiddleware(lambda *_: None, max_bytes=1)
     sent, called = _run(
         middleware,
         headers=[(b"content-length", b"999")],
         chunks=[{"type": "http.request", "body": b"{}"}],
+        path="/api/v1/scans",
     )
     assert called is True
