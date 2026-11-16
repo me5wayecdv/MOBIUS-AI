@@ -1,6 +1,6 @@
 # Local structured model provider
 
-**Status:** provider adapter and core port implementation are present on PR #33. No agent invokes it yet; the NEXUS reasoning slice will wire calls to the investigation lifecycle.
+**Status:** local provider adapter and core port are implemented. NEXUS hypothesis generation uses the investigation-bound gateway with explicit consent; PR #39 adds an opt-in VERITAS reviewer. Neither model path is part of the default scan flow.
 
 ## Scope and dependencies
 
@@ -50,8 +50,8 @@ APK-derived text is untrusted input. Prompts must explicitly tell the model not 
 
 - Unit tests cover request shape, schema forwarding, local endpoint restrictions, explicit consent, provider identity, malformed output, token-budget exhaustion, missing usage metrics, and deterministic mock compatibility with `core.ports.ModelGateway`.
 - CI does not require an Ollama daemon and does not claim model-quality measurements.
-- No real Ollama server call, NEXUS planner call, prompt version persistence, retry/repair loop, cache, or model benchmark is implemented by this slice.
-- Model calls remain absent from the default scan pipeline until the NEXUS reasoning slice is merged.
+- No real Ollama server call or model-quality benchmark has been verified. NEXUS hypothesis generation and VERITAS review persist prompt/model provenance, but a NEXUS planner, retry/repair loop, and cache are not implemented.
+- Model calls remain opt-in and require explicit per-investigation consent; deterministic fallback remains the default.
 
 
 ## Investigation integration update
