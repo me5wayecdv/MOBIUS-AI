@@ -59,7 +59,7 @@ def test_gateway_requires_explicit_per_investigation_consent():
 
 def test_gateway_requires_consent_for_the_selected_provider():
     provider = FakeProvider()
-    gateway = ModelGateway(provider, model="qwen3:8b")
+    gateway = StructuredModelGateway(provider, model="qwen3:8b")
 
     with pytest.raises(ModelConsentRequired, match="explicitly name"):
         gateway.generate(
