@@ -75,7 +75,7 @@ def test_gateway_requires_consent_for_the_selected_provider():
 
 def test_gateway_validates_structured_output_and_returns_usage():
     provider = FakeProvider()
-    gateway = ModelGateway(provider, model="qwen3:8b")
+    gateway = StructuredModelGateway(provider, model="qwen3:8b")
     parsed, usage = gateway.generate(
         output_model=PlannerReply,
         system_prompt="Return a compact JSON object. Do not reveal chain of thought.",
