@@ -28,6 +28,7 @@ mobius-recon-manifest = "mobius.worker.recon_manifest:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "httpx>=0.27"]
+worker = ["psycopg[binary]>=3.1"]
 
 [tool.setuptools.package-data]
 mobius = ["adapters/sql/*.sql", "api/static/*.html"]
