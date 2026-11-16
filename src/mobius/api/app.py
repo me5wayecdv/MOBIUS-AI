@@ -6,9 +6,94 @@ from importlib.resources import files
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from ..services.errors import DomainError
+from ..services.intake import MAX_APK_BYTES
 from .routes import router
+
+# Multipart headers and boundaries need a small allowance above the raw APK cap.
+MAX_HTTP_REQUEST_BYTES = MAX_APK_BYTES + 1024 * 1024
+
+
+class RequestBodyLimitMiddleware:
+    """Enforce a hard HTTP body cap before FastAPI parses multipart form data.
+
+    Content-Length is rejected without reading the body. Requests without a trustworthy
+    length (for example chunked transfer) are consumed only up to the same fixed cap.
+    """
+
+    def __init__(self, app: ASGIApp, *, max_bytes: int = MAX_HTTP_REQUEST_BYTES) -> None:
+        self.app = app
+        self.max_bytes = max_bytes
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope.get("method") != "POST":
+            await self.app(scope, receive, send)
+            return
+
+        # Only the APK upload route accepts a large binary body. Other POST bodies use
+        # FastAPI/Pydantic limits and must not inherit the APK allowance.
+        path = scope.get("path", "")
+        if path != "/api/v1/applications":
+            await self.app(scope, receive, send)
+            return
+
+        headers = {key.lower(): value for key, value in scope.get("headers", [])}
+        raw_length = headers.get(b"content-length")
+        if raw_length is not None:
+            try:
+                declared_length = int(raw_length)
+            except ValueError:
+                await self._too_large(send)
+                return
+            if declared_length < 0 or declared_length > self.max_bytes:
+                await self._too_large(send)
+                return
+
+        chunks: list[bytes] = []
+        total = 0
+        more_body = True
+        while more_body:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                return
+            chunk = message.get("body", b"")
+            total += len(chunk)
+            if total > self.max_bytes:
+                await self._too_large(send)
+                return
+            chunks.append(chunk)
+            more_body = message.get("more_body", False)
+
+        body = b"".join(chunks)
+        delivered = False
+
+        async def replay_receive() -> Message:
+            nonlocal delivered
+            if delivered:
+                return {"type": "http.request", "body": b"", "more_body": False}
+            delivered = True
+            return {"type": "http.request", "body": body, "more_body": False}
+
+        await self.app(scope, replay_receive, send)
+
+    @staticmethod
+    async def _too_large(send: Send) -> None:
+        payload = (
+            b'{"type":"about:blank","title":"Request body too large",'
+            b'"status":413,"detail":"APK upload request exceeds the configured limit",'
+            b'"code":"REQUEST_TOO_LARGE"}'
+        )
+        await send({
+            "type": "http.response.start",
+            "status": 413,
+            "headers": [
+                (b"content-type", b"application/problem+json"),
+                (b"content-length", str(len(payload)).encode("ascii")),
+            ],
+        })
+        await send({"type": "http.response.body", "body": payload})
 
 
 def create_app() -> FastAPI:
@@ -20,6 +105,7 @@ def create_app() -> FastAPI:
             "deterministic gate over evidence, never by model prose."
         ),
     )
+    app.add_middleware(RequestBodyLimitMiddleware)
     app.include_router(router, prefix="/api/v1")
 
     @app.get("/", include_in_schema=False)
