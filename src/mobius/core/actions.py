@@ -7,7 +7,7 @@ binaries or targets.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -26,6 +26,7 @@ class ComponentArgs(_ActionArgs):
         max_length=500,
         pattern=r"^[A-Za-z_$][A-Za-z0-9_.$]*$",
     )
+    source: Literal["manifest"] | None = None
 
 
 @dataclass(frozen=True, slots=True)
