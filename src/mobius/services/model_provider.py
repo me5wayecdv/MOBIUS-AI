@@ -186,3 +186,22 @@ class ModelGateway:
         except (ValueError, ValidationError) as exc:
             raise ModelOutputInvalid("model output failed the requested JSON schema") from exc
         return validated, result
+
+
+def create_model_gateway(
+    provider_name: str,
+    *,
+    base_url: str,
+    model: str,
+    timeout_seconds: int = 120,
+) -> ModelGateway | None:
+    """Build only an explicitly configured local provider; no hosted provider is bundled."""
+    if provider_name == "disabled":
+        return None
+    if provider_name == "ollama":
+        return ModelGateway(
+            OllamaProvider(base_url),
+            model=model,
+            timeout_seconds=timeout_seconds,
+        )
+    raise ValueError(f"unsupported model provider: {provider_name}")
