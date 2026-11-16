@@ -10,6 +10,7 @@ from mobius.adapters.models import (
     DecisionRow,
     EvidenceRow,
     FindingRow,
+    InvestigationRow,
     VerdictRow,
 )
 from mobius.core.enums import Severity
@@ -57,7 +58,9 @@ def reviewed_finding(session, store, future_iso):
         intensity=0,
         created_by="u",
     )
-    investigation.llm_data_sharing = {"enabled": True, "provider": "mock"}
+    investigation_row = session.get(InvestigationRow, investigation.id)
+    investigation_row.llm_data_sharing = {"enabled": True, "provider": "mock"}
+    session.flush()
     evidence_id = "ev_veritas_fixture"
     session.add(EvidenceRow(
         id=evidence_id,
