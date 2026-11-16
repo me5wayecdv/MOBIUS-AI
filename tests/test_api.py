@@ -488,3 +488,17 @@ def test_upload_read_is_bounded_before_service_validation(client, monkeypatch):
     response = _upload(client)
     assert response.status_code == 413
     assert response.json()["code"] == "APK_TOO_LARGE"
+
+
+
+def test_recon_rejects_authorization_for_a_different_manifest_package(client):
+    app = _upload(client).json()
+    auth = _authorize(client, app["sha256"], target_package="com.attacker.claim").json()
+    scan = _scan(client, app["id"], auth["id"]).json()
+
+    response = client.post(f"/api/v1/scans/{scan['id']}/recon")
+    assert response.status_code == 409
+    assert response.json()["code"] == "AUTH_REQUIRED"
+    # A mismatched package must not leave behind a manifest evidence record or surface.
+    assert client.get(f"/api/v1/scans/{scan['id']}/evidence").json()["items"] == []
+    assert client.get(f"/api/v1/scans/{scan['id']}/surface").json()["observations"] == []
