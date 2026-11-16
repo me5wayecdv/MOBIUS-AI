@@ -368,6 +368,7 @@ class WorkerJobRow(Base):
     created_at: Mapped[str] = mapped_column(String(40), nullable=False)
     started_at: Mapped[str | None] = mapped_column(String(40))
     finished_at: Mapped[str | None] = mapped_column(String(40))
+    applied_at: Mapped[str | None] = mapped_column(String(40))
 
 
 ALL_TABLES = (
