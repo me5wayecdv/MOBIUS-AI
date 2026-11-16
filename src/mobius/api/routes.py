@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 
-from fastapi import APIRouter, Depends, Header, Query, Request, UploadFile
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 
 from ..adapters.events import SqlEventStore, utcnow
@@ -412,6 +412,8 @@ def run_recon(scan_id: str, session=Depends(_session), who: str = Depends(analys
     """Run the deterministic manifest analysis. Idempotent only in the sense that it
     refuses to run twice: re-running would duplicate observations and frontier entries."""
     ctx = get_context()
+    if ctx.settings.env.lower() not in {'development', 'dev', 'test'}:
+        raise HTTPException(status_code=503, detail='in-process RECON is disabled outside development; enqueue an isolated worker job')
     return ReconService(session, ctx.store).run(scan_id)
 
 
