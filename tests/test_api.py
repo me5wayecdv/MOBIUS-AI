@@ -585,3 +585,99 @@ def test_spectre_and_nexus_are_blocked_outside_test_without_isolated_dex_worker(
     assert "isolated DEX worker" in spectre.json()["detail"]
     assert nexus.status_code == 503
     assert "isolated DEX worker" in nexus.json()["detail"]
+
+
+
+def test_isolated_dex_job_is_queued_indexed_and_applied(client, ctx):
+    import hashlib
+    import json
+    import pathlib
+    from io import BytesIO
+    import zipfile
+
+    from mobius.adapters.dex import index_apk
+    from mobius.adapters.dex_payload import code_index_payload
+    from mobius.services.worker_queue import WorkerQueue
+
+    fixture = pathlib.Path(__file__).parent / "fixtures" / "dex" / "AnalysisTest.dex"
+    apk_stream = BytesIO()
+    with zipfile.ZipFile(apk_stream, "w") as archive:
+        archive.writestr(
+            "AndroidManifest.xml",
+            '<manifest xmlns:android="http://schemas.android.com/apk/res/android" '
+            'package="com.example"><application>'
+            '<activity android:name="AnalysisTest" android:exported="true"/>'
+            "</application></manifest>",
+        )
+        archive.writestr("classes.dex", fixture.read_bytes())
+    apk_bytes = apk_stream.getvalue()
+
+    app = _upload(client, data=apk_bytes).json()
+    auth = _authorize(client, app["sha256"], target_package="com.example").json()
+    scan = _scan(client, app["id"], auth["id"]).json()
+    assert client.post(f"/api/v1/scans/{scan['id']}/recon").status_code == 200
+
+    queued = client.post(f"/api/v1/scans/{scan['id']}/spectre/jobs")
+    assert queued.status_code == 202, queued.text
+    job_id = queued.json()["job_id"]
+    assert queued.json()["kind"] == "dex_index"
+
+    index = index_apk(apk_bytes)
+    payload = code_index_payload(index, hashlib.sha256(apk_bytes).hexdigest())
+    with ctx.session() as session:
+        queue = WorkerQueue(session)
+        claimed = queue.claim("dex-worker-test")
+        assert claimed is not None and claimed.id == job_id
+        queue.succeed(job_id, "dex-worker-test", payload)
+        session.commit()
+
+    status = client.get(f"/api/v1/scans/{scan['id']}/spectre/jobs/{job_id}")
+    assert status.status_code == 200
+    assert status.json()["status"] == "succeeded"
+
+    applied = client.post(f"/api/v1/scans/{scan['id']}/spectre/jobs/{job_id}/apply")
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["index"]["classes"] == 1
+    assert applied.json()["index"]["dex_files"] == 1
+    assert applied.json()["index"]["complete"] is True
+    assert client.get(f"/api/v1/scans/{scan['id']}/spectre/jobs/{job_id}").json()["applied"] is True
+
+    duplicate = client.post(f"/api/v1/scans/{scan['id']}/spectre/jobs/{job_id}/apply")
+    assert duplicate.status_code == 409
+
+
+def test_isolated_dex_job_rejects_worker_result_for_different_apk(client, ctx):
+    import hashlib
+    import pathlib
+    import zipfile
+    from io import BytesIO
+
+    from mobius.adapters.dex import index_apk
+    from mobius.adapters.dex_payload import code_index_payload
+    from mobius.services.worker_queue import WorkerQueue
+
+    fixture = pathlib.Path(__file__).parent / "fixtures" / "dex" / "AnalysisTest.dex"
+    stream = BytesIO()
+    with zipfile.ZipFile(stream, "w") as archive:
+        archive.writestr("AndroidManifest.xml", "<manifest package='com.example'/>")
+        archive.writestr("classes.dex", fixture.read_bytes())
+    apk_bytes = stream.getvalue()
+    app = _upload(client, data=apk_bytes).json()
+    auth = _authorize(client, app["sha256"]).json()
+    scan = _scan(client, app["id"], auth["id"]).json()
+    client.post(f"/api/v1/scans/{scan['id']}/recon")
+
+    queued = client.post(f"/api/v1/scans/{scan['id']}/spectre/jobs").json()
+    wrong_apk = apk_bytes + b"tampered"
+    payload = code_index_payload(index_apk(apk_bytes), hashlib.sha256(wrong_apk).hexdigest())
+    with ctx.session() as session:
+        queue = WorkerQueue(session)
+        queue.claim("dex-worker-test")
+        queue.succeed(queued["job_id"], "dex-worker-test", payload)
+        session.commit()
+
+    response = client.post(
+        f"/api/v1/scans/{scan['id']}/spectre/jobs/{queued['job_id']}/apply"
+    )
+    assert response.status_code == 422
+    assert response.json()["code"] == "CODE_INDEX_FAILED"

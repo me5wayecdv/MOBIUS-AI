@@ -65,6 +65,51 @@ class WorkerQueue:
         self.session.flush()
         return job
 
+    def enqueue_dex_index(self, investigation_id: str, artifact_key: str) -> WorkerJobRow:
+        investigation = self.session.get(InvestigationRow, investigation_id)
+        if investigation is None:
+            raise NotFound(f"investigation {investigation_id} not found")
+        if investigation.state != "SURFACE_READY":
+            raise ScanStateConflict(
+                f"DEX indexing requires SURFACE_READY state, got {investigation.state}"
+            )
+        application = self.session.get(ApplicationRow, investigation.application_id)
+        authorization = self.session.get(AuthorizationRow, investigation.authorization_id)
+        if application is None or authorization is None:
+            raise ScanStateConflict("DEX indexing requires an existing APK and authorization")
+        if (
+            authorization.revoked_at is not None
+            or is_expired(authorization.expires_at)
+            or authorization.apk_sha256 != application.sha256
+        ):
+            raise ScanStateConflict("APK authorization is no longer valid for this artifact")
+        if artifact_key != application.artifact_key:
+            raise ScanStateConflict("DEX job artifact does not match the investigation APK")
+        active = self.session.execute(
+            select(WorkerJobRow).where(
+                WorkerJobRow.investigation_id == investigation_id,
+                WorkerJobRow.kind == "dex_index",
+                WorkerJobRow.status.in_(("queued", "running", "succeeded")),
+                WorkerJobRow.applied_at.is_(None),
+            ).limit(1)
+        ).scalar_one_or_none()
+        if active is not None:
+            raise ScanStateConflict(
+                f"DEX worker job {active.id} is already active or awaiting application"
+            )
+        job = WorkerJobRow(
+            id=str(uuid4()),
+            investigation_id=investigation_id,
+            kind="dex_index",
+            artifact_key=artifact_key,
+            status="queued",
+            attempts=0,
+            created_at=utcnow(),
+        )
+        self.session.add(job)
+        self.session.flush()
+        return job
+
     def get(self, job_id: str) -> WorkerJobRow:
         row = self.session.get(WorkerJobRow, job_id)
         if row is None:
@@ -89,7 +134,7 @@ class WorkerQueue:
         stmt = (
             select(WorkerJobRow)
             .where(
-                WorkerJobRow.kind == "recon_manifest",
+                WorkerJobRow.kind.in_(("recon_manifest", "dex_index")),
                 WorkerJobRow.attempts < 3,
                 or_(
                     WorkerJobRow.status == "queued",

@@ -7,10 +7,10 @@
 
 ## Current verified baseline
 
-- Backend vertical slice exists: APK intake, SHA-256 authorization binding, binary manifest parsing, single-DEX indexing, bounded application call-graph reachability, deterministic gates, NEXUS dispatcher, SSE replay, Markdown report.
+- Backend vertical slice exists: APK intake, SHA-256 authorization binding, binary manifest parsing, multi-DEX indexing with per-entry coverage/provenance, bounded application call-graph reachability, deterministic gates, NEXUS dispatcher, SSE replay, Markdown report. Isolated manifest and DEX worker job paths are implemented; DEX image publication/deployment verification is pending.
 - Existing War Room is a basic HTML page reading API data. It is not the intended final investigation cockpit.
 - No model is called. NEXUS is not yet an adaptive planner.
-- No multi-DEX indexing, full decompilation workflow, CFG/taint analysis, PoC runner, persisted attack graph, PHANTOM, VECTOR, or independent VERITAS model reviewer.
+- No full decompilation workflow, CFG/taint analysis, model-backed adaptive NEXUS, PoC runner, persisted attack graph, PHANTOM, VECTOR, or independent VERITAS model reviewer. The DEX OCI worker is in implementation and is not marked operational until its image smoke test and worker deployment pass.
 - Latest documented audit and status files must be reconciled to current main before using them as live status.
 
 ## Priority 0 — Establish reproducible demo target
@@ -26,8 +26,8 @@
 
 | # | Task | Owner | State | Acceptance |
 |---|---|---|---|---|
-| D-010 | Verify APK multi-DEX enumeration and add per-entry coverage/provenance | M2 | [~] | `index_apk` already enumerates sorted `classes*.dex`; add a real APK fixture with distinct DEX entries and a persisted indexed/skipped/failed record for each |
-| D-011 | Harden multi-DEX aggregation and provenance | M2 | [~] | `index_dex` already merges multiple blobs; ensure class/method provenance retains originating DEX and test duplicate classes, malformed secondary DEX, and budget truncation |
+| D-010 | Verify APK multi-DEX enumeration and add per-entry coverage/provenance | M2 | [~] | Implemented parser coverage; isolated `dex_index` queue/image/worker path added on PR branch. Validate against a real multidex APK and deployed worker before marking done |
+| D-011 | Harden multi-DEX aggregation and provenance | M2 | [~] | Parser tests cover provenance, duplicate classes, malformed secondary DEX, and budget truncation; worker payload round-trip and APK digest binding added. Await CI + image/deployment smoke tests |
 | D-012 | Add JADX adapter and cache by APK digest/tool version | M2 | [ ] | Source/decompiled references resolve; failures explicit |
 | D-013 | Build class/method/source lookup APIs | M1 + M2 | [ ] | War Room can navigate to actual code locations |
 | D-014 | Add Android sensitive source/sink catalogue | M2 + M5 | [ ] | Catalogue has MASWE/MASVS mapping and positive/negative tests |
