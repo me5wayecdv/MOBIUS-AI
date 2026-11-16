@@ -179,3 +179,23 @@ def test_gateway_factory_is_disabled_by_default_and_has_no_hosted_provider():
     assert create_model_gateway("disabled", base_url="http://127.0.0.1:11434", model="") is None
     with pytest.raises(ValueError, match="unsupported model provider"):
         create_model_gateway("openai", base_url="https://api.openai.com", model="gpt")
+
+
+def test_gateway_refuses_provider_without_token_usage_for_budget_accounting():
+    provider = FakeProvider(ProviderResult(
+        content='{"summary":"safe","confidence":0.7}',
+        model_id="unknown-model",
+        prompt_tokens=None,
+        completion_tokens=None,
+    ))
+    gateway = ModelGateway(provider, model="qwen3:8b")
+
+    with pytest.raises(ModelBudgetExceeded, match="did not report token usage"):
+        gateway.generate(
+            output_model=PlannerReply,
+            system_prompt="Return JSON.",
+            user_payload={},
+            consent_enabled=True,
+            consent_provider="ollama",
+            remaining_tokens=100,
+        )
