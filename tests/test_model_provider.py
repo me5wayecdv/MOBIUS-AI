@@ -96,6 +96,8 @@ def test_gateway_rejects_invalid_structured_output():
     provider = FakeProvider(ProviderResult(
         content='{"summary":"not valid","confidence":4,"untrusted_extra":true}',
         model_id="qwen3:8b",
+        prompt_tokens=5,
+        completion_tokens=5,
     ))
     gateway = StructuredModelGateway(provider, model="qwen3:8b")
 
@@ -112,7 +114,7 @@ def test_gateway_rejects_invalid_structured_output():
 
 def test_gateway_enforces_remaining_token_budget():
     provider = FakeProvider()
-    gateway = ModelGateway(provider, model="qwen3:8b")
+    gateway = StructuredModelGateway(provider, model="qwen3:8b")
 
     with pytest.raises(ModelBudgetExceeded, match="only 10 remained"):
         gateway.generate(
