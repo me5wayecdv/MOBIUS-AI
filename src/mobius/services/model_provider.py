@@ -5,6 +5,7 @@ consent and validates every response against a caller-supplied Pydantic contract
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 import urllib.error
@@ -138,10 +139,10 @@ class OllamaProvider:
         )
 
 
-class ModelGateway:
+class StructuredModelGateway:
     """Consent-gated provider call with strict output and token-budget validation."""
 
-    def __init__(self, provider: ModelProvider, *, model: str, timeout_seconds: int = 120) -> None:
+    def __init__(self, provider: ModelProvider, *, model: str, timeout_seconds: int = 120, consent_enabled: bool = False, consent_provider: str | None = None, remaining_tokens: int = 0) -> None:
         if not model.strip():
             raise ValueError("model name is required")
         if not 1 <= timeout_seconds <= 900:
@@ -149,6 +150,39 @@ class ModelGateway:
         self.provider = provider
         self.model = model
         self.timeout_seconds = timeout_seconds
+        self.consent_enabled = consent_enabled
+        self.consent_provider = consent_provider
+        self.remaining_tokens = remaining_tokens
+
+    def with_consent(self, *, enabled: bool, provider: str | None, remaining_tokens: int) -> StructuredModelGateway:
+        return StructuredModelGateway(
+            self.provider, model=self.model, timeout_seconds=self.timeout_seconds,
+            consent_enabled=enabled, consent_provider=provider, remaining_tokens=remaining_tokens,
+        )
+
+    async def complete_structured(
+        self, *, role: str, system: str, user: str, schema: type[BaseModel],
+        temperature: float = 0.0, max_tokens: int = 4096,
+    ) -> dict[str, Any]:
+        if role not in {"reasoning", "workhorse"}:
+            raise ValueError("model role must be reasoning or workhorse")
+        parsed, result = await asyncio.to_thread(
+            self.generate,
+            output_model=schema,
+            system_prompt=system,
+            user_payload={"input": user},
+            consent_enabled=self.consent_enabled,
+            consent_provider=self.consent_provider,
+            remaining_tokens=self.remaining_tokens,
+        )
+        return {
+            "data": parsed,
+            "model_id": result.model_id,
+            "input_tokens": result.prompt_tokens,
+            "output_tokens": result.completion_tokens,
+            "latency_ms": result.duration_ms,
+            "schema_valid": True,
+        }
 
     def generate(
         self,
@@ -203,7 +237,7 @@ def create_model_gateway(
     if provider_name == "disabled":
         return None
     if provider_name == "ollama":
-        return ModelGateway(
+        return StructuredModelGateway(
             OllamaProvider(base_url),
             model=model,
             timeout_seconds=timeout_seconds,
