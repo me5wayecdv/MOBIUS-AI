@@ -22,6 +22,10 @@ dependencies = [
     "alembic>=1.13",
 ]
 
+[project.scripts]
+mobius-recon-worker = "mobius.worker.runner:main"
+mobius-recon-manifest = "mobius.worker.recon_manifest:main"
+
 [project.optional-dependencies]
 dev = ["pytest>=8", "httpx>=0.27"]
 
