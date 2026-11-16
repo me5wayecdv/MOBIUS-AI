@@ -60,4 +60,4 @@ jobs:
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "Configure the worker with this immutable reference:" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          printf '\`%s@%s\`\\n' "$IMAGE_REPOSITORY" "$IMAGE_DIGEST" >> "$GITHUB_STEP_SUMMARY"
+          printf '`%s@%s`\n' "$IMAGE_REPOSITORY" "$IMAGE_DIGEST" >> "$GITHUB_STEP_SUMMARY"
