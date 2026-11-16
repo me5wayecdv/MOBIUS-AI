@@ -24,6 +24,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from ..adapters.models import Base
+from ..adapters.android_manifest import extract_manifest_bytes, parse_surface, to_text_xml
 from ..services.artifacts import ArtifactStore
 from ..services.benchmark import Sample, load_corpus, measure
 from ..services.intake import IntakeService
@@ -53,7 +54,7 @@ def pipeline_analyser(workdir: Path):
             )
             auth = intake.create_authorization(
                 apk_sha256=app.sha256,
-                target_package=app.package_name or "unknown",
+                target_package=parse_surface(to_text_xml(extract_manifest_bytes(apk))).package_name,
                 scope_text="Benchmark corpus supplied by the project; static analysis only.",
                 statement="Labelled corpus, analysed for measurement.",
                 max_intensity=0,
