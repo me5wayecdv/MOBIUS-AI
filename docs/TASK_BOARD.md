@@ -9,7 +9,7 @@
 
 - Backend vertical slice exists: APK intake, SHA-256 authorization binding, binary manifest parsing, multi-DEX indexing with per-entry coverage/provenance, bounded application call-graph reachability, deterministic gates, NEXUS dispatcher, SSE replay, Markdown report. Isolated manifest and DEX worker job paths are implemented. The DEX OCI image is published and passed its real-DEX smoke test (PR #32); deployment on a dedicated worker host remains pending.
 - Existing War Room is a basic HTML page reading API data. It is not the intended final investigation cockpit.
-- No model is called. NEXUS is not yet an adaptive planner.
+- A local Ollama/structured-output provider boundary and deterministic mock now implement the core ModelGateway port (PR #33); it is disabled by default and no agent invokes it yet. NEXUS is not yet an adaptive planner.
 - No full decompilation workflow, CFG/taint analysis, model-backed adaptive NEXUS, PoC runner, persisted attack graph, PHANTOM, VECTOR, or independent VERITAS model reviewer. The DEX OCI worker is in implementation and is not marked operational until its image smoke test and worker deployment pass.
 - Latest documented audit and status files must be reconciled to current main before using them as live status.
 
@@ -38,7 +38,7 @@
 
 | # | Task | Owner | State | Acceptance |
 |---|---|---|---|---|
-| D-020 | Model provider abstraction + structured output validation | M1 | [ ] | Real provider and deterministic mock share same typed interface |
+| D-020 | Model provider abstraction + structured output validation | M1 | [~] | Local Ollama and deterministic mock share the core ModelGateway port; consent, JSON Schema validation and token accounting are tested. Live Ollama execution and NEXUS integration remain |
 | D-021 | Evidence package builder for targeted code context | M1 + M2 | [ ] | Context includes relevant code, callers, sinks and evidence refs; bounded |
 | D-022 | NEXUS hypothesis generation | M1 | [ ] | Hypotheses cite observations and declare required evidence before testing |
 | D-023 | Typed action registry and policy validation | M1 | [ ] | Model cannot dispatch arbitrary commands, targets or tools |
