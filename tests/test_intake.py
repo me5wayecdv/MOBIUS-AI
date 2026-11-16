@@ -220,3 +220,36 @@ def test_cancel_is_terminal_and_idempotent(service, running):
     assert service.cancel(running, by="a").state is InvestigationState.CANCELLED
     with pytest.raises(errors.ScanStateConflict):
         service.pause(running, by="a")
+
+
+
+def test_artifact_store_rejects_absolute_and_noncanonical_keys(store):
+    for key in ("/etc/passwd", "apk/aa/../secret.apk", "apk/aa/not-a-digest.apk"):
+        with pytest.raises(ValueError):
+            store.path_for(key)
+
+
+def test_artifact_store_rejects_a_digest_that_does_not_match_content(store):
+    with pytest.raises(ValueError, match="does not match"):
+        store.put(b"content", "0" * 64)
+
+
+def test_artifact_store_verifies_bytes_when_read_back(store):
+    payload = b"original evidence"
+    key, _ = store.put(payload)
+    path = store.path_for(key)
+    path.write_bytes(b"tampered evidence")
+    with pytest.raises(OSError, match="digest verification"):
+        store.get(key)
+
+
+def test_artifact_store_refuses_symlink_objects(store, tmp_path):
+    outside = tmp_path / "outside"
+    outside.write_bytes(b"not an artifact")
+    digest = ArtifactStore.digest(b"not an artifact")
+    key = store.key_for(digest)
+    target = store.path_for(key)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.symlink_to(outside)
+    with pytest.raises(ValueError, match="symlink"):
+        store.path_for(key)
