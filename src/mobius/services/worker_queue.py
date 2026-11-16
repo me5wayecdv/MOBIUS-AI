@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-from sqlalchemy import or_, select
+from sqlalchemy import or_, select, update
 from sqlalchemy.orm import Session
 
 from ..adapters.events import utcnow
@@ -49,6 +49,20 @@ class WorkerQueue:
         return row
 
     def claim(self, worker_id: str) -> WorkerJobRow | None:
+        now = utcnow()
+        self.session.execute(
+            update(WorkerJobRow)
+            .where(
+                WorkerJobRow.status == 'running',
+                WorkerJobRow.attempts >= 3,
+                WorkerJobRow.lease_until < now,
+            )
+            .values(
+                status='failed', error_code='WorkerLeaseExhausted',
+                error_detail='worker lease expired after three attempts',
+                finished_at=now, lease_until=None,
+            )
+        )
         stmt = (
             select(WorkerJobRow)
             .where(
