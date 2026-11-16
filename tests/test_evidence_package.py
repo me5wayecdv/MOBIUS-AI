@@ -14,7 +14,7 @@ from conftest import make_apk
 def _investigation(session, store, future_iso):
     intake = IntakeService(session, store)
     app, _ = intake.create_application(
-        b"PK\x03\x04fixture", "fixture.apk", uploaded_by="analyst-1"
+        make_apk(), "fixture.apk", uploaded_by="analyst-1"
     )
     auth = intake.create_authorization(
         apk_sha256=app.sha256,
