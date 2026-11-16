@@ -18,7 +18,7 @@ Endpoints:
 - `GET /api/v1/scans/{scan_id}/recon/jobs/{job_id}` — poll
 - `POST /api/v1/scans/{scan_id}/recon/jobs/{job_id}/apply` — apply completed output once
 
-The old `POST /recon` endpoint remains a development/test-only inline fallback. It returns 503 outside those environments. Do not use it as a production execution path.
+The old `POST /recon` endpoint is disabled by default. Tests may use the inline path; local developers must explicitly set `MOBIUS_RECON_INLINE=1`. It returns 503 otherwise. Do not enable this fallback in a shared or production environment.
 
 ## Build and pin the parser image
 
