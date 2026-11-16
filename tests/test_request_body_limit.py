@@ -38,8 +38,6 @@ def _run(middleware, *, headers=(), chunks=()):
         "path": "/api/v1/applications",
         "headers": list(headers),
     }
-    asyncio.run(middleware(scope, receive, send,)) if False else None
-
     async def invoke():
         await middleware(scope, receive, send)
 
