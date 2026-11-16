@@ -158,6 +158,7 @@ def test_model_gateway_rejects_unconsented_investigation_before_provider_call(
     from mobius.services.model_provider import InvestigationModelGateway
 
     scan_id, _ = _scan_with_observation(session, store, future_iso, consent=False)
+    session.commit()
     provider = CountingProvider('{"claim":"not called","confidence":0.2}')
     gateway = StructuredModelGateway(provider, model="local-test-model")
     factory = sessionmaker(bind=session.get_bind(), expire_on_commit=False, future=True)
