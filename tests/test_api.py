@@ -529,3 +529,39 @@ def test_recon_rejects_authorization_for_a_different_manifest_package(client):
     assert response.json()["code"] == "AUTH_REQUIRED"
     assert client.get(f"/api/v1/scans/{scan['id']}/evidence").json()["items"] == []
     assert client.get(f"/api/v1/scans/{scan['id']}/surface").json()["observations"] == []
+
+
+def test_isolated_recon_job_is_queued_polled_and_applied(client, ctx):
+    from mobius.services.worker_queue import WorkerQueue
+
+    app = _upload(client).json()
+    auth = _authorize(client, app["sha256"]).json()
+    scan = _scan(client, app["id"], auth["id"]).json()
+
+    queued = client.post(f"/api/v1/scans/{scan['id']}/recon/jobs")
+    assert queued.status_code == 202, queued.text
+    job_id = queued.json()["job_id"]
+    assert queued.json()["status"] == "queued"
+
+    with ctx.session() as session:
+        queue = WorkerQueue(session)
+        claimed = queue.claim("test-isolated-worker")
+        assert claimed is not None and claimed.id == job_id
+        queue.succeed(
+            job_id,
+            "test-isolated-worker",
+            {"manifest_xml": "<manifest package='com.example'/>"},
+        )
+        session.commit()
+
+    status = client.get(f"/api/v1/scans/{scan['id']}/recon/jobs/{job_id}")
+    assert status.status_code == 200
+    assert status.json()["status"] == "succeeded"
+
+    applied = client.post(f"/api/v1/scans/{scan['id']}/recon/jobs/{job_id}/apply")
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["package_name"] == "com.example"
+    assert client.get(f"/api/v1/scans/{scan['id']}/recon/jobs/{job_id}").json()["applied"] is True
+
+    duplicate = client.post(f"/api/v1/scans/{scan['id']}/recon/jobs/{job_id}/apply")
+    assert duplicate.status_code == 409
