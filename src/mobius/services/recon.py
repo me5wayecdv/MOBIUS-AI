@@ -27,13 +27,13 @@ from ..adapters.android_manifest import (
     to_text_xml,
 )
 from ..adapters.events import SqlEventStore, utcnow
-from ..adapters.models import ApplicationRow, FrontierEntryRow, InvestigationRow, ObservationRow
+from ..adapters.models import ApplicationRow, AuthorizationRow, FrontierEntryRow, InvestigationRow, ObservationRow
 from ..core import fsm
 from ..core.enums import EvidenceKind, Fidelity, InvestigationState, ObservationKind
 from ..core.ids import IdPrefix, new_id
 from ..core.manifest import Component, ExportSource, ManifestSurface, candidates, describe
 from .artifacts import ArtifactStore
-from .errors import ManifestInvalid, NotFound, ScanStateConflict
+from .errors import AuthorizationRequired, ManifestInvalid, NotFound, ScanStateConflict
 from .evidence import EvidenceService
 
 AGENT = "RECON"
@@ -61,6 +61,20 @@ class ReconService:
             raise NotFound(f"application {row.application_id} not found")
 
         surface, manifest_xml = self._load_surface(application)
+
+        # The authorization form's package name is an assertion, not proof. Bind it to
+        # the package parsed from the exact APK bytes before recording a usable surface.
+        authorization = (
+            self._session.get(AuthorizationRow, row.authorization_id)
+            if row.authorization_id else None
+        )
+        if authorization is None:
+            raise AuthorizationRequired("investigation has no active APK authorization")
+        if authorization.target_package != surface.package_name:
+            raise AuthorizationRequired(
+                "authorized target package does not match the package parsed from this APK"
+            )
+
         evidence = self._record_manifest(investigation_id, manifest_xml, surface)
 
         self._update_application(application, surface)
