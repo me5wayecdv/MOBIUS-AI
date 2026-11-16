@@ -8,7 +8,7 @@
 2. `POST /api/v1/scans/{scan_id}/spectre/jobs` creates a `dex_index` row in the existing durable `worker_jobs` queue.
 3. The separately deployed worker claims only registered kinds: `recon_manifest` or `dex_index`. It reads the APK from the content-addressed, read-only artifact volume.
 4. The worker stages the APK in its per-investigation workspace and invokes `mobius-dex-index` in a digest-pinned OCI image.
-5. The container runs without network, with read-only root, dropped capabilities, no-new-privileges, non-root UID, PID/memory/CPU/file-size/output/time limits, and only its investigation workspace mounted.
+5. The container runs without network, with read-only root, dropped capabilities, no-new-privileges, non-root UID, a bounded no-exec `/tmp` tmpfs, PID/memory/CPU/file-size/output/time limits, and only its investigation workspace mounted.
 6. Androguard enumerates each root-level `classes*.dex` entry, applies the existing method budget, and emits a versioned JSON call graph with DEX coverage, class/method provenance, boundary calls, and string constants.
 7. The worker stores only the JSON result in `worker_jobs`; it has no access to investigation, authorization, evidence, finding, or event tables.
 8. The API validates the strict result schema, size, coverage, and artifact SHA-256 binding before reconstructing `CodeIndex`.
@@ -49,3 +49,8 @@ The worker must use a dedicated DB role with SELECT/UPDATE only on `worker_jobs`
 `.github/workflows/dex-worker-image.yml` builds and publishes `ghcr.io/<owner>/mobius-dex`, then runs the published image against the repository's real Apache-2.0-licensed DEX fixture with network disabled. The exact immutable image reference is emitted in the Actions summary. Do not set `MOBIUS_DEX_IMAGE` to a mutable tag.
 
 Until that workflow succeeds and a worker deployment smoke test is completed, do not claim DEX parsing is operationally isolated in a deployed environment. The API's legacy synchronous SPECTRE and NEXUS paths remain disabled outside test/local development. The queued SPECTRE apply path is the intended route once the image digest and worker deployment are configured.
+
+
+## Image smoke-test correction
+
+The first published-image smoke test failed because the test invocation used a read-only root filesystem without the bounded `/tmp` tmpfs that the production `OciBackend` supplies. Androguard uses Python temporary files while parsing DEX. The workflow now mounts a 128 MiB `/tmp` tmpfs with `noexec,nosuid,nodev` and sets `HOME`/`TMPDIR` to that mount. A digest is not considered verified until the updated workflow passes its real-DEX smoke test.
