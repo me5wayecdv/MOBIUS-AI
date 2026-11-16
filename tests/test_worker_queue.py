@@ -89,3 +89,11 @@ def test_worker_job_lease_allows_reclaim_after_expiry(session, store, future_iso
     assert second.id == job.id
     assert second.worker_id == "worker-b"
     assert second.attempts == 2
+
+
+def test_worker_queue_prevents_duplicate_unapplied_recon_jobs(session, store, future_iso):
+    scan, app = _recon_job(session, store, future_iso)
+    queue = WorkerQueue(session)
+    queue.enqueue_recon(scan.id, app.artifact_key)
+    with pytest.raises(Exception, match="already active"):
+        queue.enqueue_recon(scan.id, app.artifact_key)
