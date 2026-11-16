@@ -172,7 +172,14 @@ def test_the_step_budget_stops_the_loop_and_reports_what_it_skipped(session, sto
     result = _nexus(session, store, _index()).run(scan, max_steps=1)
 
     assert result["dispatched"] == 1
-    assert result["remaining"] == 1
+    # The first reachable sink creates one adaptive callers_of action. The untouched
+    # original candidate and that follow-up both remain queued when the one-step
+    # budget is exhausted.
+    assert result["remaining"] == 2
+    queued = session.query(FrontierEntryRow).filter_by(
+        investigation_id=scan, state="queued"
+    ).all()
+    assert {entry.action for entry in queued} == {"find_api_refs", "callers_of"}
     assert result["stop_reason"] == "budget_exhausted"
     assert _row(session, scan).state == InvestigationState.CLOSED.value
     assert _row(session, scan).stop_reason == "budget_exhausted"
@@ -188,8 +195,9 @@ def test_a_budget_that_covers_the_work_does_not_stop_early(session, store, futur
     result = _nexus(session, store, _index()).run(scan, max_steps=5)
 
     assert result["stop_reason"] == "completed"
-    assert result["budget"]["steps_used"] == 2
-    assert result["budget"]["steps_remaining"] == 3
+    # Two original component checks plus the evidence-triggered caller inspection.
+    assert result["budget"]["steps_used"] == 3
+    assert result["budget"]["steps_remaining"] == 2
 
 
 # -- work without an executor is reported --------------------------------------------
@@ -294,9 +302,16 @@ def test_the_dispatch_order_is_identical_across_runs(session, store, future_iso)
         ]
 
     assert shape(first) == shape(second)
-    assert [r["component"] for r in first["results"]] == [
-        r["component"] for r in second["results"]
-    ]
+    def result_shape(result):
+        # Component investigations and caller inspections have different payload
+        # schemas. Compare their stable subject and status without assuming a
+        # component key exists on callers_of outcomes.
+        return [
+            (item.get("component") or item.get("target_method"), item["status"])
+            for item in result["results"]
+        ]
+
+    assert result_shape(first) == result_shape(second)
     assert first["findings"] == second["findings"]
 
 
@@ -400,7 +415,10 @@ def test_nexus_drops_known_action_with_unregistered_arguments(
     ]
     assert len(rejected) == 1
     assert "Extra inputs are not permitted" in rejected[0]["reason"]
-    assert result["dispatched"] == 2
+    # The malformed action is dropped, while the two component checks and the
+    # sink-triggered callers_of follow-up are valid dispatches.
+    assert result["dispatched"] == 3
+    assert result["dropped"] == 1
 
 
 
