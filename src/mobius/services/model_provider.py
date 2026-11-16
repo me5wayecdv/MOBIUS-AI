@@ -326,7 +326,12 @@ class InvestigationModelGateway:
                 max_tokens=max_tokens,
             )
         except Exception:
-            budget.release(reservation)
+            # A timeout/disconnect can happen after the provider accepted and processed
+            # the request. Without usage metadata, charge the full reservation.
+            budget.settle(
+                reservation, actual_tokens=reservation.reserved_tokens,
+                provider=self.gateway.provider.name, model_id=self.gateway.model,
+            )
             raise
 
         if result.prompt_tokens is None or result.completion_tokens is None:
