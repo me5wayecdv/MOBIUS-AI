@@ -313,7 +313,7 @@ def test_spectre_runs_over_http_against_a_real_dex(client):
         files={"file": ("demo.apk", _apk_with_fixture_dex(manifest),
                         "application/vnd.android.package-archive")},
     ).json()
-    auth = _authorize(client, app["sha256"]).json()
+    auth = _authorize(client, app["sha256"], target_package="com.example.demo").json()
     scan = _scan(client, app["id"], auth["id"]).json()
     assert client.post(f"/api/v1/scans/{scan['id']}/recon").status_code == 200
 
@@ -330,7 +330,7 @@ def test_spectre_runs_over_http_against_a_real_dex(client):
 
 def test_spectre_rejects_an_unparseable_dex_with_a_typed_error(client):
     app = _upload(client).json()
-    auth = _authorize(client, app["sha256"]).json()
+    auth = _authorize(client, app["sha256"], target_package="com.example.demo").json()
     scan = _scan(client, app["id"], auth["id"]).json()
     client.post(f"/api/v1/scans/{scan['id']}/recon")
     resp = client.post(f"/api/v1/scans/{scan['id']}/spectre")
@@ -351,7 +351,7 @@ def test_nexus_drives_the_whole_loop_over_http(client):
         files={"file": ("demo.apk", _apk_with_fixture_dex(manifest),
                         "application/vnd.android.package-archive")},
     ).json()
-    auth = _authorize(client, app["sha256"]).json()
+    auth = _authorize(client, app["sha256"], target_package="com.example.demo").json()
     scan = _scan(client, app["id"], auth["id"]).json()
     assert client.post(f"/api/v1/scans/{scan['id']}/recon").status_code == 200
 
@@ -392,7 +392,7 @@ def test_the_report_is_written_and_read_back_over_http(client):
         files={"file": ("demo.apk", _apk_with_fixture_dex(manifest),
                         "application/vnd.android.package-archive")},
     ).json()
-    auth = _authorize(client, app["sha256"]).json()
+    auth = _authorize(client, app["sha256"], target_package="com.example.demo").json()
     scan = _scan(client, app["id"], auth["id"]).json()
     client.post(f"/api/v1/scans/{scan['id']}/recon")
     closed = client.post(f"/api/v1/scans/{scan['id']}/nexus").json()
