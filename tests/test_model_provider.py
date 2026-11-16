@@ -43,7 +43,7 @@ class FakeProvider:
 
 def test_gateway_requires_explicit_per_investigation_consent():
     provider = FakeProvider()
-    gateway = StructuredModelGateway(provider, model="qwen3:8b")
+    gateway = StructuredStructuredModelGateway(provider, model="qwen3:8b")
 
     with pytest.raises(ModelConsentRequired, match="disabled"):
         gateway.generate(
@@ -219,7 +219,7 @@ def test_deterministic_mock_implements_the_same_core_model_gateway_port():
     assert isinstance(gateway, CoreModelGateway)
     result = asyncio.run(gateway.complete_structured(
         role="reasoning",
-        system_prompt="Return only the requested schema.",
+        system="Return only the requested schema.",
         user="Evidence: obs_123",
         schema=PlannerReply,
         temperature=0.0,
