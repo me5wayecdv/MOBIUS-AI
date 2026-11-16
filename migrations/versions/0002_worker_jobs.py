@@ -29,6 +29,7 @@ def upgrade() -> None:
         sa.Column("error_detail", sa.Text(), nullable=True),
         sa.Column("created_at", sa.String(length=40), nullable=False),
         sa.Column("started_at", sa.String(length=40), nullable=True),
+        sa.Column("lease_until", sa.String(length=40), nullable=True),
         sa.Column("finished_at", sa.String(length=40), nullable=True),
         sa.Column("applied_at", sa.String(length=40), nullable=True),
         sa.CheckConstraint(
