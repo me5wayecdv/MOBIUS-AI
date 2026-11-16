@@ -8,7 +8,7 @@ import json
 from fastapi import APIRouter, Depends, Header, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 
-from ..adapters.events import SqlEventStore
+from ..adapters.events import SqlEventStore, utcnow
 from ..adapters.models import ApplicationRow, EvidenceRow, FindingRow, InvestigationRow, WorkerJobRow
 from ..core import fsm, gates
 from ..core.enums import EvidenceKind, InvestigationState, RejectionReason
@@ -477,7 +477,7 @@ def apply_recon_job(scan_id: str, job_id: str, session=Depends(_session), who: s
         from ..services.errors import ManifestInvalid
         raise ManifestInvalid("worker returned an invalid or oversized manifest result")
     result = ReconService(session, get_context().store).run(scan_id, manifest_xml=manifest_xml.encode("utf-8"))
-    job.applied_at = __import__("mobius.adapters.events", fromlist=["utcnow"]).utcnow()
+    job.applied_at = utcnow()
     SqlEventStore(session).emit(
         scan_id, "worker_job_applied",
         {"job_id": job.id, "kind": job.kind, "status": job.status},
