@@ -137,6 +137,7 @@ def test_nexus_model_generation_requires_consent_and_persists_model_decision(
     }
     provider = CountingProvider(json.dumps(response))
     gateway = StructuredModelGateway(provider, model="local-test-model")
+    session.commit()
     factory = sessionmaker(bind=session.get_bind(), expire_on_commit=False, future=True)
 
     result = NexusHypothesisService(
@@ -167,3 +168,37 @@ def test_model_gateway_rejects_unconsented_investigation_before_provider_call(
             role="reasoning", system="s", user="u", schema=HypothesisReply, max_tokens=16
         ))
     assert provider.calls == 0
+
+
+
+def test_investigation_gateway_accumulates_usage_across_sequential_calls(
+    session, store, future_iso
+):
+    from mobius.services.model_provider import InvestigationModelGateway
+
+    scan_id, _ = _scan_with_observation(
+        session, store, future_iso, consent=True
+    )
+    session.commit()
+    provider = CountingProvider('{"claim":"A valid structured model response","confidence":0.7}')
+    gateway = StructuredModelGateway(provider, model="local-test-model")
+    factory = sessionmaker(bind=session.get_bind(), expire_on_commit=False, future=True)
+    bound = InvestigationModelGateway(gateway, factory, scan_id)
+
+    import asyncio
+    first = asyncio.run(bound.complete_structured(
+        role="reasoning", system="short system", user="first call",
+        schema=HypothesisReply, max_tokens=32,
+    ))
+    second = asyncio.run(bound.complete_structured(
+        role="reasoning", system="short system", user="second call",
+        schema=HypothesisReply, max_tokens=32,
+    ))
+
+    session.expire_all()
+    row = session.get(InvestigationRow, scan_id)
+    assert first["input_tokens"] + first["output_tokens"] == 12
+    assert second["input_tokens"] + second["output_tokens"] == 12
+    assert row.used_json["model_tokens"] == 24
+    assert row.used_json["model_tokens_reserved"] == 0
+    assert provider.calls == 2
