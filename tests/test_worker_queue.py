@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from mobius.adapters.models import InvestigationRow
 from mobius.services.artifacts import ArtifactStore
 from mobius.services.intake import IntakeService
 from mobius.services.worker_queue import WorkerQueue
@@ -61,7 +62,7 @@ def test_worker_cannot_complete_another_workers_job(session, store, future_iso):
 
 def test_worker_queue_refuses_jobs_outside_recon_state(session, store, future_iso):
     scan, app = _recon_job(session, store, future_iso)
-    session.get(__import__("mobius.adapters.models", fromlist=["InvestigationRow"]).InvestigationRow, scan.id).state = "CLOSED"
+    session.get(InvestigationRow, scan.id).state = "CLOSED"
     session.flush()
     with pytest.raises(Exception, match="requires RECON state"):
         WorkerQueue(session).enqueue_recon(scan.id, app.artifact_key)
