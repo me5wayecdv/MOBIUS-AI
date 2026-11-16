@@ -64,3 +64,12 @@ def test_registry_rejects_agent_mismatch_and_insufficient_intensity():
             "find_api_refs", {"component": "com.example.Entry"},
             required_agent="SPECTRE", intensity=-1,
         )
+
+
+
+def test_api_exposes_only_the_registered_nexus_action_schemas(client):
+    response = client.get("/api/v1/nexus/actions")
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert {item["name"] for item in items} == {"callers_of", "find_api_refs"}
+    assert all(item["agent"] == "SPECTRE" for item in items)
