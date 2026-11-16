@@ -6,6 +6,7 @@ consent and validates every response against a caller-supplied Pydantic contract
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import time
 import urllib.error
