@@ -25,6 +25,7 @@ dependencies = [
 [project.scripts]
 mobius-recon-worker = "mobius.worker.runner:main"
 mobius-recon-manifest = "mobius.worker.recon_manifest:main"
+mobius-dex-index = "mobius.worker.dex_index:main"
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "httpx>=0.27"]
