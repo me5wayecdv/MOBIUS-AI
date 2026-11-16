@@ -1,10 +1,9 @@
 """NEXUS hypothesis generation from bounded, persisted evidence packages."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -15,8 +14,6 @@ from .evidence_package import EvidencePackageBuilder
 from .errors import NotFound
 from .model_provider import (
     InvestigationModelGateway,
-    ModelBudgetExceeded,
-    ModelConsentRequired,
     ModelOutputInvalid,
     StructuredModelGateway,
 )
