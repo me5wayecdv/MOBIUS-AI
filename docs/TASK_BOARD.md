@@ -10,7 +10,7 @@
 - Backend vertical slice exists: APK intake, SHA-256 authorization binding, binary manifest parsing, multi-DEX indexing with per-entry coverage/provenance, bounded application call-graph reachability, deterministic gates, NEXUS dispatcher, SSE replay, Markdown report. Isolated manifest and DEX worker job paths are implemented. The DEX OCI image is published and passed its real-DEX smoke test (PR #32); deployment on a dedicated worker host remains pending.
 - Existing War Room is a basic HTML page reading API data. It is not the intended final investigation cockpit.
 - A local Ollama/structured-output provider boundary and deterministic mock now implement the core ModelGateway port (PR #33); it is disabled by default and no agent invokes it yet. NEXUS is not yet an adaptive planner.
-- No full decompilation workflow, CFG/taint analysis, model-backed adaptive NEXUS, PoC runner, persisted attack graph, PHANTOM, VECTOR, or independent VERITAS model reviewer. The DEX OCI worker is in implementation and is not marked operational until its image smoke test and worker deployment pass.
+- No full decompilation workflow, CFG/taint analysis, model-backed adaptive NEXUS, PoC runner, persisted attack graph, PHANTOM, VECTOR, or independent VERITAS model reviewer. The DEX OCI worker image smoke test passed; dedicated worker deployment remains pending.
 - Latest documented audit and status files must be reconciled to current main before using them as live status.
 
 ## Priority 0 — Establish reproducible demo target
@@ -42,8 +42,8 @@
 | D-021 | Evidence package builder for targeted code context | M1 + M2 | [~] | PR #34 merged with bounded component-scoped observations, method/caller references, sink/guard references, findings and evidence provenance. Actual decompiled source snippets remain blocked on D-012/JADX; do not mark complete until included and tested |
 | D-022 | NEXUS hypothesis generation | M1 | [~] | PR #35 merged; Python 3.11/3.12 CI green. Structured model-backed hypotheses cite only packaged observation IDs and declare required evidence; deterministic fallback remains default and explicitly labelled. No tool dispatch or PoC execution from model output. Real Ollama run/model quality benchmark remains unverified |
 | D-023 | Typed action registry and policy validation | M1 | [~] | PR #36 merged; Python 3.11/3.12 CI green. Closed SPECTRE action allowlist, strict Pydantic argument schemas, agent/intensity checks and API schema discovery. |
-| D-024 | Adaptive re-planning loop | M1 | [~] | A reachable sink result now creates a typed `callers_of` follow-up for the sink-bearing method; a fixed integration test asserts the changed next action. This first re-planner is deterministic policy, not model-generated. CI pending |
-| D-025 | Persist model/provider/version, prompt version and decisions | M1 | [ ] | Investigation is auditable and replayable |
+| D-024 | Adaptive re-planning loop | M1 | [x] | PR #37 merged; reachable sink results create a typed `callers_of` follow-up for the sink-bearing method, persist a decision/event, and dispatch through the closed registry. Deterministic policy, not model-generated. Python 3.11/3.12 CI green. |
+| D-025 | Persist model/provider/version, prompt version and decisions | M1 | [~] | NEXUS model hypothesis decisions persist provider, requested/actual model, role, prompt version, prompt/input/schema/response SHA-256, schema name, validated structured output, token usage, latency and generation parameters. Deterministic fallback remains explicitly labelled and records no provider/model. Broader decision producers and replay UI/API remain. |
 | D-026 | Independent VERITAS review | M1 + M5 | [ ] | Separate reviewer execution challenges claim; gates remain final authority |
 
 ## Priority 3 — Correlation and attack graph

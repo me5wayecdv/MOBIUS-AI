@@ -6,6 +6,7 @@ consent and validates every response against a caller-supplied Pydantic contract
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import time
 import urllib.error
@@ -362,9 +363,20 @@ class InvestigationModelGateway:
             validated = schema.model_validate(parsed)
         except (ValueError, ValidationError) as exc:
             raise ModelOutputInvalid("model output failed the requested JSON schema") from exc
+        schema_json = json.dumps(schema.model_json_schema(), sort_keys=True, separators=(",", ":"))
         return {
             "data": validated,
+            "provider": self.gateway.provider.name,
+            "requested_model": self.gateway.model,
             "model_id": result.model_id,
+            "role": role,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "schema_name": schema.__name__,
+            "system_prompt_sha256": hashlib.sha256(system.encode("utf-8")).hexdigest(),
+            "input_sha256": hashlib.sha256(user.encode("utf-8")).hexdigest(),
+            "schema_sha256": hashlib.sha256(schema_json.encode("utf-8")).hexdigest(),
+            "response_sha256": hashlib.sha256(result.content.encode("utf-8")).hexdigest(),
             "input_tokens": result.prompt_tokens,
             "output_tokens": result.completion_tokens,
             "latency_ms": result.duration_ms,

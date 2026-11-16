@@ -85,6 +85,8 @@ class NexusHypothesisService:
         mode = "deterministic_fallback"
         model_id: str | None = None
         usage: dict[str, int] = {"input_tokens": 0, "output_tokens": 0}
+        provenance: dict[str, Any] = {}
+        output_json: dict[str, Any] | None = None
         summary = "Deterministic fallback: hypotheses are rule-derived from persisted observations."
         proposed: list[ProposedHypothesis]
 
@@ -109,6 +111,22 @@ class NexusHypothesisService:
             usage = {
                 "input_tokens": int(result["input_tokens"]),
                 "output_tokens": int(result["output_tokens"]),
+            }
+            output_json = reply.model_dump(mode="json")
+            provenance = {
+                "provider": result["provider"],
+                "model_role": result["role"],
+                "requested_model": result["requested_model"],
+                "system_prompt_sha256": result["system_prompt_sha256"],
+                "input_sha256": result["input_sha256"],
+                "schema_sha256": result["schema_sha256"],
+                "response_sha256": result["response_sha256"],
+                "schema_name": result["schema_name"],
+                "input_tokens": result["input_tokens"],
+                "output_tokens": result["output_tokens"],
+                "latency_ms": result["latency_ms"],
+                "temperature": result["temperature"],
+                "max_tokens": result["max_tokens"],
             }
             mode = "model_gateway"
         else:
@@ -166,6 +184,20 @@ class NexusHypothesisService:
             uncertainty=summary,
             prompt_version=PROMPT_VERSION,
             model_id=model_id,
+            provider=provenance.get("provider"),
+            model_role=provenance.get("model_role"),
+            requested_model=provenance.get("requested_model"),
+            system_prompt_sha256=provenance.get("system_prompt_sha256"),
+            input_sha256=provenance.get("input_sha256"),
+            schema_sha256=provenance.get("schema_sha256"),
+            response_sha256=provenance.get("response_sha256"),
+            schema_name=provenance.get("schema_name"),
+            output_json=output_json,
+            input_tokens=provenance.get("input_tokens"),
+            output_tokens=provenance.get("output_tokens"),
+            latency_ms=provenance.get("latency_ms"),
+            temperature=provenance.get("temperature"),
+            max_tokens=provenance.get("max_tokens"),
             created_at=utcnow(),
         )
         self.session.add(decision)
@@ -181,7 +213,12 @@ class NexusHypothesisService:
                 "count": len(persisted),
                 "decision_id": decision.id,
                 "model_id": model_id,
+                "provider": provenance.get("provider"),
                 "prompt_version": PROMPT_VERSION,
+                "system_prompt_sha256": provenance.get("system_prompt_sha256"),
+                "input_sha256": provenance.get("input_sha256"),
+                "schema_sha256": provenance.get("schema_sha256"),
+                "response_sha256": provenance.get("response_sha256"),
                 "token_usage": usage,
                 "package_truncated": package.truncated,
             },
@@ -193,6 +230,9 @@ class NexusHypothesisService:
             "summary": summary,
             "decision_id": decision.id,
             "model_id": model_id,
+            "provider": provenance.get("provider"),
+            "prompt_version": PROMPT_VERSION,
+            "provenance": provenance,
             "token_usage": usage,
             "package_truncated": package.truncated,
             "hypotheses": [

@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import sessionmaker
 
 from conftest import make_apk
-from mobius.adapters.models import InvestigationRow, ObservationRow
+from mobius.adapters.models import DecisionRow, InvestigationRow, ObservationRow
 from mobius.core.enums import EvidenceKind, Fidelity, ObservationKind
 from mobius.core.ids import IdPrefix, new_id
 from mobius.core.schemas import Budget
@@ -150,6 +150,26 @@ def test_nexus_model_generation_requires_consent_and_persists_model_decision(
     assert provider.calls == 1
     assert result["hypotheses"][0]["derived_from"] == [observation_id]
     assert result["hypotheses"][0]["status"] == "open"
+
+    decision = session.query(DecisionRow).filter_by(
+        investigation_id=scan_id, action="generate_hypotheses"
+    ).one()
+    assert decision.provider == "ollama"
+    assert decision.model_role == "reasoning"
+    assert decision.requested_model == "local-test-model"
+    assert decision.model_id == "local-test-model"
+    assert decision.prompt_version == "nexus-hypothesis-generation-v1"
+    assert decision.system_prompt_sha256 and len(decision.system_prompt_sha256) == 64
+    assert decision.input_sha256 and len(decision.input_sha256) == 64
+    assert decision.schema_sha256 and len(decision.schema_sha256) == 64
+    assert decision.response_sha256 and len(decision.response_sha256) == 64
+    assert decision.schema_name == "HypothesisGenerationReply"
+    assert decision.output_json["hypotheses"][0]["claim"] == response["hypotheses"][0]["claim"]
+    assert decision.input_tokens == 7
+    assert decision.output_tokens == 5
+    assert decision.latency_ms == 0
+    assert decision.temperature == 0.0
+    assert decision.max_tokens == 1200
 
 
 def test_model_gateway_rejects_unconsented_investigation_before_provider_call(
