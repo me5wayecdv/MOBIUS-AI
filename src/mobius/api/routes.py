@@ -179,6 +179,11 @@ def create_scan(
     session=Depends(_session),
     who: str = Depends(analyst_id),
 ):
+    if payload.llm_data_sharing:
+        raise HTTPException(
+            status_code=422,
+            detail="model consent must be granted explicitly after scan creation via PUT /scans/{scan_id}/model-consent with provider=ollama",
+        )
     ctx = get_context()
     from ..core.schemas import Budget
 
