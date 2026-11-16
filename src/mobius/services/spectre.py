@@ -293,9 +293,76 @@ class SpectreService:
             "guards": [g.id for g in result.guards],
             # None, not 0: a zero-length path would read as "the entry point is the sink".
             "path_length": len(result.path) if result.path else None,
+            "method_path": [
+                {"class_name": method.class_name, "name": method.name, "descriptor": method.descriptor}
+                for method in result.path
+            ],
+            "maswe": list(result.sink.maswe) if result.sink else [],
             "explanation": result.explain(),
             "observation_id": observation.id,
             "attributes": attributes,
+        }
+
+    def inspect_callers(
+        self,
+        investigation_id: str,
+        entry: FrontierEntryRow,
+        index: CodeIndex,
+        evidence_id: str,
+    ) -> dict[str, object]:
+        """Record direct bytecode callers for a typed method reference; do not create a finding."""
+        args = entry.action_args or {}
+        target = MethodRef(
+            class_name=str(args["target_class"]),
+            name=str(args["target_method"]),
+            descriptor=str(args.get("target_descriptor") or ""),
+        )
+        if target not in index.graph.edges:
+            # A method absent from the indexed graph is not proof that it has no callers.
+            # The explicit exhaustive bit is false whenever the method or index is incomplete.
+            exhaustive = bool(index.complete)
+            callers: tuple[MethodRef, ...] = ()
+            target_present = False
+        else:
+            callers = index.graph.callers_of(target)
+            exhaustive = bool(index.complete)
+            target_present = True
+
+        observation = ObservationRow(
+            id=new_id(IdPrefix.OBSERVATION),
+            investigation_id=investigation_id,
+            agent=AGENT,
+            kind=ObservationKind.FACT.value,
+            fidelity=Fidelity.DECOMPILED.value,
+            subject_type="method",
+            subject_ref=str(target),
+            statement=(
+                f"Indexed {len(callers)} direct application caller(s) for {target}"
+                if target_present
+                else f"Method {target} was not present in the indexed application call graph"
+            ),
+            attributes={
+                "target_method": str(target),
+                "target_present": target_present,
+                "callers": [str(method) for method in callers],
+                "caller_count": len(callers),
+                "exhaustive": exhaustive,
+                "index_truncated": index.truncated,
+            },
+            maswe=[],
+            confidence=1.0 if target_present else 0.5,
+            evidence_refs=[evidence_id],
+            created_at=utcnow(),
+        )
+        self._session.add(observation)
+        self._session.flush()
+        return {
+            "status": "observed",
+            "target_method": str(target),
+            "callers": [str(method) for method in callers],
+            "caller_count": len(callers),
+            "exhaustive": exhaustive,
+            "observation_id": observation.id,
         }
 
     @staticmethod

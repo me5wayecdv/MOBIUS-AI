@@ -290,3 +290,18 @@ def test_truncated_search_establishes_neither_clause():
 
     assert result.status == "truncated"
     assert result.attributes() == {"sink_reachable": None, "caller_check_absent": None}
+
+
+
+def test_call_graph_returns_direct_callers_in_stable_order():
+    root = M("com.x.Entry", "onCreate")
+    caller_b = M("com.x.B", "invoke")
+    caller_a = M("com.x.A", "invoke")
+    graph, _ = build(edges={
+        root: [caller_b],
+        caller_b: [],
+        caller_a: [caller_b],
+    })
+
+    assert graph.callers_of(caller_b) == (caller_a, root)
+    assert graph.callers_of(M("com.x.Missing", "run")) == ()

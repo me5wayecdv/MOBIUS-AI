@@ -73,3 +73,26 @@ def test_api_exposes_only_the_registered_nexus_action_schemas(client):
     items = response.json()["items"]
     assert {item["name"] for item in items} == {"callers_of", "find_api_refs"}
     assert all(item["agent"] == "SPECTRE" for item in items)
+
+
+
+def test_callers_of_schema_requires_a_typed_method_reference():
+    spec, args = ActionRegistry().validate(
+        "callers_of",
+        {
+            "target_class": "com.example.Entry",
+            "target_method": "onCreate",
+            "target_descriptor": "(Landroid/os/Bundle;)V",
+        },
+        required_agent="SPECTRE",
+        intensity=0,
+    )
+    assert spec.name == "callers_of"
+    assert args["target_class"] == "com.example.Entry"
+    with pytest.raises(ActionRejected):
+        ActionRegistry().validate(
+            "callers_of",
+            {"component": "com.example.Entry"},
+            required_agent="SPECTRE",
+            intensity=0,
+        )

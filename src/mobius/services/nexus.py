@@ -29,11 +29,12 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from ..adapters.events import SqlEventStore
-from ..adapters.models import FrontierEntryRow, InvestigationRow
+from ..adapters.events import SqlEventStore, utcnow
+from ..adapters.models import DecisionRow, FrontierEntryRow, InvestigationRow
 from ..core import frontier
 from ..core.actions import ActionRegistry, ActionRejected
 from ..core.enums import FindingStatus, InvestigationState, StopReason
+from ..core.ids import IdPrefix, new_id
 from ..core.schemas import FrontierEntry
 from .archivist import ArchivistService
 from .artifacts import ArtifactStore
@@ -173,6 +174,8 @@ class NexusService:
             steps.append(step)
             if outcome is not None:
                 outcomes.append(outcome)
+                if entry_row.action == "find_api_refs":
+                    self._replan_after_result(row, entry_row, outcome)
             self._advance(row, InvestigationState.OBSERVING)
             if step.disposition == "deferred":
                 # The entry stays queued on purpose; re-popping it would spin forever.
@@ -402,11 +405,101 @@ class NexusService:
             {"entry_id": entry.id, "action": entry.action, "agent": agent},
             actor=AGENT,
         )
-        outcome = self._spectre.investigate(row.id, entry, index, evidence_id)
+        if entry.action == "callers_of":
+            outcome = self._spectre.inspect_callers(row.id, entry, index, evidence_id)
+        else:
+            outcome = self._spectre.investigate(row.id, entry, index, evidence_id)
         entry.state = "done" if outcome is not None else "dropped"
         self._session.flush()
         reason = None if outcome is not None else "the entry carried no component to analyse"
         return Step(entry.id, entry.action, agent, "done", reason), outcome
+
+    def _replan_after_result(
+        self,
+        investigation: InvestigationRow,
+        source_entry: FrontierEntryRow,
+        outcome: dict[str, object],
+    ) -> None:
+        """Turn a newly observed reachable path into one typed caller-inspection action."""
+        if outcome.get("reachability") != "reached":
+            return
+        path = outcome.get("method_path")
+        if not isinstance(path, list) or not path:
+            return
+        target = path[-1]
+        if not isinstance(target, dict):
+            return
+        args = {
+            "target_class": target.get("class_name"),
+            "target_method": target.get("name"),
+            "target_descriptor": target.get("descriptor") or "",
+        }
+        try:
+            self._action_registry.validate(
+                "callers_of", args, required_agent="SPECTRE",
+                intensity=investigation.intensity,
+            )
+        except ActionRejected:
+            return
+
+        duplicate = self._session.query(FrontierEntryRow).filter(
+            FrontierEntryRow.investigation_id == investigation.id,
+            FrontierEntryRow.action == "callers_of",
+            FrontierEntryRow.action_args == args,
+            FrontierEntryRow.state.in_(("queued", "done")),
+        ).first()
+        if duplicate is not None or (source_entry.depth or 0) >= self._max_depth:
+            return
+
+        observation_id = outcome.get("observation_id")
+        entry = FrontierEntryRow(
+            id=new_id(IdPrefix.FRONTIER),
+            investigation_id=investigation.id,
+            action="callers_of",
+            action_args=args,
+            required_agent="SPECTRE",
+            relates_to_maswe=list(outcome.get("maswe") or []),
+            score=max(0.0, min(1.0, float(source_entry.score or 0.5) + 0.1)),
+            depth=(source_entry.depth or 0) + 1,
+            state="queued",
+            attempts=0,
+            inserted_at=utcnow(),
+        )
+        self._session.add(entry)
+        decision = DecisionRow(
+            id=new_id(IdPrefix.DECISION),
+            investigation_id=investigation.id,
+            agent=AGENT,
+            action="adaptive_replan",
+            action_args={
+                "source_action": source_entry.action,
+                "next_action": "callers_of",
+                "target_method": args,
+            },
+            considered_evidence=[observation_id] if observation_id else [],
+            alternatives=["stop_component_investigation"],
+            expected_outcome="Inspect direct callers of the method containing the reachable sink call.",
+            uncertainty="Direct caller edges are bytecode references; they do not prove runtime execution or tainted input.",
+            prompt_version="nexus-adaptive-replan-v1-deterministic",
+            model_id=None,
+            created_at=utcnow(),
+        )
+        self._session.add(decision)
+        self._session.flush()
+        SqlEventStore(self._session).emit(
+            investigation.id,
+            "nexus_replanned",
+            {
+                "source_entry_id": source_entry.id,
+                "source_observation_id": observation_id,
+                "next_entry_id": entry.id,
+                "next_action": "callers_of",
+                "target_method": args,
+                "decision_id": decision.id,
+                "mode": "deterministic_policy",
+            },
+            actor=AGENT,
+        )
 
     @staticmethod
     def _counts(outcomes: list[dict[str, object]]) -> dict[str, int]:

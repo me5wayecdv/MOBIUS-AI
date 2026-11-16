@@ -30,6 +30,19 @@ class ComponentArgs(_ActionArgs):
 
 
 @dataclass(frozen=True, slots=True)
+class CallersOfArgs(_ActionArgs):
+    target_class: str = Field(
+        min_length=1, max_length=500,
+        pattern=r"^[A-Za-z_$][A-Za-z0-9_.$]*$",
+    )
+    target_method: str = Field(
+        min_length=1, max_length=300,
+        pattern=r"^[A-Za-z_$<>][A-Za-z0-9_$<>]*$",
+    )
+    target_descriptor: str = Field(default="", max_length=4000)
+
+
+@dataclass(frozen=True, slots=True)
 class ActionSpec:
     name: str
     agent: str
@@ -49,9 +62,9 @@ _REGISTRY: dict[str, ActionSpec] = {
     "callers_of": ActionSpec(
         name="callers_of",
         agent="SPECTRE",
-        args_model=ComponentArgs,
+        args_model=CallersOfArgs,
         minimum_intensity=0,
-        description="Inspect caller relationships for a named application component.",
+        description="Find direct application callers of one indexed method reference.",
     ),
 }
 
