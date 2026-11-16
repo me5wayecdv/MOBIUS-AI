@@ -52,7 +52,50 @@ from .errors import (
 )
 
 MAX_APK_BYTES = 200 * 1024 * 1024
+MAX_APK_ENTRIES = 20_000
+MAX_APK_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024
+MAX_APK_ENTRY_BYTES = 256 * 1024 * 1024
+MAX_APK_COMPRESSION_RATIO = 200
+MAX_MANIFEST_BYTES = 10 * 1024 * 1024
 _REQUIRED_ENTRY = "AndroidManifest.xml"
+
+
+def _validate_zip_container(zf: zipfile.ZipFile) -> None:
+    """Reject ambiguous or resource-exhausting ZIP metadata without extracting entries."""
+    infos = zf.infolist()
+    if len(infos) > MAX_APK_ENTRIES:
+        raise ApkInvalid(f"APK contains too many ZIP entries (maximum {MAX_APK_ENTRIES})")
+
+    seen: set[str] = set()
+    total_uncompressed = 0
+    manifest_found = False
+    for info in infos:
+        name = info.filename
+        if name in seen:
+            raise ApkInvalid(f"APK contains duplicate ZIP entry: {name!r}")
+        seen.add(name)
+        if name.startswith("/") or "\\" in name or ".." in name.split("/"):
+            raise ApkInvalid(f"APK contains an unsafe ZIP entry path: {name!r}")
+        if info.flag_bits & 0x1:
+            raise ApkInvalid(f"APK contains an encrypted ZIP entry: {name!r}")
+        if info.file_size < 0 or info.compress_size < 0:
+            raise ApkInvalid(f"APK contains invalid ZIP size metadata: {name!r}")
+        if info.file_size > MAX_APK_ENTRY_BYTES:
+            raise ApkInvalid(f"APK ZIP entry exceeds the per-entry limit: {name!r}")
+        total_uncompressed += info.file_size
+        if total_uncompressed > MAX_APK_UNCOMPRESSED_BYTES:
+            raise ApkInvalid("APK exceeds the total uncompressed ZIP size limit")
+        if info.file_size > 1024 * 1024:
+            ratio = info.file_size / max(1, info.compress_size)
+            if ratio > MAX_APK_COMPRESSION_RATIO:
+                raise ApkInvalid(f"APK ZIP entry has an excessive compression ratio: {name!r}")
+        if name == _REQUIRED_ENTRY:
+            manifest_found = True
+            if info.file_size > MAX_MANIFEST_BYTES:
+                raise ApkInvalid("AndroidManifest.xml exceeds the manifest size limit")
+
+    if not manifest_found:
+        raise ApkInvalid(f"missing {_REQUIRED_ENTRY}; this is not an APK")
 
 
 def parse_ts(value: str) -> datetime:
@@ -112,11 +155,9 @@ class IntakeService:
             raise ApkInvalid("not a ZIP archive; an APK must be a ZIP")
         try:
             with zipfile.ZipFile(BytesIO(data)) as zf:
-                names = set(zf.namelist())
+                _validate_zip_container(zf)
         except zipfile.BadZipFile as exc:
             raise ApkInvalid(f"corrupt ZIP: {exc}") from exc
-        if _REQUIRED_ENTRY not in names:
-            raise ApkInvalid(f"missing {_REQUIRED_ENTRY}; this is not an APK")
 
         sha256 = ArtifactStore.digest(data)
         existing = self._session.execute(
