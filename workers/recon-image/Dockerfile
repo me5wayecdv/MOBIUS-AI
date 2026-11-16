@@ -7,4 +7,3 @@ COPY src ./src
 RUN pip install --no-cache-dir .
 RUN useradd --system --uid 65532 --no-create-home mobius
 USER 65532:65532
-ENTRYPOINT ["/usr/local/bin/mobius-recon-manifest"]
