@@ -13,7 +13,8 @@ from sqlalchemy import or_, select, update
 from sqlalchemy.orm import Session
 
 from ..adapters.events import utcnow
-from ..adapters.models import InvestigationRow, WorkerJobRow
+from ..adapters.models import ApplicationRow, AuthorizationRow, InvestigationRow, WorkerJobRow
+from .intake import is_expired
 from .errors import NotFound, ScanStateConflict
 
 
@@ -29,6 +30,18 @@ class WorkerQueue:
             raise ScanStateConflict(
                 f"RECON job requires RECON state, got {investigation.state}"
             )
+        application = self.session.get(ApplicationRow, investigation.application_id)
+        authorization = self.session.get(AuthorizationRow, investigation.authorization_id)
+        if application is None or authorization is None:
+            raise ScanStateConflict("RECON requires an existing APK and authorization")
+        if (
+            authorization.revoked_at is not None
+            or is_expired(authorization.expires_at)
+            or authorization.apk_sha256 != application.sha256
+        ):
+            raise ScanStateConflict("APK authorization is no longer valid for this artifact")
+        if artifact_key != application.artifact_key:
+            raise ScanStateConflict("worker job artifact does not match the investigation APK")
         job = WorkerJobRow(
             id=str(uuid4()),
             investigation_id=investigation_id,
