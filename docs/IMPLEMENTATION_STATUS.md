@@ -141,3 +141,6 @@ is missing. A status file that lags reality is worse than no status file, becaus
 
 
 Investigation reads and mutations are now scoped to `created_by`, and list endpoints filter by analyst identity (`docs/INVESTIGATION_OWNERSHIP.md`). This is not production authentication: `X-Analyst-Id` remains spoofable, and the production startup guard remains mandatory.
+
+
+APK HTTP uploads now have a pre-parser ASGI body cap, including chunked requests, with disk spooling after 8 MiB. Reverse-proxy limits, request timeouts/concurrency controls, and isolated APK parsing remain required.
