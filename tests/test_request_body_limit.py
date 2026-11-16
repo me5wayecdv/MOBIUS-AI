@@ -70,7 +70,10 @@ def test_rejects_chunked_body_that_crosses_limit():
 
 
 def test_replays_bounded_request_chunks_unchanged():
-    middleware = RequestBodyLimitMiddleware(lambda *_: None, max_bytes=10)
+    async def passthrough(scope, receive, send):
+        return None
+
+    middleware = RequestBodyLimitMiddleware(passthrough, max_bytes=10)
     sent, called = _run(
         middleware,
         headers=[(b"content-length", b"6")],
@@ -84,7 +87,10 @@ def test_replays_bounded_request_chunks_unchanged():
 
 
 def test_non_upload_routes_are_not_subject_to_apk_allowance():
-    middleware = RequestBodyLimitMiddleware(lambda *_: None, max_bytes=1)
+    async def passthrough(scope, receive, send):
+        return None
+
+    middleware = RequestBodyLimitMiddleware(passthrough, max_bytes=1)
     sent, called = _run(
         middleware,
         headers=[(b"content-length", b"999")],
