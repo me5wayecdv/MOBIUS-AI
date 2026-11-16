@@ -48,6 +48,14 @@ The worker must use a dedicated DB role with SELECT/UPDATE only on `worker_jobs`
 
 `.github/workflows/dex-worker-image.yml` builds and publishes `ghcr.io/<owner>/mobius-dex`, then runs the published image against the repository's real Apache-2.0-licensed DEX fixture with network disabled. The exact immutable image reference is emitted in the Actions summary. Do not set `MOBIUS_DEX_IMAGE` to a mutable tag.
 
+Latest successful image build and real-DEX smoke test:
+
+```text
+ghcr.io/me5wayecdv/mobius-dex@sha256:b0c1bd54df1e7b7c3e96066a3c3eb63f4d13ec19a88b39b2d6802d5497852f23
+```
+
+Set this exact value as `MOBIUS_DEX_IMAGE` on the dedicated worker host. The successful smoke test ran the published image with network disabled, read-only root, dropped capabilities, no-new-privileges, UID 65532, and a bounded no-exec `/tmp` tmpfs.
+
 Until that workflow succeeds and a worker deployment smoke test is completed, do not claim DEX parsing is operationally isolated in a deployed environment. The API's legacy synchronous SPECTRE and NEXUS paths remain disabled outside test/local development. The queued SPECTRE apply path is the intended route once the image digest and worker deployment are configured.
 
 
