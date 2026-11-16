@@ -169,6 +169,10 @@ class NexusHypothesisService:
             created_at=utcnow(),
         )
         self.session.add(decision)
+        # The investigation-bound gateway records token-usage events in its own short
+        # transaction. Refresh the counter before appending the hypothesis event so the
+        # ORM identity map cannot reuse a stale sequence number.
+        self.session.expire(investigation, ["event_seq"])
         SqlEventStore(self.session).emit(
             investigation_id,
             "hypotheses_generated",
