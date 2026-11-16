@@ -191,7 +191,7 @@ def test_gateway_refuses_provider_without_token_usage_for_budget_accounting():
         prompt_tokens=None,
         completion_tokens=None,
     ))
-    gateway = ModelGateway(provider, model="qwen3:8b")
+    gateway = StructuredModelGateway(provider, model="qwen3:8b")
 
     with pytest.raises(ModelBudgetExceeded, match="did not report token usage"):
         gateway.generate(
