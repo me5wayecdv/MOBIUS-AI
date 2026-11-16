@@ -50,7 +50,7 @@ class WorkerQueue:
     def claim(self, worker_id: str) -> WorkerJobRow | None:
         stmt = (
             select(WorkerJobRow)
-            .where(WorkerJobRow.status == "queued")
+            .where(WorkerJobRow.status == "queued", WorkerJobRow.kind == "recon_manifest")
             .order_by(WorkerJobRow.created_at.asc(), WorkerJobRow.id.asc())
             .with_for_update(skip_locked=True)
             .limit(1)
