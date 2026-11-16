@@ -576,7 +576,8 @@ def test_spectre_and_nexus_are_blocked_outside_test_without_isolated_dex_worker(
 
     # The test fixture normally enables inline execution. Simulate a shared development
     # API: neither direct SPECTRE nor NEXUS may parse attacker-supplied DEX in-process.
-    ctx.settings.env = "development"
+    from dataclasses import replace
+    ctx.settings = replace(ctx.settings, env="development")
     spectre = client.post(f"/api/v1/scans/{scan['id']}/spectre")
     nexus = client.post(f"/api/v1/scans/{scan['id']}/nexus")
 
