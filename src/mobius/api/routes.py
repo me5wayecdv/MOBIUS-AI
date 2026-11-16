@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Header, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 
 from ..adapters.events import SqlEventStore
-from ..adapters.models import EvidenceRow, FindingRow, InvestigationRow
+from ..adapters.models import ApplicationRow, EvidenceRow, FindingRow, InvestigationRow, WorkerJobRow
 from ..core import fsm, gates
 from ..core.enums import EvidenceKind, InvestigationState, RejectionReason
 from ..services.evidence import EvidenceService
@@ -19,6 +19,7 @@ from ..services.nexus import NexusService
 from ..services.recon import ReconService
 from ..services.spectre import SpectreService
 from ..services.validation import ValidationService
+from ..services.worker_queue import WorkerQueue
 from .deps import analyst_id, get_context
 from .schemas import (
     AuthorizationCreate,
@@ -412,6 +413,77 @@ def run_recon(scan_id: str, session=Depends(_session), who: str = Depends(analys
     refuses to run twice: re-running would duplicate observations and frontier entries."""
     ctx = get_context()
     return ReconService(session, ctx.store).run(scan_id)
+
+
+@router.post("/scans/{scan_id}/recon/jobs", status_code=202, tags=["scans"])
+def enqueue_recon_job(scan_id: str, session=Depends(_session), who: str = Depends(analyst_id)):
+    """Queue APK manifest decoding for the separately deployed isolated worker."""
+    scan = _require_scan_owner(session, scan_id, who)
+    app = session.get(ApplicationRow, scan.application_id)
+    if app is None:
+        from ..services.errors import NotFound
+        raise NotFound(f"application {scan.application_id} not found")
+    job = WorkerQueue(session).enqueue_recon(scan_id, app.artifact_key)
+    SqlEventStore(session).emit(
+        scan_id, "worker_job_queued",
+        {"job_id": job.id, "kind": job.kind, "status": job.status},
+        actor="NEXUS",
+    )
+    return {
+        "job_id": job.id,
+        "investigation_id": scan_id,
+        "kind": job.kind,
+        "status": job.status,
+        "created_at": job.created_at,
+    }
+
+
+@router.get("/scans/{scan_id}/recon/jobs/{job_id}", tags=["scans"])
+def get_recon_job(scan_id: str, job_id: str, session=Depends(_session), who: str = Depends(analyst_id)):
+    _require_scan_owner(session, scan_id, who)
+    job = WorkerQueue(session).get(job_id)
+    if job.investigation_id != scan_id or job.kind != "recon_manifest":
+        from ..services.errors import NotFound
+        raise NotFound(f"worker job {job_id} not found")
+    return {
+        "job_id": job.id,
+        "status": job.status,
+        "attempts": job.attempts,
+        "worker_id": job.worker_id,
+        "error_code": job.error_code,
+        "error_detail": job.error_detail,
+        "created_at": job.created_at,
+        "started_at": job.started_at,
+        "finished_at": job.finished_at,
+        "applied": job.applied_at is not None,
+    }
+
+
+@router.post("/scans/{scan_id}/recon/jobs/{job_id}/apply", tags=["scans"])
+def apply_recon_job(scan_id: str, job_id: str, session=Depends(_session), who: str = Depends(analyst_id)):
+    _require_scan_owner(session, scan_id, who)
+    job = WorkerQueue(session).get(job_id)
+    if job.investigation_id != scan_id or job.kind != "recon_manifest":
+        from ..services.errors import NotFound
+        raise NotFound(f"worker job {job_id} not found")
+    if job.status != "succeeded" or not job.result_json:
+        from ..services.errors import ScanStateConflict
+        raise ScanStateConflict(f"worker job is not ready to apply (status={job.status})")
+    if job.applied_at is not None:
+        from ..services.errors import ScanStateConflict
+        raise ScanStateConflict("worker result has already been applied")
+    manifest_xml = job.result_json.get("manifest_xml")
+    if not isinstance(manifest_xml, str) or len(manifest_xml.encode("utf-8")) > 10 * 1024 * 1024:
+        from ..services.errors import ManifestInvalid
+        raise ManifestInvalid("worker returned an invalid or oversized manifest result")
+    result = ReconService(session, get_context().store).run(scan_id, manifest_xml=manifest_xml.encode("utf-8"))
+    job.applied_at = __import__("mobius.adapters.events", fromlist=["utcnow"]).utcnow()
+    SqlEventStore(session).emit(
+        scan_id, "worker_job_applied",
+        {"job_id": job.id, "kind": job.kind, "status": job.status},
+        actor="NEXUS",
+    )
+    return result
 
 
 @router.get("/scans/{scan_id}/surface", tags=["scans"])
