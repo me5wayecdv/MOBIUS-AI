@@ -488,3 +488,32 @@ def test_upload_read_is_bounded_before_service_validation(client, monkeypatch):
     response = _upload(client)
     assert response.status_code == 413
     assert response.json()["code"] == "APK_TOO_LARGE"
+
+
+
+def test_investigations_are_isolated_by_analyst_identity(client):
+    app = _upload(client).json()
+    auth = _authorize(client, app["sha256"]).json()
+    created = client.post(
+        "/api/v1/scans",
+        headers={"X-Analyst-Id": "analyst-alice"},
+        json={
+            "application_id": app["id"],
+            "authorization_id": auth["id"],
+            "objective": "Alice's authorized static analysis",
+            "intensity": 0,
+        },
+    )
+    assert created.status_code == 201, created.text
+    scan_id = created.json()["id"]
+
+    # The default analyst cannot read or operate Alice's investigation.
+    assert client.get(f"/api/v1/scans/{scan_id}").status_code == 404
+    assert client.post(f"/api/v1/scans/{scan_id}/recon").status_code == 404
+    assert client.get(f"/api/v1/scans/{scan_id}/events").status_code == 404
+    assert client.get("/api/v1/scans").json()["count"] == 0
+
+    # The owning identity can read it and sees it in their own list.
+    headers = {"X-Analyst-Id": "analyst-alice"}
+    assert client.get(f"/api/v1/scans/{scan_id}", headers=headers).status_code == 200
+    assert client.get("/api/v1/scans", headers=headers).json()["count"] == 1

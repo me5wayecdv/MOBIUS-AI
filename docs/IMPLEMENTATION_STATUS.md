@@ -138,3 +138,6 @@ Statements that must **not** appear in any document until the corresponding row 
 
 Every merged PR that changes behaviour updates exactly one row. The reviewer rejects the PR if the row
 is missing. A status file that lags reality is worse than no status file, because it turns into a claim.
+
+
+Investigation reads and mutations are now scoped to `created_by`, and list endpoints filter by analyst identity (`docs/INVESTIGATION_OWNERSHIP.md`). This is not production authentication: `X-Analyst-Id` remains spoofable, and the production startup guard remains mandatory.

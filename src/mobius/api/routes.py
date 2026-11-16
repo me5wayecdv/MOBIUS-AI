@@ -43,6 +43,20 @@ def _session():
         session.close()
 
 
+def _require_scan_owner(session, scan_id: str, who: str) -> InvestigationRow:
+    """Hide investigations owned by another identity behind the same 404 as missing IDs.
+
+    This is an authorization seam, not authentication: analyst_id is still a development
+    stub and production startup remains blocked until a verified identity provider exists.
+    """
+    row = session.get(InvestigationRow, scan_id)
+    if row is None or row.created_by != who:
+        from ..services.errors import NotFound
+
+        raise NotFound(f"investigation {scan_id} not found")
+    return row
+
+
 # ------------------------------------------------------------------------------------
 # System
 # ------------------------------------------------------------------------------------
@@ -179,7 +193,7 @@ def create_scan(
 
 
 @router.get("/scans", tags=["scans"])
-def list_scans(limit: int = Query(default=50, ge=1, le=200), session=Depends(_session)):
+def list_scans(limit: int = Query(default=50, ge=1, le=200), session=Depends(_session), who: str = Depends(analyst_id)):
     """Investigations, newest first.
 
     Exists because a UI cannot show a scan it cannot list, and because the alternative -
@@ -187,6 +201,7 @@ def list_scans(limit: int = Query(default=50, ge=1, le=200), session=Depends(_se
     """
     rows = (
         session.query(InvestigationRow)
+        .filter(InvestigationRow.created_by == who)
         .order_by(InvestigationRow.created_at.desc(), InvestigationRow.id.desc())
         .limit(limit)
         .all()
@@ -209,7 +224,8 @@ def list_scans(limit: int = Query(default=50, ge=1, le=200), session=Depends(_se
 
 
 @router.get("/scans/{scan_id}", tags=["scans"])
-def get_scan(scan_id: str, session=Depends(_session)):
+def get_scan(scan_id: str, session=Depends(_session), who: str = Depends(analyst_id)):
+    _require_scan_owner(session, scan_id, who)
     return _scan_body(session, scan_id)
 
 
@@ -217,6 +233,7 @@ def get_scan(scan_id: str, session=Depends(_session)):
 def pause_scan(
     scan_id: str, payload: PauseRequest | None = None, session=Depends(_session), who: str = Depends(analyst_id)
 ):
+    _require_scan_owner(session, scan_id, who)
     ctx = get_context()
     IntakeService(session, ctx.store).pause(scan_id, by=who, reason=(payload.reason if payload else None))
     return _scan_body(session, scan_id)
@@ -224,6 +241,7 @@ def pause_scan(
 
 @router.post("/scans/{scan_id}/resume", tags=["scans"])
 def resume_scan(scan_id: str, session=Depends(_session), who: str = Depends(analyst_id)):
+    _require_scan_owner(session, scan_id, who)
     ctx = get_context()
     IntakeService(session, ctx.store).resume(scan_id, by=who)
     return _scan_body(session, scan_id)
@@ -231,6 +249,7 @@ def resume_scan(scan_id: str, session=Depends(_session), who: str = Depends(anal
 
 @router.post("/scans/{scan_id}/cancel", tags=["scans"])
 def cancel_scan(scan_id: str, session=Depends(_session), who: str = Depends(analyst_id)):
+    _require_scan_owner(session, scan_id, who)
     ctx = get_context()
     IntakeService(session, ctx.store).cancel(scan_id, by=who)
     return _scan_body(session, scan_id)
@@ -242,7 +261,9 @@ def get_events(
     after: int = Query(default=0, ge=0),
     limit: int = Query(default=200, ge=1, le=1000),
     session=Depends(_session),
+    who: str = Depends(analyst_id),
 ):
+    _require_scan_owner(session, scan_id, who)
     store = SqlEventStore(session)
     events = store.read_after(scan_id, after_seq=after, limit=limit)
     return {
@@ -264,7 +285,8 @@ def get_events(
 
 
 @router.get("/scans/{scan_id}/findings", tags=["scans"])
-def get_findings(scan_id: str, session=Depends(_session)):
+def get_findings(scan_id: str, session=Depends(_session), who: str = Depends(analyst_id)):
+    _require_scan_owner(session, scan_id, who)
     rows = (
         session.query(FindingRow)
         .filter(FindingRow.investigation_id == scan_id)
@@ -293,7 +315,8 @@ def get_findings(scan_id: str, session=Depends(_session)):
 
 
 @router.get("/scans/{scan_id}/evidence", tags=["scans"])
-def get_evidence(scan_id: str, session=Depends(_session)):
+def get_evidence(scan_id: str, session=Depends(_session), who: str = Depends(analyst_id)):
+    _require_scan_owner(session, scan_id, who)
     ctx = get_context()
     items = EvidenceService(session, ctx.store).list_for(scan_id)
     return {
@@ -320,6 +343,7 @@ def post_evidence(
     session=Depends(_session),
     who: str = Depends(analyst_id),
 ):
+    _require_scan_owner(session, scan_id, who)
     ctx = get_context()
     ev = EvidenceService(session, ctx.store).record(
         investigation_id=scan_id,
@@ -338,6 +362,7 @@ def validate(
     session=Depends(_session),
     who: str = Depends(analyst_id),
 ):
+    _require_scan_owner(session, scan_id, who)
     """Evaluate a gate and record a finding plus its verdict.
 
     This endpoint is how the thesis is exercised end to end before the analysis agents
@@ -381,7 +406,8 @@ def validate(
 
 
 @router.post("/scans/{scan_id}/recon", tags=["scans"])
-def run_recon(scan_id: str, session=Depends(_session)):
+def run_recon(scan_id: str, session=Depends(_session), who: str = Depends(analyst_id)):
+    _require_scan_owner(session, scan_id, who)
     """Run the deterministic manifest analysis. Idempotent only in the sense that it
     refuses to run twice: re-running would duplicate observations and frontier entries."""
     ctx = get_context()
@@ -389,13 +415,15 @@ def run_recon(scan_id: str, session=Depends(_session)):
 
 
 @router.get("/scans/{scan_id}/surface", tags=["scans"])
-def get_surface(scan_id: str, session=Depends(_session)):
+def get_surface(scan_id: str, session=Depends(_session), who: str = Depends(analyst_id)):
+    _require_scan_owner(session, scan_id, who)
     ctx = get_context()
     return ReconService(session, ctx.store).surface(scan_id)
 
 
 @router.post("/scans/{scan_id}/spectre", tags=["scans"])
-def run_spectre(scan_id: str, session=Depends(_session)):
+def run_spectre(scan_id: str, session=Depends(_session), who: str = Depends(analyst_id)):
+    _require_scan_owner(session, scan_id, who)
     """Run code analysis: build a call graph, search for sink reachability, ask the gate.
 
     Deterministic - no model is called. Returns one result per candidate component, each
@@ -410,7 +438,9 @@ def run_nexus(
     scan_id: str,
     max_steps: int | None = Query(default=None, ge=1, le=200),
     session=Depends(_session),
+    who: str = Depends(analyst_id),
 ):
+    _require_scan_owner(session, scan_id, who)
     """Drive the investigation from the frontier to CLOSED, within a step budget.
 
     A deterministic dispatcher, not an autonomous planner: it pops the best-scoring entry,
@@ -427,7 +457,8 @@ def run_nexus(
 
 
 @router.post("/scans/{scan_id}/report", tags=["scans"])
-def write_report(scan_id: str, session=Depends(_session)):
+def write_report(scan_id: str, session=Depends(_session), who: str = Depends(analyst_id)):
+    _require_scan_owner(session, scan_id, who)
     """Write the investigation report and store it as evidence.
 
     Returns the Markdown itself as well as the evidence id, so a caller does not have to make
@@ -439,7 +470,8 @@ def write_report(scan_id: str, session=Depends(_session)):
 
 
 @router.get("/scans/{scan_id}/report", tags=["scans"], response_class=PlainTextResponse)
-def get_report(scan_id: str, session=Depends(_session)):
+def get_report(scan_id: str, session=Depends(_session), who: str = Depends(analyst_id)):
+    _require_scan_owner(session, scan_id, who)
     """The most recently written report, as Markdown.
 
     Reads the stored artefact rather than rebuilding it, so what a reader downloads is what
@@ -473,6 +505,7 @@ async def stream_events(
     follow: bool = Query(default=True),
     idle_timeout: float = Query(default=30.0, ge=0.0, le=300.0),
     last_event_id: str | None = Header(default=None),
+    who: str = Depends(analyst_id),
 ):
     """Server-sent events, replayed from a cursor.
 
@@ -491,10 +524,7 @@ async def stream_events(
             pass
 
     with ctx.session() as probe:
-        if probe.get(InvestigationRow, scan_id) is None:
-            from ..services.errors import NotFound
-
-            raise NotFound(f"investigation {scan_id} not found")
+        _require_scan_owner(probe, scan_id, who)
 
     async def generator():
         last = start
