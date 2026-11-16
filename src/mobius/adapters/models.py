@@ -368,6 +368,7 @@ class WorkerJobRow(Base):
     error_detail: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[str] = mapped_column(String(40), nullable=False)
     started_at: Mapped[str | None] = mapped_column(String(40))
+    lease_until: Mapped[str | None] = mapped_column(String(40))
     finished_at: Mapped[str | None] = mapped_column(String(40))
     applied_at: Mapped[str | None] = mapped_column(String(40))
 
