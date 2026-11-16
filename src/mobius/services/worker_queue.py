@@ -6,9 +6,10 @@ the application database tables or API credentials.
 """
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from ..adapters.events import utcnow
@@ -50,7 +51,14 @@ class WorkerQueue:
     def claim(self, worker_id: str) -> WorkerJobRow | None:
         stmt = (
             select(WorkerJobRow)
-            .where(WorkerJobRow.status == "queued", WorkerJobRow.kind == "recon_manifest")
+            .where(
+                WorkerJobRow.kind == "recon_manifest",
+                WorkerJobRow.attempts < 3,
+                or_(
+                    WorkerJobRow.status == "queued",
+                    (WorkerJobRow.status == "running") & (WorkerJobRow.lease_until < utcnow()),
+                ),
+            )
             .order_by(WorkerJobRow.created_at.asc(), WorkerJobRow.id.asc())
             .with_for_update(skip_locked=True)
             .limit(1)
@@ -62,6 +70,7 @@ class WorkerQueue:
         row.worker_id = worker_id
         row.attempts += 1
         row.started_at = utcnow()
+        row.lease_until = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
         self.session.flush()
         return row
 
@@ -72,6 +81,7 @@ class WorkerQueue:
         row.status = "succeeded"
         row.result_json = result
         row.finished_at = utcnow()
+        row.lease_until = None
         row.error_code = None
         row.error_detail = None
         self.session.flush()
@@ -84,4 +94,5 @@ class WorkerQueue:
         row.error_code = code[:80]
         row.error_detail = detail[:4000]
         row.finished_at = utcnow()
+        row.lease_until = None
         self.session.flush()
