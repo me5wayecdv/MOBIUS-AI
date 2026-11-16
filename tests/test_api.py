@@ -330,7 +330,7 @@ def test_spectre_runs_over_http_against_a_real_dex(client):
 
 def test_spectre_rejects_an_unparseable_dex_with_a_typed_error(client):
     app = _upload(client).json()
-    auth = _authorize(client, app["sha256"], target_package="com.example.demo").json()
+    auth = _authorize(client, app["sha256"]).json()
     scan = _scan(client, app["id"], auth["id"]).json()
     client.post(f"/api/v1/scans/{scan['id']}/recon")
     resp = client.post(f"/api/v1/scans/{scan['id']}/spectre")
