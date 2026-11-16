@@ -81,6 +81,13 @@ class CallGraph:
     def methods(self) -> tuple[MethodRef, ...]:
         return tuple(self.edges)
 
+    def callers_of(self, target: MethodRef) -> tuple[MethodRef, ...]:
+        """Return application methods with a direct edge to target, in stable order."""
+        return tuple(sorted(
+            caller for caller, callees in self.edges.items()
+            if target in callees
+        ))
+
     def __len__(self) -> int:
         return len(self.edges)
 
