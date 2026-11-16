@@ -11,7 +11,7 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from typing import Any, Generic, Protocol, TypeVar
+from typing import Any, Protocol
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ValidationError
@@ -60,6 +60,33 @@ class ModelProvider(Protocol):
         temperature: float = 0.0,
         max_tokens: int = 4096,
     ) -> ProviderResult: ...
+
+
+class DeterministicMockProvider:
+    """Deterministic provider for tests and explicitly labelled local demonstrations."""
+
+    name = "mock"
+
+    def __init__(
+        self,
+        response_json: str,
+        *,
+        model_id: str = "mobius-deterministic-mock",
+        prompt_tokens: int = 1,
+        completion_tokens: int = 1,
+    ) -> None:
+        self.response_json = response_json
+        self.model_id = model_id
+        self.prompt_tokens = prompt_tokens
+        self.completion_tokens = completion_tokens
+
+    def complete_json(self, **_kwargs: Any) -> ProviderResult:
+        return ProviderResult(
+            content=self.response_json,
+            model_id=self.model_id,
+            prompt_tokens=self.prompt_tokens,
+            completion_tokens=self.completion_tokens,
+        )
 
 
 class OllamaProvider:
