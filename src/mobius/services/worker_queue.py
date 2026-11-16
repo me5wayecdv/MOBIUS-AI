@@ -45,7 +45,7 @@ class WorkerQueue:
         active = self.session.execute(
             select(WorkerJobRow).where(
                 WorkerJobRow.investigation_id == investigation_id,
-                WorkerJobRow.kind.in_(("recon_manifest", "dex_index")),
+                WorkerJobRow.kind == "recon_manifest",
                 WorkerJobRow.status.in_(("queued", "running", "succeeded")),
                 WorkerJobRow.applied_at.is_(None),
             ).limit(1)
@@ -134,7 +134,7 @@ class WorkerQueue:
         stmt = (
             select(WorkerJobRow)
             .where(
-                WorkerJobRow.kind == "recon_manifest",
+                WorkerJobRow.kind.in_(("recon_manifest", "dex_index")),
                 WorkerJobRow.attempts < 3,
                 or_(
                     WorkerJobRow.status == "queued",
