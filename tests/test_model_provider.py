@@ -8,7 +8,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from mobius.services.model_provider import (
     ModelBudgetExceeded,
     ModelConsentRequired,
-    ModelGateway,
+    StructuredModelGateway,
+    DeterministicMockProvider,
     ModelOutputInvalid,
     ModelUnavailable,
     OllamaProvider,
@@ -42,7 +43,7 @@ class FakeProvider:
 
 def test_gateway_requires_explicit_per_investigation_consent():
     provider = FakeProvider()
-    gateway = ModelGateway(provider, model="qwen3:8b")
+    gateway = StructuredModelGateway(provider, model="qwen3:8b")
 
     with pytest.raises(ModelConsentRequired, match="disabled"):
         gateway.generate(
@@ -199,3 +200,33 @@ def test_gateway_refuses_provider_without_token_usage_for_budget_accounting():
             consent_provider="ollama",
             remaining_tokens=100,
         )
+
+
+def test_deterministic_mock_implements_the_same_core_model_gateway_port():
+    import asyncio
+    from mobius.core.ports import ModelGateway as CoreModelGateway
+
+    provider = DeterministicMockProvider(
+        '{"summary":"mocked hypothesis","confidence":0.75}',
+        model_id="deterministic-fixture",
+        prompt_tokens=4,
+        completion_tokens=3,
+    )
+    gateway = StructuredModelGateway(provider, model="deterministic-fixture").with_consent(
+        enabled=True, provider="mock", remaining_tokens=100
+    )
+
+    assert isinstance(gateway, CoreModelGateway)
+    result = asyncio.run(gateway.complete_structured(
+        role="reasoning",
+        system_prompt="Return only the requested schema.",
+        user="Evidence: obs_123",
+        schema=PlannerReply,
+        temperature=0.0,
+        max_tokens=128,
+    ))
+    assert result["data"].summary == "mocked hypothesis"
+    assert result["model_id"] == "deterministic-fixture"
+    assert result["input_tokens"] == 4
+    assert result["output_tokens"] == 3
+    assert result["schema_valid"] is True
