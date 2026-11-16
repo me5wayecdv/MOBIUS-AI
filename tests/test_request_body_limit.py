@@ -32,6 +32,7 @@ def _run(middleware, *, headers=(), chunks=()):
     async def send(message):
         sent.append(message)
 
+    middleware.app = app
     scope = {
         "type": "http",
         "method": "POST",
