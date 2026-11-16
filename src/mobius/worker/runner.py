@@ -6,6 +6,7 @@ queries investigations, users, authorizations, findings, evidence, or event tabl
 from __future__ import annotations
 
 import os
+import re
 import socket
 import time
 from pathlib import Path
@@ -37,6 +38,8 @@ def _tool_for(kind: str, runtime: str) -> tuple[str, str, ToolSpec]:
     if kind == "recon_manifest":
         binary = _RECON_BINARY
         image = _required("MOBIUS_RECON_IMAGE")
+        if not re.fullmatch(r"[A-Za-z0-9./:_-]+@sha256:[0-9a-f]{64}", image):
+            raise ValueError("worker images must be immutable sha256 digest references")
         spec = ToolSpec(
             name="recon_manifest",
             binary=binary,
@@ -52,6 +55,8 @@ def _tool_for(kind: str, runtime: str) -> tuple[str, str, ToolSpec]:
     if kind == "dex_index":
         binary = _DEX_BINARY
         image = _required("MOBIUS_DEX_IMAGE")
+        if not re.fullmatch(r"[A-Za-z0-9./:_-]+@sha256:[0-9a-f]{64}", image):
+            raise ValueError("worker images must be immutable sha256 digest references")
         spec = ToolSpec(
             name="dex_index",
             binary=binary,
