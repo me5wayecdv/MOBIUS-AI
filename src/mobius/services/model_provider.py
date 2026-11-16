@@ -57,6 +57,8 @@ class ModelProvider(Protocol):
         user_payload: dict[str, Any],
         response_schema: dict[str, Any],
         timeout_seconds: int,
+        temperature: float = 0.0,
+        max_tokens: int = 4096,
     ) -> ProviderResult: ...
 
 
@@ -90,6 +92,8 @@ class OllamaProvider:
         user_payload: dict[str, Any],
         response_schema: dict[str, Any],
         timeout_seconds: int = 120,
+        temperature: float = 0.0,
+        max_tokens: int = 4096,
     ) -> ProviderResult:
         if not model.strip():
             raise ValueError("model name is required")
@@ -97,7 +101,7 @@ class OllamaProvider:
             "model": model,
             "stream": False,
             "format": response_schema,
-            "options": {"temperature": 0.1},
+            "options": {"temperature": temperature, "num_predict": max_tokens},
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {
@@ -174,6 +178,8 @@ class StructuredModelGateway:
             consent_enabled=self.consent_enabled,
             consent_provider=self.consent_provider,
             remaining_tokens=self.remaining_tokens,
+            temperature=temperature,
+            max_tokens=max_tokens,
         )
         return {
             "data": parsed,
@@ -193,6 +199,8 @@ class StructuredModelGateway:
         consent_enabled: bool,
         consent_provider: str | None,
         remaining_tokens: int,
+        temperature: float = 0.0,
+        max_tokens: int = 4096,
     ) -> tuple[BaseModel, ProviderResult]:
         if not consent_enabled:
             raise ModelConsentRequired("LLM data sharing is disabled for this investigation")
@@ -208,6 +216,8 @@ class StructuredModelGateway:
             user_payload=user_payload,
             response_schema=output_model.model_json_schema(),
             timeout_seconds=self.timeout_seconds,
+            temperature=temperature,
+            max_tokens=max_tokens,
         )
         if result.prompt_tokens is None or result.completion_tokens is None:
             raise ModelBudgetExceeded(
@@ -232,7 +242,7 @@ def create_model_gateway(
     base_url: str,
     model: str,
     timeout_seconds: int = 120,
-) -> ModelGateway | None:
+) -> StructuredModelGateway | None:
     """Build only an explicitly configured local provider; no hosted provider is bundled."""
     if provider_name == "disabled":
         return None
