@@ -539,7 +539,7 @@ def run_nexus(
             status_code=503,
             detail=(
                 "NEXUS is disabled outside test/local development until its SPECTRE DEX-analysis "
-                "step runs through the isolated worker (MOBIUS_SPECTRE_INLINE=1 is local-development-only)"
+                "step runs through the isolated DEX worker (MOBIUS_SPECTRE_INLINE=1 is local-development-only)"
             ),
         )
     return NexusService(session, ctx.store).run(scan_id, max_steps=max_steps)
