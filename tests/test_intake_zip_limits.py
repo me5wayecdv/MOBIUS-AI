@@ -69,3 +69,9 @@ def test_rejects_missing_manifest():
     with _archive([("classes.dex", b"dex")]) as archive:
         with pytest.raises(ApkInvalid, match="AndroidManifest"):
             intake._validate_zip_container(archive)
+
+
+def test_rejects_backslash_entry_paths():
+    with _archive([("AndroidManifest.xml", b"manifest"), (r"..\\escape", b"x")]) as archive:
+        with pytest.raises(ApkInvalid, match="unsafe ZIP entry path"):
+            intake._validate_zip_container(archive)
