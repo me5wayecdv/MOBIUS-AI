@@ -69,3 +69,23 @@ def test_worker_queue_refuses_jobs_outside_recon_state(session, store, future_is
 
 def test_worker_queue_claim_returns_none_when_empty(session):
     assert WorkerQueue(session).claim("worker-empty") is None
+
+
+def test_worker_job_lease_allows_reclaim_after_expiry(session, store, future_iso):
+    from datetime import datetime, timedelta, timezone
+
+    scan, app = _recon_job(session, store, future_iso)
+    queue = WorkerQueue(session)
+    job = queue.enqueue_recon(scan.id, app.artifact_key)
+    first = queue.claim("worker-a")
+    assert first is not None
+    first.lease_until = (
+        datetime.now(timezone.utc) - timedelta(seconds=1)
+    ).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    session.flush()
+
+    second = queue.claim("worker-b")
+    assert second is not None
+    assert second.id == job.id
+    assert second.worker_id == "worker-b"
+    assert second.attempts == 2
