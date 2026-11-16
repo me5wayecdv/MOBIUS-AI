@@ -144,3 +144,8 @@ Investigation reads and mutations are now scoped to `created_by`, and list endpo
 
 
 APK HTTP uploads now have a pre-parser ASGI body cap, including chunked requests, with disk spooling after 8 MiB. Reverse-proxy limits, request timeouts/concurrency controls, and isolated APK parsing remain required.
+
+
+## Isolated RECON worker
+
+Implemented a durable `worker_jobs` queue, API enqueue/status/apply endpoints, leased PostgreSQL claims with crash recovery, a separately launched worker process, and a digest-pinned OCI manifest-decoder image build. The worker needs only SELECT/UPDATE on `worker_jobs` plus a read-only APK artifact volume; API remains responsible for evidence/state/event persistence. The old synchronous RECON endpoint is now explicitly development/test-only. See `docs/ISOLATED_RECON_WORKER.md`. Deployment is not yet operational: publish the parser image, configure its immutable digest and rootless OCI runtime, provision the restricted DB role/shared read-only artifact mount, then perform a real worker smoke test. Authentication remains a production blocker.

@@ -346,6 +346,32 @@ class ReportRow(Base):
     created_at: Mapped[str] = mapped_column(String(40), nullable=False)
 
 
+class WorkerJobRow(Base):
+    __tablename__ = "worker_jobs"
+    __table_args__ = (
+        CheckConstraint("status IN ('queued','running','succeeded','failed','cancelled')", name="worker_job_status_known"),
+        Index("ix_worker_jobs_claim", "status", "created_at"),
+        Index("ix_worker_jobs_investigation", "investigation_id", "created_at"),
+    )
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    investigation_id: Mapped[str] = mapped_column(
+        String(40), ForeignKey("investigations.id"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(String(40), nullable=False)
+    artifact_key: Mapped[str] = mapped_column(Text, nullable=False)
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    worker_id: Mapped[str | None] = mapped_column(String(120))
+    result_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
+    error_code: Mapped[str | None] = mapped_column(String(80))
+    error_detail: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    started_at: Mapped[str | None] = mapped_column(String(40))
+    lease_until: Mapped[str | None] = mapped_column(String(40))
+    finished_at: Mapped[str | None] = mapped_column(String(40))
+    applied_at: Mapped[str | None] = mapped_column(String(40))
+
+
 ALL_TABLES = (
     UserRow,
     AuthorizationRow,
@@ -361,4 +387,5 @@ ALL_TABLES = (
     VerdictRow,
     ApprovalRow,
     ReportRow,
+    WorkerJobRow,
 )
