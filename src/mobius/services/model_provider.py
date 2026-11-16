@@ -263,6 +263,110 @@ class StructuredModelGateway:
         return validated, result
 
 
+
+class InvestigationModelGateway:
+    """A gateway bound to one investigation's live consent and cumulative token ledger."""
+
+    def __init__(self, gateway: StructuredModelGateway, session_factory, investigation_id: str) -> None:
+        self.gateway = gateway
+        self.session_factory = session_factory
+        self.investigation_id = investigation_id
+
+    async def complete_structured(
+        self, *, role: str, system: str, user: str, schema: type[BaseModel],
+        temperature: float = 0.0, max_tokens: int = 4096,
+    ) -> dict[str, Any]:
+        return await asyncio.to_thread(
+            self._complete_sync,
+            role=role, system=system, user=user, schema=schema,
+            temperature=temperature, max_tokens=max_tokens,
+        )
+
+    def _complete_sync(
+        self, *, role: str, system: str, user: str, schema: type[BaseModel],
+        temperature: float, max_tokens: int,
+    ) -> dict[str, Any]:
+        from ..adapters.models import InvestigationRow
+        from .token_budget import InvestigationTokenBudget
+
+        if role not in {"reasoning", "workhorse"}:
+            raise ValueError("model role must be reasoning or workhorse")
+        if not 1 <= max_tokens <= 4096:
+            raise ValueError("max_tokens must be between 1 and 4096")
+        session = self.session_factory()
+        try:
+            investigation = session.get(InvestigationRow, self.investigation_id)
+            if investigation is None:
+                raise ModelConsentRequired("investigation not found; model call refused")
+            consent = dict(investigation.llm_data_sharing or {})
+            if consent.get("enabled") is not True:
+                raise ModelConsentRequired("LLM data sharing is disabled for this investigation")
+            if consent.get("provider") != self.gateway.provider.name:
+                raise ModelConsentRequired(
+                    f"investigation consent must explicitly name provider {self.gateway.provider.name!r}"
+                )
+        finally:
+            session.close()
+
+        # UTF-8 byte length is a conservative upper bound for tokenizer tokens; include
+        # schema and protocol overhead so the reservation covers the full prompt envelope.
+        schema_bytes = json.dumps(schema.model_json_schema(), separators=(",", ":")).encode("utf-8")
+        prompt_ceiling = len(system.encode("utf-8")) + len(user.encode("utf-8")) + len(schema_bytes) + 1024
+        reservation_size = prompt_ceiling + max_tokens
+        budget = InvestigationTokenBudget(self.session_factory)
+        reservation = budget.reserve(self.investigation_id, reservation_size)
+        try:
+            result = self.gateway.provider.complete_json(
+                model=self.gateway.model,
+                system_prompt=system,
+                user_payload={"input": user},
+                response_schema=schema.model_json_schema(),
+                timeout_seconds=self.gateway.timeout_seconds,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+        except Exception:
+            budget.release(reservation)
+            raise
+
+        if result.prompt_tokens is None or result.completion_tokens is None:
+            # The provider may have consumed tokens. Charge the full reservation rather
+            # than releasing it and pretending the call was free.
+            budget.settle(
+                reservation, actual_tokens=reservation.reserved_tokens,
+                provider=self.gateway.provider.name, model_id=result.model_id,
+            )
+            raise ModelBudgetExceeded(
+                "provider did not report token usage; full reservation charged conservatively"
+            )
+
+        actual = result.prompt_tokens + result.completion_tokens
+        if result.prompt_tokens > prompt_ceiling or result.completion_tokens > max_tokens:
+            budget.settle(
+                reservation, actual_tokens=reservation.reserved_tokens + 1,
+                provider=self.gateway.provider.name, model_id=result.model_id,
+            )
+            raise ModelBudgetExceeded("provider usage exceeded the pre-call token ceiling")
+        budget.settle(
+            reservation, actual_tokens=actual,
+            provider=self.gateway.provider.name, model_id=result.model_id,
+        )
+
+        try:
+            parsed = json.loads(result.content)
+            validated = schema.model_validate(parsed)
+        except (ValueError, ValidationError) as exc:
+            raise ModelOutputInvalid("model output failed the requested JSON schema") from exc
+        return {
+            "data": validated,
+            "model_id": result.model_id,
+            "input_tokens": result.prompt_tokens,
+            "output_tokens": result.completion_tokens,
+            "latency_ms": result.duration_ms,
+            "schema_valid": True,
+        }
+
+
 def create_model_gateway(
     provider_name: str,
     *,
