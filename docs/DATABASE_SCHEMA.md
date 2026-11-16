@@ -284,8 +284,22 @@ CREATE TABLE decisions (
     alternatives    jsonb NOT NULL DEFAULT '[]'::jsonb,
     expected_outcome text NOT NULL,
     uncertainty     text,
-    prompt_version  text,                    -- traceability of the prompt that produced it
-    model_id        text,
+    prompt_version  text,                    -- stable prompt template version
+    model_id        text,                    -- actual provider-reported model identifier
+    provider        text,                    -- e.g. ollama; null for deterministic decisions
+    model_role      text,
+    requested_model text,
+    system_prompt_sha256 char(64),
+    input_sha256    char(64),
+    schema_sha256   char(64),
+    response_sha256 char(64),
+    schema_name     text,
+    output_json     jsonb,                   -- validated structured output; never hidden reasoning
+    input_tokens    integer,
+    output_tokens   integer,
+    latency_ms      integer,
+    temperature     double precision,
+    max_tokens      integer,
     created_at      timestamptz NOT NULL DEFAULT now()
 );
 ```
