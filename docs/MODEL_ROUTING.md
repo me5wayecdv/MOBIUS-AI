@@ -1,6 +1,6 @@
 # MODEL ROUTING & PROVIDER ABSTRACTION
 
-**Status:** Proposed
+**Status:** Partially implemented — see `LOCAL_MODEL_PROVIDER.md`
 **Principle:** one interface, two implementations, two tiers. No claim about which model is "best"
 until `MODEL_BENCHMARKS.md` has produced numbers — this document contains **no rankings**.
 
@@ -144,7 +144,13 @@ demos regardless of quality ranking.
 | Multi-model voting / ensemble per decision | Triples cost for an unmeasured accuracy gain; a candidate for v2 if benchmarks justify it |
 | Agent framework (LangChain/LangGraph/CrewAI) | The state model and audit trail are the core IP; delegating them to a framework cedes the parts that must be inspected. Direct API calls are ~200 lines |
 
-## 8. Open questions
+## 8. Implemented provider baseline
+
+PR #33 adds a standard-library Ollama adapter and a deterministic mock provider behind the structured model contract. The core `ModelGateway` port in `mobius/core/ports.py` is implemented by the local structured gateway. Provider use is disabled by default, local endpoint validation is enforced, Pydantic JSON Schema is sent to Ollama and validated again locally, and per-investigation consent plus reported token usage are required.
+
+This is only the provider boundary. No current agent invokes it, no prompt version is persisted yet, no repair/retry loop or cache exists, and no model benchmark has been run. Those remain explicit follow-up work.
+
+## 9. Open questions
 
 | # | Question |
 |---|---|
