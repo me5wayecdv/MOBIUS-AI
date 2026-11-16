@@ -43,7 +43,7 @@ class FakeProvider:
 
 def test_gateway_requires_explicit_per_investigation_consent():
     provider = FakeProvider()
-    gateway = StructuredStructuredModelGateway(provider, model="qwen3:8b")
+    gateway = StructuredModelGateway(provider, model="qwen3:8b")
 
     with pytest.raises(ModelConsentRequired, match="disabled"):
         gateway.generate(
@@ -97,7 +97,7 @@ def test_gateway_rejects_invalid_structured_output():
         content='{"summary":"not valid","confidence":4,"untrusted_extra":true}',
         model_id="qwen3:8b",
     ))
-    gateway = ModelGateway(provider, model="qwen3:8b")
+    gateway = StructuredModelGateway(provider, model="qwen3:8b")
 
     with pytest.raises(ModelOutputInvalid, match="failed"):
         gateway.generate(
