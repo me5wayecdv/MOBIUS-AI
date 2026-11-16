@@ -70,6 +70,11 @@ class ReconService:
         )
         if authorization is None:
             raise AuthorizationRequired("investigation has no active APK authorization")
+        from .intake import is_expired
+        if authorization.revoked_at is not None or is_expired(authorization.expires_at):
+            raise AuthorizationRequired("APK authorization is revoked or expired")
+        if authorization.apk_sha256 != application.sha256:
+            raise AuthorizationRequired("APK authorization is bound to a different artifact")
         if authorization.target_package != surface.package_name:
             raise AuthorizationRequired(
                 "authorized target package does not match the package parsed from this APK"
