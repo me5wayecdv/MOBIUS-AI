@@ -1,6 +1,6 @@
 # Isolated JADX worker (D-013)
 
-**Engineering status:** implemented on this branch; CI verification pending. **GHCR publication:** blocked until explicit project-owner approval. No publication workflow has been run for JADX.
+**Engineering status:** implemented on this branch; local image build/load and real JADX smoke passed in Image CI Run #16 (`44272473218`, HEAD `f8516909`). The fixture produced one Java source file and a verified SHA-256/version cache hit. **GHCR publication:** blocked until explicit project-owner approval. No publication workflow has been run for JADX.
 
 ## Queue lifecycle
 
@@ -42,7 +42,7 @@ The smoke test exercises the real pinned JADX 1.5.6 binary through the adapter a
 - a second call is a verified cache hit;
 - a bounded source snippet can be resolved from the verified cache.
 
-The smoke writes a JSON artifact. CI does not log in to GHCR, request package-write permission, push an image, or create a remote digest.
+The passing smoke uploaded JSON evidence artifact `mobius-jadx-local-image-smoke-44272473218`. CI does not log in to GHCR, request package-write permission, push an image, or create a remote digest.
 
 ## Publication gate
 
