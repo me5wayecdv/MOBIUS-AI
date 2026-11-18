@@ -409,41 +409,17 @@ CREATE TABLE verdicts (
 
 ### 3.8 Attack graph
 
-```sql
-CREATE TABLE graph_nodes (
-    id              uuid PRIMARY KEY,
-    investigation_id uuid NOT NULL REFERENCES investigations(id),
-    node_type       text NOT NULL,   -- activity|service|receiver|provider|class|method|
-                                     -- endpoint|secret|control|hypothesis|finding
-    label           text NOT NULL,
-    ref             text,            -- component name / class#method / URL
-    assertion       text NOT NULL CHECK (assertion IN
-                     ('observed','hypothesis','confirmed','rejected')),
-    attributes      jsonb NOT NULL DEFAULT '{}'::jsonb,
-    evidence_refs   uuid[] NOT NULL DEFAULT '{}',
-    created_at      timestamptz NOT NULL DEFAULT now()
-);
-CREATE INDEX ON graph_nodes (investigation_id, node_type);
+Graph persistence is implemented by D-030. The four tables are investigation-scoped:
+`graph_nodes`, `graph_edges`, `graph_node_evidence`, and `graph_edge_evidence`.
 
-CREATE TABLE graph_edges (
-    id              uuid PRIMARY KEY,
-    investigation_id uuid NOT NULL REFERENCES investigations(id),
-    source_id       uuid NOT NULL REFERENCES graph_nodes(id),
-    target_id       uuid NOT NULL REFERENCES graph_nodes(id),
-    relation        text NOT NULL,   -- calls|invokes|exposes|reads|writes|sends_to|
-                                     -- receives_from|reaches|validates|bypasses
-    assertion       text NOT NULL CHECK (assertion IN
-                     ('observed','hypothesis','confirmed','rejected')),
-    rationale       text,
-    evidence_refs   uuid[] NOT NULL DEFAULT '{}',
-    UNIQUE (investigation_id, source_id, target_id, relation),
-    -- AC-FR-GRAPH-2: a hypothesised edge must say why
-    CONSTRAINT hypothesis_states_why
-        CHECK (assertion <> 'hypothesis' OR (rationale IS NOT NULL AND length(rationale) > 0))
-);
-CREATE INDEX ON graph_edges (investigation_id, source_id);
-CREATE INDEX ON graph_edges (investigation_id, target_id);
-```
+- Node identity is unique by `(investigation_id, node_type, ref)`.
+- Edge identity is unique by `(investigation_id, source_id, target_id, relation)`.
+- Composite foreign keys bind both edge endpoints and every evidence association to the same investigation.
+- Evidence links are normalized association rows, not JSON arrays, so the database enforces referential integrity.
+- A `hypothesis` edge must include a non-empty rationale.
+- GraphEdge IDs use the dedicated `ged_` prefix; GraphNode IDs use `gph_`.
+
+D-030 rebuilds a graph projection from already-persisted observations, findings and evidence. It creates provenance nodes and `supported_by` edges only; it does not correlate components, infer attack chains, or claim exploitability. Rebuild is idempotent and additive: it never deletes stale graph rows.
 
 ### 3.9 Reports & audit
 

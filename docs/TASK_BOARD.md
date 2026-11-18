@@ -50,7 +50,7 @@
 
 | # | Task | Owner | State | Acceptance |
 |---|---|---|---|---|
-| D-030 | Persist graph nodes and edges | M1 | [ ] | Graph reconstructable from stored observations/evidence |
+| D-030 | Persist graph nodes and edges | M1 | [~] | PR in progress: normalized graph/evidence tables, composite same-investigation FKs, dedicated edge IDs, and additive idempotent projection from persisted observations/findings/evidence. No D-031/D-032 reasoning. Graph reconstructable from stored observations/evidence |
 | D-031 | Correlate component, caller, data source, sink and permission evidence | M1 + M2 | [ ] | Relations carry provenance and edge type |
 | D-032 | Build candidate attack-chain reasoning | M1 + M5 | [ ] | Candidate path has explicit prerequisites and missing proof |
 | D-033 | Attack graph API and React Flow view | M6 | [ ] | Observed/inferred/validated edges visually distinct |

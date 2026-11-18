@@ -34,6 +34,7 @@ class IdPrefix:
     APPROVAL = "apr"
     EVENT = "evt"
     GRAPH_NODE = "gph"
+    GRAPH_EDGE = "ged"
     FRONTIER = "fro"
     AUTHORIZATION = "ath"
 
