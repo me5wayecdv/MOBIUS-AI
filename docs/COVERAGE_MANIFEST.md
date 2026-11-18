@@ -15,7 +15,8 @@ The endpoint uses the same owner check as the report and evidence routes. It rea
 - **RECON:** manifest evidence and observation counts.
 - **DEX:** per-entry indexed/failed/skipped/truncated/not-indexed status, class/method counts, call-graph nodes/edges, completeness and evidence ID/hash. A DEX result is complete only when its digest-verified evidence covers the APK's complete enumerated DEX entry set.
 - **JADX:** latest decompile worker state, APK digest binding, tool version, fidelity and source-file count/sample when a matching successful result exists.
-- **Reachability:** SPECTRE observation and truncation counts.
+- **Reachability:** SPECTRE observation and truncation counts, with actual depth/node limits when persisted in the DEX evidence.
+- **Model usage:** decision count, model-backed decision count, provider/model names and persisted token totals. The report does not claim no model was used when model-backed decisions are recorded.
 - **Budgets:** DEX method default, inventory/sample caps, and the actual SPECTRE reachability depth/node budgets persisted with new DEX index evidence. Older evidence without those fields is explicitly marked as missing per-investigation budget provenance.
 - **Limitations:** reflection, dynamic loading, native code, assets/resources, obfuscation, control-flow/data-flow and framework-boundary limitations.
 
@@ -34,7 +35,8 @@ Overall status remains `partial` while unsupported capabilities exist. Truncatio
 ## Integrity and bounds
 
 - APK inventory first verifies the content-addressed APK SHA-256, then reads ZIP central-directory metadata only; it does not extract or execute APK contents.
-- DEX coverage is taken from the latest same-investigation DEX evidence whose stored bytes pass SHA-256 verification. New SPECTRE evidence records the actual reachability depth/node limits; older records are not retroactively assigned defaults.
+- DEX coverage is taken from the latest same-investigation DEX evidence whose stored bytes pass SHA-256 verification. New SPECTRE evidence records internal call counts and actual reachability depth/node limits; older records are not retroactively assigned defaults.
+- Model usage is derived from same-investigation persisted decision provenance, not from a model configuration setting.
 - JADX worker results are accepted only when their reported APK SHA-256 matches the investigation artifact.
 - Archive inventory and the DEX entry list are capped at 20,000 entries; native/assets/resources samples at 50 each; JADX source-file sample at 20.
 - No schema migration, new dependency, image publication, or tool execution is performed by the manifest builder.
