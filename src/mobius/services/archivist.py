@@ -31,6 +31,7 @@ from ..adapters.events import SqlEventStore, utcnow
 from ..adapters.models import (
     ApplicationRow,
     AuthorizationRow,
+    DecisionRow,
     EventRow,
     EvidenceRow,
     FindingRow,
@@ -389,14 +390,25 @@ class ArchivistService:
         return "\n".join(lines) + "\n"
 
     def _method(self, row: InvestigationRow) -> str:
+        model_rows = self._session.execute(
+            select(DecisionRow).where(
+                DecisionRow.investigation_id == row.id,
+                (DecisionRow.model_id.is_not(None)) | (DecisionRow.provider.is_not(None)),
+            )
+        ).scalars().all()
+        model_statement = (
+            f"{len(model_rows)} model-backed decision(s) are recorded in persisted provenance; "
+            "provider/model and token totals appear in the coverage manifest."
+            if model_rows
+            else "No language model was called according to persisted decision rows."
+        )
         return "\n".join(
             [
                 "## 6. Method and limitations",
                 "",
-                "Decisions in this scan were made by deterministic code: manifest decoding "
-                "(RECON), a bounded call-graph search over indexed DEX entries (SPECTRE), a priority-queue "
-                "dispatcher (NEXUS) and a fixed gate. **No language model was called**, so this "
-                "report is reproducible from the APK bytes and the authorisation alone.",
+                "Manifest decoding (RECON), bounded call-graph search over indexed DEX entries "
+                "(SPECTRE), the priority-queue dispatcher (NEXUS) and the fixed gate provide the "
+                "deterministic analysis and decision controls. " + model_statement,
                 "",
                 "What that buys: a reviewer can re-run the scan and get the same verdicts. "
                 "What it costs is stated below, and it is not small.",
