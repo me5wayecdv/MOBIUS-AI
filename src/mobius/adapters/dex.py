@@ -108,7 +108,7 @@ def _build_method_flow(vm, encoded_method: object) -> MethodFlow | None:
     from androguard.core.dex.dex_types import Operand
 
     code = encoded_method.get_code()
-    if code is None or code.get_bc().get_length() > MAX_FLOW_METHOD_BYTES:
+    if code is None or code.get_length() * 2 > MAX_FLOW_METHOD_BYTES:
         return None
     analysis = MethodAnalysis(vm, encoded_method)
     raw_blocks = analysis.get_basic_blocks().get()
