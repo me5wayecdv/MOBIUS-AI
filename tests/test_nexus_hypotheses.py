@@ -7,7 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import sessionmaker
 
 from conftest import make_apk
-from mobius.adapters.models import DecisionRow, InvestigationRow, ObservationRow
+from mobius.adapters.models import ApplicationRow, DecisionRow, InvestigationRow, ObservationRow
 from mobius.core.enums import EvidenceKind, Fidelity, ObservationKind
 from mobius.core.ids import IdPrefix, new_id
 from mobius.core.schemas import Budget
@@ -231,10 +231,12 @@ def test_nexus_receives_and_records_persisted_source_excerpt(session, store, fut
     scan_id, observation_id = _scan_with_observation(
         session, store, future_iso, consent=True
     )
+    investigation = session.get(InvestigationRow, scan_id)
+    application = session.get(ApplicationRow, investigation.application_id)
     source_text = "private void writeSecret() {\\n    persistSensitiveValue();\\n}"
     payload = {
         "schema_version": 1,
-        "apk_sha256": "a" * 64,
+        "apk_sha256": application.sha256,
         "tool_version": "1.5.6",
         "class_name": "com.example.Entry",
         "component": "com.example.Entry",
