@@ -51,8 +51,8 @@
 | # | Task | Owner | State | Acceptance |
 |---|---|---|---|---|
 | D-030 | Persist graph nodes and edges | M1 | [x] | PR #40 merged. Four normalized graph/evidence tables, composite same-investigation FKs, dedicated `ged_` edge IDs, and additive idempotent projection from persisted observations/findings/evidence. Python 3.11/3.12 + PostgreSQL 16 CI green (439 tests each). |
-| D-031 | Correlate component, caller, data source, sink and permission evidence | M1 + M2 | [~] | PR in progress: deterministic direct relations with evidence provenance and typed assertion levels; source nodes only from explicit persisted source observations. No chain reasoning (D-032). | Relations carry provenance and edge type |
-| D-032 | Build candidate attack-chain reasoning | M1 + M5 | [ ] | Candidate path has explicit prerequisites and missing proof |
+| D-031 | Correlate component, caller, data source, sink and permission evidence | M1 + M2 | [x] | PR #41 merged. Direct component/method/permission/source/sink/guard relations carry evidence refs and assertion levels; no source nodes are invented without persisted source observations. Python 3.11/3.12 + PostgreSQL 16 CI green (441 tests each). | Relations carry provenance and edge type |
+| D-032 | Build candidate attack-chain reasoning | M1 + M5 | [~] | PR in progress: bounded candidate paths from exported components through persisted method-call edges to sinks; each path records prerequisites and missing proof. Hypothesis only; no exploitability verdict. | Candidate path has explicit prerequisites and missing proof |
 | D-033 | Attack graph API and React Flow view | M6 | [ ] | Observed/inferred/validated edges visually distinct |
 
 ## Priority 4 — Safe PoC lab
