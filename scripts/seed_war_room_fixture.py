@@ -1,0 +1,69 @@
+"""Seed a deterministic, explicitly synthetic War Room fixture for CI browser tests."""
+from __future__ import annotations
+
+import json
+import sys
+
+from sqlalchemy import select
+
+from mobius.adapters.events import SqlEventStore, utcnow
+from mobius.adapters.models import EvidenceRow, HypothesisRow, InvestigationRow, ObservationRow
+from mobius.api.config import Settings
+from mobius.api.deps import AppContext
+from mobius.core.enums import Fidelity, ObservationKind
+from mobius.core.ids import IdPrefix, new_id
+
+
+def main(scan_id: str) -> None:
+    context = AppContext(Settings.from_env(), create_schema=False)
+    session = context.session()
+    try:
+        scan = session.get(InvestigationRow, scan_id)
+        if scan is None:
+            raise SystemExit(f"unknown investigation: {scan_id}")
+        evidence = session.execute(
+            select(EvidenceRow).where(EvidenceRow.investigation_id == scan_id)
+            .order_by(EvidenceRow.created_at.desc())
+        ).scalars().first()
+        if evidence is None:
+            raise SystemExit("seed requires at least one persisted evidence record")
+        observation_id = new_id(IdPrefix.OBSERVATION)
+        observation = ObservationRow(
+            id=observation_id, investigation_id=scan_id, agent="FIXTURE",
+            kind=ObservationKind.FACT.value, fidelity=Fidelity.BINARY_XML.value,
+            subject_type="component", subject_ref="com.example.lab.MainActivity",
+            statement="Synthetic fixture observation: exported activity declaration is represented for UI and graph integration tests.",
+            attributes={"exported": True, "fixture_only": True, "permission": None},
+            maswe=["MASWE-0029"], confidence=1.0, evidence_refs=[evidence.id],
+            created_at=utcnow(),
+        )
+        session.add(observation)
+        session.flush()
+        hypothesis_id = new_id(IdPrefix.HYPOTHESIS)
+        hypothesis = HypothesisRow(
+            id=hypothesis_id, investigation_id=scan_id,
+            claim="Fixture-only hypothesis: exported activity may expose an unguarded entry point.",
+            maswe=["MASWE-0029"], derived_from=[observation_id],
+            required_evidence=["exported", "permission", "caller_check_absent", "sink_reachable"],
+            satisfied_evidence=["exported", "permission"], status="open",
+            priority=0.75, depth=0, parent_id=None, created_at=utcnow(),
+        )
+        session.add(hypothesis)
+        SqlEventStore(session).emit(
+            scan_id, "fixture_hypothesis_seeded",
+            {"hypothesis_id": hypothesis_id, "observation_id": observation_id,
+             "evidence_id": evidence.id, "fixture_only": True},
+            actor="FIXTURE",
+        )
+        session.commit()
+        print(json.dumps({"hypothesis_id": hypothesis_id, "observation_id": observation_id,
+                          "evidence_id": evidence.id}))
+    finally:
+        session.close()
+        context.engine.dispose()
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 2:
+        raise SystemExit("usage: seed_war_room_fixture.py <investigation_id>")
+    main(sys.argv[1])

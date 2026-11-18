@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, U
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 
 from ..adapters.events import SqlEventStore, utcnow
-from ..adapters.models import ApplicationRow, EvidenceRow, FindingRow, InvestigationRow, WorkerJobRow, PoCRunRow
+from ..adapters.models import ApplicationRow, AuthorizationRow, EvidenceRow, FindingRow, HypothesisRow, InvestigationRow, WorkerJobRow, PoCRunRow
 from ..core import fsm, gates
 from ..core.enums import EvidenceKind, InvestigationState, RejectionReason
 from ..services.evidence import EvidenceService
@@ -325,6 +325,21 @@ def get_findings(scan_id: str, session=Depends(_session), who: str = Depends(ana
             for r in rows
         ]
     }
+
+
+
+@router.get("/scans/{scan_id}/hypotheses", tags=["scans"])
+def get_hypotheses(scan_id: str, session=Depends(_session), who: str = Depends(analyst_id)):
+    _require_scan_owner(session, scan_id, who)
+    rows = session.query(HypothesisRow).filter(
+        HypothesisRow.investigation_id == scan_id
+    ).order_by(HypothesisRow.priority.desc(), HypothesisRow.created_at.asc()).all()
+    return {"items": [{
+        "id": row.id, "claim": row.claim, "maswe": row.maswe,
+        "derived_from": row.derived_from, "required_evidence": row.required_evidence,
+        "satisfied_evidence": row.satisfied_evidence, "status": row.status,
+        "priority": row.priority, "depth": row.depth, "parent_id": row.parent_id,
+    } for row in rows]}
 
 
 @router.get("/scans/{scan_id}/evidence", tags=["scans"])
@@ -1001,9 +1016,13 @@ def _scan_body(session, scan_id: str) -> dict[str, object]:
     if row is None:
         raise NotFound(f"investigation {scan_id} not found")
     store = SqlEventStore(session)
+    app = session.get(ApplicationRow, row.application_id)
+    authorization = session.get(AuthorizationRow, row.authorization_id) if row.authorization_id else None
     return {
         "id": row.id,
         "state": row.state,
+        "application": ({"id": app.id, "sha256": app.sha256, "package_name": app.package_name, "version_name": app.version_name, "file_size": app.file_size} if app else None),
+        "authorization": ({"id": authorization.id, "target_package": authorization.target_package, "max_intensity": authorization.max_intensity, "expires_at": authorization.expires_at, "revoked": authorization.revoked_at is not None} if authorization else None),
         "paused": row.paused_at is not None,
         "application_id": row.application_id,
         "authorization_id": row.authorization_id,

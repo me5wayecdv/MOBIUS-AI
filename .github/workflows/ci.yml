@@ -66,3 +66,68 @@ jobs:
         run: alembic upgrade head
       - name: Run test suite (including PostgreSQL tests)
         run: pytest
+
+  browser-e2e:
+    name: War Room browser E2E · screenshots
+    runs-on: ubuntu-latest
+    needs: test
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: mobius
+          POSTGRES_PASSWORD: mobius_test_only
+          POSTGRES_DB: mobius_e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U mobius -d mobius_e2e"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      MOBIUS_DB_URL: postgresql+psycopg://mobius:mobius_test_only@localhost:5432/mobius_e2e
+      MOBIUS_TEST_PG_URL: postgresql+psycopg://mobius:mobius_test_only@localhost:5432/mobius_e2e
+      MOBIUS_ARTIFACT_ROOT: ./data/e2e-artifacts
+      MOBIUS_ENV: test
+      CI: "true"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install Python package
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+          pip install "psycopg[binary]>=3.1"
+      - name: Apply migrations to disposable PostgreSQL
+        run: alembic upgrade head
+      - name: Build graph UI and install Playwright
+        working-directory: frontend
+        run: |
+          npm install --no-audit --no-fund
+          npm run build
+          npx playwright install --with-deps chromium
+      - name: Generate deterministic APK fixture
+        run: python scripts/seed_demo_apk.py
+      - name: Run browser-level demo flow and capture screenshots
+        working-directory: frontend
+        run: npm run test:e2e
+      - name: Upload War Room screenshots and Playwright diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobius-war-room-visual-e2e-${{ github.run_id }}
+          path: |
+            frontend/artifacts/war-room/
+            artifacts/playwright-test-results/
+          if-no-files-found: warn
+          retention-days: 14

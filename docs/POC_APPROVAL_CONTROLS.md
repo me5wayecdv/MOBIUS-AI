@@ -15,3 +15,11 @@
 - State-changing execution remains disabled even with approval. No state-changing adapter
   is registered in this milestone.
 - Migration 0006 is additive and CI-only; downgrade refuses populated PoC run records.
+
+
+## Exact plan binding (PR #49)
+
+Each PoC approval stores a canonical SHA-256 digest of the full typed TestPlan excluding only
+`approval_id`. The runner recomputes and checks the digest, so approval cannot be reused after
+changing target, hypothesis set, step list, expected outcome or budgets. Expired decisions are
+persisted as `expired` with an event. Migration 0007 is additive and CI-only.
