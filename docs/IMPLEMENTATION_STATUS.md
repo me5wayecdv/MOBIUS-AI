@@ -185,3 +185,12 @@ See `docs/DEMO_BLOCKERS.md` for the ordered path from APK selection through the 
 - Source references are traversal-safe and limited to 40-line snippets. Tool absence, isolation absence, non-zero exit, invalid output and corrupt cache are explicit failures.
 - CI installs the pinned JADX release with JDK 17 on the Python 3.12 lane and runs the checked-in DEX fixture through the adapter. Python 3.11/3.12 PostgreSQL 16 tests remain required.
 - No real APK, emulator, device, deployment, production migration, paid service, or new Python dependency is used. Runtime OCI image registration and D-013 lookup API remain follow-up integration.
+
+
+## 2026-11-18 — D-012 merged; D-013 lookup API in progress
+
+- PR #51 merged as `10e4fd26db9bcd04bd5de921b537d65a3c9328c7`. CI run `44258662961` passed Python 3.11, Python 3.12, PostgreSQL 16 browser E2E and screenshot artifact upload. The pinned JADX 1.5.6 smoke test decompiled the checked-in `AnalysisTest.dex` fixture without skip.
+- D-013 branch `feat/d-013-jadx-source-lookup` adds owner-scoped class, method and bounded source lookup endpoints over the verified D-012 cache.
+- The API process deliberately has no isolated execution backend configured. Cache hits can be browsed; cache misses return explicit 503 rather than running JADX unsandboxed. Runtime OCI registration remains a blocker.
+- D-021 remains partial: decompiled source must still be persisted as investigation evidence and included as bounded snippets in evidence packages. The D-013 endpoints do not silently upgrade D-021 completion.
+- No migrations, new dependencies, paid services, deployments, emulator use or real APK execution were added.
