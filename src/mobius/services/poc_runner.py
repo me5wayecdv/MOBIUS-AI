@@ -83,8 +83,8 @@ class SafePoCRunner:
 
     def run(self, plan: PoCTestPlan) -> PoCExecutionResult:
         self._validate_scope(plan)
-        if plan.safety_class == "state_changing":
-            raise PoCExecutionError("D-041 supports non-destructive/read-only actions only")
+        if plan.safety_class != "read_only":
+            raise PoCExecutionError("D-041 executes read-only adapters only; non-read-only cleanup is added in D-043")
         if plan.requires_approval:
             raise PoCApprovalRequired("approval workflow is implemented in D-043")
         if plan.target_kind == "emulator":
