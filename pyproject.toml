@@ -20,6 +20,8 @@ dependencies = [
     # ordered, replayable history, and `alembic check` is what proves the models and the
     # migrations still agree.
     "alembic>=1.13",
+    # D-014 loads the reviewed, versioned source/sink catalogue as YAML data.
+    "PyYAML>=6.0",
 ]
 
 [project.scripts]
@@ -32,7 +34,7 @@ dev = ["pytest>=8", "httpx>=0.27"]
 worker = ["psycopg[binary]>=3.1"]
 
 [tool.setuptools.package-data]
-mobius = ["adapters/sql/*.sql", "api/static/*.html", "api/static/graph-ui/*", "api/static/graph-ui/assets/*"]
+mobius = ["adapters/sql/*.sql", "api/static/*.html", "api/static/graph-ui/*", "api/static/graph-ui/assets/*", "data/*.yaml"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
