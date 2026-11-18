@@ -213,25 +213,27 @@ class CoverageManifestBuilder:
     def _dex_index_evidence(
         self, investigation_id: str
     ) -> tuple[EvidenceRow | None, dict[str, Any] | None]:
-        rows = self.session.execute(
+        row = self.session.execute(
             select(EvidenceRow)
             .where(
                 EvidenceRow.investigation_id == investigation_id,
                 EvidenceRow.kind == EvidenceKind.DEX_STRING.value,
             )
             .order_by(EvidenceRow.created_at.desc(), EvidenceRow.id.desc())
-        ).scalars()
-        for row in rows:
-            try:
-                raw = self.store.get(row.object_key)
-                if hashlib.sha256(raw).hexdigest() != row.sha256:
-                    continue
-                payload = json.loads(raw.decode("utf-8"))
-            except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
-                continue
-            if isinstance(payload, dict) and isinstance(payload.get("dex_coverage"), list):
-                return row, payload
-        return None, None
+            .limit(1)
+        ).scalar_one_or_none()
+        if row is None:
+            return None, None
+        try:
+            raw = self.store.get(row.object_key)
+            if hashlib.sha256(raw).hexdigest() != row.sha256:
+                return row, None
+            payload = json.loads(raw.decode("utf-8"))
+        except (OSError, UnicodeError, ValueError, json.JSONDecodeError):
+            return row, None
+        if isinstance(payload, dict) and isinstance(payload.get("dex_coverage"), list):
+            return row, payload
+        return row, None
 
     @staticmethod
     def _dex_analysis(
@@ -239,7 +241,7 @@ class CoverageManifestBuilder:
         evidence: EvidenceRow | None,
         payload: dict[str, Any] | None,
     ) -> dict[str, Any]:
-        if payload is None or evidence is None:
+        if evidence is None:
             return {
                 "status": "not_run",
                 "complete": False,
@@ -249,6 +251,17 @@ class CoverageManifestBuilder:
                     for item in inventory.get("dex_entries", [])
                 ],
                 "evidence": None,
+            }
+        if payload is None:
+            return {
+                "status": "evidence_unavailable",
+                "complete": False,
+                "truncated": False,
+                "entries": [
+                    {**item, "status": "evidence_unavailable"}
+                    for item in inventory.get("dex_entries", [])
+                ],
+                "evidence": {"id": evidence.id, "sha256": evidence.sha256},
             }
         coverage = {
             str(item.get("entry")): item
@@ -290,6 +303,7 @@ class CoverageManifestBuilder:
             "classes": int(payload.get("classes", 0)),
             "methods": int(payload.get("methods", 0)),
             "graph_nodes": int(payload.get("graph_nodes", 0)),
+            "boundary_calls": int(payload.get("boundary_calls", 0)),
             "internal_calls": (
                 int(payload["internal_calls"])
                 if isinstance(payload.get("internal_calls"), int)
