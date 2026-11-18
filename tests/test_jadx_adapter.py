@@ -104,6 +104,7 @@ def test_cache_is_reused_for_same_apk_digest_and_tool_version(tmp_path):
     assert first.tool_version == "1.5.6"
     assert len(backend.calls) == 1
     assert not list((tmp_path / "workspaces" / SCAN).glob("jadx-output-*"))
+    assert not (tmp_path / "workspaces" / SCAN / ".jadx-home").exists()
 
 
 def test_cache_key_changes_when_jadx_version_changes(tmp_path):
