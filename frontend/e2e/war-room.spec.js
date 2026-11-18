@@ -56,6 +56,7 @@ test("D-056: upload → investigation → evidence → graph → PoC → report;
   expect(embeddedNodeBox.top).toBeGreaterThanOrEqual(0);
   expect(embeddedNodeBox.bottom).toBeLessThanOrEqual(embeddedNodeBox.viewport);
   expect(parseFloat(embeddedNodeBox.font)).toBeGreaterThanOrEqual(14);
+  await expect(page.frameLocator("#graph-frame").locator(".react-flow__minimap")).toBeHidden();
   await page.screenshot({ path: shots + "/d056-03-graph.png", fullPage: true });
 
   const plan = {
@@ -125,6 +126,7 @@ test("D-056: upload → investigation → evidence → graph → PoC → report;
     await page.goto("/ui/graph?scan_id="+scanId);
     await expect(page.locator(".react-flow__node").first()).toBeVisible();
     await expect.poll(async()=>parseFloat(await page.locator(".react-flow__node").first().evaluate(el=>getComputedStyle(el).fontSize))).toBeGreaterThanOrEqual(14);
+    if(viewport.width===390) await expect(page.locator(".react-flow__minimap")).toBeHidden();
     await page.screenshot({ path: shots + "/d033-full-graph-" + viewport.label + ".png", fullPage:true });
     await page.goto("/ui?scan_id="+scanId);
   }
