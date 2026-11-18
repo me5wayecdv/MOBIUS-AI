@@ -65,3 +65,15 @@ class ValidationRequest(_Base):
 class ModelConsentRequest(_Base):
     enabled: bool
     provider: str | None = Field(default=None, pattern=r"^ollama$")
+
+
+class PoCApprovalRequest(_Base):
+    plan: dict[str, Any]
+    justification: str = Field(min_length=10, max_length=2000)
+    risk_summary: str = Field(min_length=10, max_length=2000)
+    expires_at: str
+
+
+class PoCApprovalDecision(_Base):
+    decision: str = Field(pattern=r"^(granted|rejected)$")
+    note: str = Field(min_length=1, max_length=2000)
