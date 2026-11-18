@@ -3,7 +3,7 @@
 **Status: backend adapter, policy tests, and queued JADX worker registration implemented; deployed worker host not verified.**
 
 The adapter invokes a configured Docker/Podman-compatible runtime with a fixed container policy.
-It is not enabled by default and no JADX image is registered by the application.
+It is not enabled by default; image references are supplied only through explicit immutable worker configuration.
 
 ## Enforced settings
 
@@ -28,10 +28,9 @@ It is an operational preflight, not cryptographic attestation of daemon policy.
 ## Limitations
 
 - Not invoked by the API process or NEXUS directly. The existing durable queue worker uses this backend for RECON, DEX and queued JADX jobs when immutable image references are configured; no image is enabled by default.
-- No immutable JADX image digest published by this project. The CI workflow builds/loads locally and runs the real DEX fixture smoke with no push; publication is a separate owner-gated manual workflow and remains disabled pending approval.
+- No immutable JADX image digest published by this project. The CI workflow builds/loads locally and runs the real DEX fixture smoke with no push; publication is a separate owner-gated manual workflow and remains gated pending approval.
 - JADX jobs stage the authorized APK in the per-investigation workspace and persist verified cache metadata in `worker_jobs`; source cache files require a shared writable worker/read-only API volume. ToolExecution rows and ARCHIVIST integration remain out of scope.
-- Existing manifest/DEX parsing remains in the API process. Production remains NO-GO until
-  intake parsing is moved to a constrained worker and authentication/ownership checks exist.
+- Legacy inline analysis paths remain available only for development/test use; shared analysis is intended to use the constrained worker queue. Production remains NO-GO until all untrusted parsing paths are constrained and real authentication/ownership controls exist.
 
 
 ## JADX worker registration
