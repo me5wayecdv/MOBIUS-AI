@@ -135,8 +135,7 @@ class WorkerQueue:
             select(WorkerJobRow).where(
                 WorkerJobRow.investigation_id == investigation_id,
                 WorkerJobRow.kind == "jadx_decompile",
-                WorkerJobRow.status.in_(("queued", "running", "succeeded")),
-                WorkerJobRow.applied_at.is_(None),
+                WorkerJobRow.status.in_(("queued", "running")),
             ).limit(1)
         ).scalar_one_or_none()
         if active is not None:
