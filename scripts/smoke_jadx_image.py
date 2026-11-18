@@ -83,7 +83,10 @@ def main() -> int:
     digest = hashlib.sha256(artifact).hexdigest()
     if not Path(JADX_BINARY).is_file():
         raise SystemExit("pinned JADX binary is missing from image")
-    # The Dockerfile verifies the pinned binary version during image build.\n    version = "1.5.6"\n\n    runner = ToolRunner(
+    # The Dockerfile verifies the pinned binary version during image build.
+    version = "1.5.6"
+
+    runner = ToolRunner(
         workspace_root=args.workspace_root,
         backend=InContainerSmokeBackend(),
         tools=(build_jadx_tool_spec(binary=JADX_BINARY, version=version),),
