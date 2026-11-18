@@ -278,9 +278,11 @@ def analyse_method(
                     pending_result = frozenset({(source.id, instruction.offset)})
                 elif (instruction.invoke_class, instruction.invoke_method) == ("Ljava/lang/StringBuilder;", "append"):
                     receiver = instruction.registers[0] if instruction.registers and not instruction.is_static else None
-                    tainted = frozenset().union(*(state.get(r, frozenset()) for r in instruction.registers[1:]))
+                    argument_taint = frozenset().union(*(state.get(r, frozenset()) for r in instruction.registers[1:]))
+                    receiver_taint = state.get(receiver, frozenset()) if receiver is not None else frozenset()
+                    tainted = receiver_taint | argument_taint
                     if receiver is not None and tainted:
-                        state[receiver] = state.get(receiver, frozenset()) | tainted
+                        state[receiver] = tainted
                     pending_result = tainted
                 elif (instruction.invoke_class, instruction.invoke_method) == ("Ljava/lang/StringBuilder;", "toString"):
                     receiver = instruction.registers[0] if instruction.registers and not instruction.is_static else None
