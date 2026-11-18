@@ -110,3 +110,26 @@ def test_data_flow_evidence_round_trips_through_worker_payload():
     assert restored.data_flow_methods == 1
     assert restored.data_flow_complete is True
     assert restored.data_flows[0].assertion == "may-flow"
+
+
+
+def test_data_flow_payload_rejects_confirmed_or_guard_verified_claims():
+    apk = _apk()
+    digest = hashlib.sha256(apk).hexdigest()
+    payload = code_index_payload(index_apk(apk), digest)
+    payload["data_flows"] = [{
+        "method": {"class_name": "com.example.Entry", "name": "onCreate", "descriptor": "()V"},
+        "source_id": "intent-string-extra",
+        "sink_id": "webview-load",
+        "source_offset": 0,
+        "sink_offset": 8,
+        "sink_register": 2,
+        "guard_ids_before": [],
+        "guard_ids_after": [],
+        "guard_dominates_sink": False,
+        "guard_outcome_verified": True,
+        "assertion": "confirmed",
+    }]
+    import json
+    with pytest.raises(ValueError, match="unsupported assertion"):
+        validate_dex_index_payload(json.dumps(payload).encode(), digest)
