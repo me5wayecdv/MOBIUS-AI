@@ -457,3 +457,22 @@ def test_coverage_manifest_api_is_owner_scoped_and_returns_the_same_contract(
         headers={"X-Analyst-ID": "another-analyst"},
     )
     assert denied.status_code == 404
+
+
+def test_coverage_manifest_does_not_fall_back_to_stale_dex_evidence_on_hash_failure(
+    session, store, future_iso
+):
+    scan_id, _ = _coverage_scan(session, store, future_iso)
+    dex_evidence = session.query(EvidenceRow).filter_by(
+        investigation_id=scan_id, kind=EvidenceKind.DEX_STRING.value
+    ).one()
+    store.path_for(dex_evidence.object_key).write_bytes(b"tampered DEX evidence")
+
+    manifest = CoverageManifestBuilder(session, store).build(scan_id)
+
+    assert manifest["dex_analysis"]["status"] == "evidence_unavailable"
+    assert manifest["dex_analysis"]["complete"] is False
+    assert all(
+        item["status"] == "evidence_unavailable"
+        for item in manifest["dex_analysis"]["entries"]
+    )
