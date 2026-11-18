@@ -127,10 +127,18 @@ def _build_method_flow(vm, encoded_method: object) -> MethodFlow | None:
                     int(item[1]) for item in operands
                     if item and item[0] == Operand.REGISTER
                 )
+                range_form = "/range" in opcode
+                if range_form:
+                    # The current IR does not expand 3rc register ranges; never guess
+                    # receiver/argument positions from the encoded start/count pair.
+                    registers = ()
+                    extraction_complete = False
             except Exception:
+                range_form = False
                 registers = ()
                 extraction_complete = False
             dest, uses, unsupported = _instruction_effect(opcode, registers)
+            unsupported = unsupported or range_form
             target = _parse_reference(instruction.get_output()) if opcode.startswith("invoke-") else None
             if opcode.startswith("invoke-") and target is None:
                 unsupported = True
