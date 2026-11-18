@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from ..adapters.models import (
     ApplicationRow,
+    DecisionRow,
     EvidenceRow,
     InvestigationRow,
     ObservationRow,
@@ -50,6 +51,7 @@ class CoverageManifestBuilder:
         recon = self._recon_coverage(investigation_id)
         jadx = self._jadx_coverage(investigation_id, application.sha256)
         reachability = self._reachability_coverage(investigation_id)
+        model_usage = self._model_usage(investigation_id)
 
         truncated = bool(
             inventory.get("truncated")
@@ -132,6 +134,7 @@ class CoverageManifestBuilder:
             "dex_analysis": dex_analysis,
             "jadx": jadx,
             "reachability": reachability,
+            "model_usage": model_usage,
             "analysis_budgets": {
                 "dex_max_methods_default": MAX_METHODS,
                 "dex_manifest_max_entries": _MAX_INVENTORY_ENTRIES,
@@ -361,6 +364,21 @@ class CoverageManifestBuilder:
             "source_file_count": source_count,
             "source_files_sample": sample,
             "source_files_truncated": source_count > len(sample),
+        }
+
+
+    def _model_usage(self, investigation_id: str) -> dict[str, Any]:
+        rows = list(self.session.execute(
+            select(DecisionRow).where(DecisionRow.investigation_id == investigation_id)
+        ).scalars())
+        model_rows = [row for row in rows if row.model_id or row.provider]
+        return {
+            "decision_count": len(rows),
+            "model_backed_decision_count": len(model_rows),
+            "providers": sorted({row.provider for row in model_rows if row.provider}),
+            "models": sorted({row.model_id for row in model_rows if row.model_id}),
+            "input_tokens": sum(row.input_tokens or 0 for row in model_rows),
+            "output_tokens": sum(row.output_tokens or 0 for row in model_rows),
         }
 
     def _reachability_coverage(self, investigation_id: str) -> dict[str, Any]:
