@@ -94,6 +94,9 @@ class PoCExecutionService:
             created_at=utcnow(),
         )
         self.session.add(row)
+        # Persist the parent run before inserting composite-FK evidence links.
+        # This makes the ordering explicit for both SQLite and PostgreSQL.
+        self.session.flush()
         for item, kind in (
             (plan_evidence, "plan"), (result_evidence, "result"), (log_evidence, "log")
         ):
