@@ -35,9 +35,11 @@ class CountingProvider:
     def __init__(self, content: str):
         self.content = content
         self.calls = 0
+        self.last_call = None
 
     def complete_json(self, **kwargs):
         self.calls += 1
+        self.last_call = kwargs
         return ProviderResult(
             content=self.content,
             model_id="local-test-model",
@@ -223,3 +225,71 @@ def test_investigation_gateway_accumulates_usage_across_sequential_calls(
     assert row.used_json["model_tokens"] == 24
     assert row.used_json["model_tokens_reserved"] == 0
     assert provider.calls == 2
+
+
+def test_nexus_receives_and_records_persisted_source_excerpt(session, store, future_iso):
+    scan_id, observation_id = _scan_with_observation(
+        session, store, future_iso, consent=True
+    )
+    source_text = "private void writeSecret() {\\n    persistSensitiveValue();\\n}"
+    payload = {
+        "schema_version": 1,
+        "apk_sha256": "a" * 64,
+        "tool_version": "1.5.6",
+        "class_name": "com.example.Entry",
+        "component": "com.example.Entry",
+        "method_name": "writeSecret",
+        "method_reference": "com.example.Entry#writeSecret@6",
+        "path": "com/example/Entry.java",
+        "start_line": 6,
+        "end_line": 8,
+        "fidelity": "decompiled",
+        "text": source_text,
+    }
+    content = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    metadata = {
+        "mobius_source_evidence_version": 1,
+        "apk_sha256": payload["apk_sha256"],
+        "tool_version": payload["tool_version"],
+        "class_name": payload["class_name"],
+        "component": payload["component"],
+        "method_name": payload["method_name"],
+        "method_reference": payload["method_reference"],
+        "path": payload["path"],
+        "start_line": payload["start_line"],
+        "end_line": payload["end_line"],
+        "fidelity": payload["fidelity"],
+    }
+    source_evidence = EvidenceService(session, store).record(
+        investigation_id=scan_id,
+        kind=EvidenceKind.SOURCE,
+        content=content,
+        summary=json.dumps(metadata, sort_keys=True, separators=(",", ":")),
+        produced_by="JADX",
+    )
+    response = {
+        "hypotheses": [{
+            "claim": "The decompiled method may write attacker-controlled data.",
+            "derived_from": [observation_id],
+            "required_evidence": ["source_location", "attacker_controlled_input"],
+            "maswe": ["MASWE-0001"],
+            "priority": 0.6,
+        }],
+        "summary": "A source excerpt is available but runtime control is not established.",
+    }
+    provider = CountingProvider(json.dumps(response))
+    gateway = StructuredModelGateway(provider, model="local-test-model")
+    session.commit()
+    factory = sessionmaker(bind=session.get_bind(), expire_on_commit=False, future=True)
+
+    result = NexusHypothesisService(
+        session, gateway=gateway, session_factory=factory, store=store
+    ).generate(scan_id, component="com.example.Entry")
+
+    assert result["mode"] == "model_gateway"
+    assert provider.calls == 1
+    assert source_text in json.dumps(provider.last_call, default=str)
+    decision = session.query(DecisionRow).filter_by(
+        investigation_id=scan_id, action="generate_hypotheses"
+    ).one()
+    assert source_evidence.id in decision.considered_evidence
