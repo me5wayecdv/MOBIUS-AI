@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..adapters.models import (
+    ApplicationRow,
     EvidenceRow,
     FindingRow,
     InvestigationRow,
@@ -119,13 +120,19 @@ class EvidencePackageBuilder:
             )
             .order_by(EvidenceRow.created_at.asc(), EvidenceRow.id.asc())
         ).scalars())
+        application = self.session.get(ApplicationRow, investigation.application_id)
+        expected_apk_sha256 = application.sha256 if application is not None else None
         source_rows: list[tuple[EvidenceRow, dict[str, Any]]] = []
+        invalid_source_metadata = False
         for source_row in all_source_rows:
             try:
                 metadata = json.loads(source_row.summary)
             except (TypeError, json.JSONDecodeError):
                 continue
             if not isinstance(metadata, dict) or metadata.get("mobius_source_evidence_version") != 1:
+                continue
+            if metadata.get("apk_sha256") != expected_apk_sha256:
+                invalid_source_metadata = True
                 continue
             if component and metadata.get("component") != component:
                 continue
@@ -234,7 +241,7 @@ class EvidencePackageBuilder:
 
         source_snippets: list[dict[str, Any]] = []
         remaining_source_chars = self.max_source_chars
-        source_integrity_limited = False
+        source_integrity_limited = invalid_source_metadata
         if source_rows and self.store is None:
             source_integrity_limited = True
         elif self.store is not None:
