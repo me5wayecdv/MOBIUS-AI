@@ -71,7 +71,7 @@ def test_invalid_catalogue_mapping_fails_closed(tmp_path: Path):
         "sinks: []\nguards: []\n",
         encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="invalid identifier"):
+    with pytest.raises(ValueError, match="unknown MASWE"):
         load_catalogue(bad)
 
 
