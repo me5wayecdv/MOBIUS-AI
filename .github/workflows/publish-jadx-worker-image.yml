@@ -63,7 +63,7 @@ jobs:
             --security-opt no-new-privileges --user 65532:65532 \
             --pids-limit 128 --memory 4096m --cpus 2 \
             --tmpfs /tmp:rw,noexec,nosuid,nodev,size=128m \
-            --mount "type=bind,src=$smoke_root,dst=/work,rw" \
+            --mount "type=bind,src=$smoke_root,dst=/work" \
             "$IMAGE_REPOSITORY@$IMAGE_DIGEST" \
             python /opt/mobius/scripts/smoke_jadx_image.py \
               --fixture /opt/mobius/tests/fixtures/dex/AnalysisTest.dex \
