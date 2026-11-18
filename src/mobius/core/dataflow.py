@@ -284,7 +284,12 @@ def analyse_method(
                 elif (instruction.invoke_class, instruction.invoke_method) == ("Ljava/lang/StringBuilder;", "toString"):
                     receiver = instruction.registers[0] if instruction.registers and not instruction.is_static else None
                     pending_result = state.get(receiver, frozenset()) if receiver is not None else frozenset()
-                elif (instruction.invoke_class, instruction.invoke_method) == ("Ljava/lang/String;", "concat"):
+                elif (instruction.invoke_class, instruction.invoke_method) == ("Landroid/net/Uri;", "toString"):
+                    receiver = instruction.registers[0] if instruction.registers and not instruction.is_static else None
+                    pending_result = state.get(receiver, frozenset()) if receiver is not None else frozenset()
+                elif instruction.invoke_class == "Ljava/lang/String;" and instruction.invoke_method in {
+                    "concat", "substring", "trim", "replace", "replaceAll", "toLowerCase", "toUpperCase"
+                }:
                     pending_result = frozenset().union(*(state.get(r, frozenset()) for r in instruction.registers))
                 elif instruction.invoke_class == "Ljava/lang/String;" and instruction.invoke_method == "valueOf":
                     pending_result = frozenset().union(*(state.get(r, frozenset()) for r in instruction.registers))
