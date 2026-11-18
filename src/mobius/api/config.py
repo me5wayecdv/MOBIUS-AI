@@ -41,6 +41,6 @@ class Settings:
                     "MOBIUS_JADX_CACHE_ROOT",
                     str(Path(os.environ.get("MOBIUS_ARTIFACT_ROOT", _DEFAULT_ROOT)) / "jadx-cache"),
                 )
-            ),
+            ).expanduser().resolve(),
             jadx_image=os.environ.get("MOBIUS_JADX_IMAGE") or None,
         )
