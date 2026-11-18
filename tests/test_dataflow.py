@@ -241,10 +241,10 @@ def test_guard_before_sink_on_only_one_branch_does_not_dominate_sink():
         invoke_class=CONTEXT, invoke_method="checkCallingPermission",
     )
     flow = MethodFlow(M(), (
-        FlowBlock(0, (), (10, 20)),
-        FlowBlock(10, (guard,), (30,)),
-        FlowBlock(20, (source(4), move_result(8)), (30,)),
-        FlowBlock(30, (sink(10, 2),), ()),
+        FlowBlock(0, (), (2, 4)),
+        FlowBlock(2, (guard,), (10,)),
+        FlowBlock(4, (source(4), move_result(8)), (10,)),
+        FlowBlock(10, (sink(10, 2),), ()),
     ), 0)
 
     finding = analyse_method(flow).findings[0]
