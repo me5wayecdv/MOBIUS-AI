@@ -4,6 +4,7 @@ import hashlib
 import json
 
 from conftest import make_apk
+from mobius.adapters.models import InvestigationRow
 
 
 def _upload_authorized_scan(client, *, analyst="analyst-1"):
@@ -147,3 +148,29 @@ def test_code_lookup_rejects_tampered_source_cache(client, ctx):
     )
     assert response.status_code == 409
     assert response.json()["detail"]["code"] == "JADX_CACHE_INVALID"
+
+
+
+def test_jadx_decompile_is_queued_and_owner_scoped(client, ctx):
+    _app, scan = _upload_authorized_scan(client)
+    with ctx.session() as session:
+        row = session.get(InvestigationRow, scan["id"])
+        row.state = "SURFACE_READY"
+        session.commit()
+
+    base = f"/api/v1/scans/{scan['id']}/code/decompile/jobs"
+    queued = client.post(base)
+    assert queued.status_code == 202, queued.text
+    body = queued.json()
+    assert body["kind"] == "jadx_decompile"
+    assert body["status"] == "queued"
+
+    status = client.get(base + "/" + body["job_id"])
+    assert status.status_code == 200, status.text
+    assert status.json()["status"] == "queued"
+
+    denied = client.get(
+        base + "/" + body["job_id"],
+        headers={"X-Analyst-ID": "another-analyst"},
+    )
+    assert denied.status_code == 404
