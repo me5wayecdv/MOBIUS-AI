@@ -9,7 +9,7 @@
 > exactly the failure mode the project forbids: describing a proposal as if it were a working system
 > (master prompt §23). Every row states its evidence; a row without a test is not `DONE`.
 
-**Last updated:** 2026-11-18 · **Status baseline:** main includes PR #49; D-030–D-032 graph persistence, correlation and candidate paths are implemented. D-033 graph API/React Flow code is implemented (PR #43) but visual acceptance is pending. D-040–D-044 PoC schema, adapters, persistence, approval controls and positive/negative integration tests are merged (PRs #44–#49); exact-plan approval digest hardening is in PR #49.
+**Last updated:** 2026-11-18 · **Status baseline:** main includes PR #52. D-012 JADX adapter/cache is merged; D-013 lookup APIs are merged but partial pending operational OCI backend registration. D-014 YAML source/sink catalogue is in progress on its own PR branch.
 
 ---
 
@@ -194,3 +194,12 @@ See `docs/DEMO_BLOCKERS.md` for the ordered path from APK selection through the 
 - The API process deliberately has no isolated execution backend configured. Cache hits can be browsed; cache misses return explicit 503 rather than running JADX unsandboxed. Runtime OCI registration remains a blocker.
 - D-021 remains partial: decompiled source must still be persisted as investigation evidence and included as bounded snippets in evidence packages. The D-013 endpoints do not silently upgrade D-021 completion.
 - No migrations, new dependencies, paid services, deployments, emulator use or real APK execution were added.
+
+
+## 2026-11-18 — D-013 merged; D-014 implementation in progress
+
+- PR #52 merged as `99ac182c83ab2aeaa364b77b2218339bae534479`; CI run `44260948173` passed Python 3.11/3.12 with PostgreSQL 16 and the War Room Browser E2E/screenshot job.
+- D-013 remains `PARTIAL`: the owner-scoped lookup API reads only verified cached JADX output. Cache misses return 503 because a verified isolated OCI execution backend is not registered in the API process. No unsandboxed fallback exists.
+- D-014 branch `feat/d-014-source-sink-catalogue` adds a versioned YAML catalogue of Android candidate sources, sinks and caller-check indicators, with MASWE/MASVS mappings, references, confidence and impact metadata. The loader validates identifiers and exact API keys.
+- D-014 catalogue matches are API-level candidates only. They do not prove attacker control, source-to-sink propagation, sanitization failure, exploitability or a vulnerability. Those are not claimed; bounded CFG/data-flow and guard ordering belong to D-015.
+- D-021 remains `PARTIAL` until real decompiled source is persisted as investigation evidence and bounded excerpts are included in evidence packages.
