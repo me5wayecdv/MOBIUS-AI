@@ -213,6 +213,7 @@ def test_database_composite_foreign_keys_block_cross_investigation_evidence_link
         investigation_id=first, node_type="component", label="Local",
         ref="node-local", assertion=AssertionLevel.OBSERVED,
     ))
+    session.commit()
     with pytest.raises(IntegrityError):
         session.add(GraphNodeEvidenceRow(
             investigation_id=first, node_id=node.id, evidence_id=foreign.id
