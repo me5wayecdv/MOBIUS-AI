@@ -60,11 +60,11 @@ jobs:
           with zipfile.ZipFile(os.environ["APK_PATH"], "w") as apk:
               apk.writestr("AndroidManifest.xml", "<manifest package='com.mobius.smoke'/>")
           PY
-          docker run --rm --network none --read-only --cap-drop ALL \\
-            --security-opt no-new-privileges --user 65532:65532 \\
-            --mount "type=bind,src=$RUNNER_TEMP,dst=/work,readonly" \\
-            "$IMAGE_REPOSITORY@$IMAGE_DIGEST" \\
-            /usr/local/bin/mobius-recon-manifest --input /work/input.apk \\
+          docker run --rm --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges --user 65532:65532 \
+            --mount "type=bind,src=$RUNNER_TEMP,dst=/work,readonly" \
+            "$IMAGE_REPOSITORY@$IMAGE_DIGEST" \
+            /usr/local/bin/mobius-recon-manifest --input /work/input.apk \
             > "$RUNNER_TEMP/recon-smoke.xml"
           grep -q "com.mobius.smoke" "$RUNNER_TEMP/recon-smoke.xml"
 
@@ -77,4 +77,4 @@ jobs:
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "Configure the worker with this immutable reference:" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          printf '`%s@%s`\\n' "$IMAGE_REPOSITORY" "$IMAGE_DIGEST" >> "$GITHUB_STEP_SUMMARY"
+          printf '`%s@%s`\n' "$IMAGE_REPOSITORY" "$IMAGE_DIGEST" >> "$GITHUB_STEP_SUMMARY"
