@@ -72,7 +72,11 @@ class EvidencePackageBuilder:
         max_source_snippets: int = 20,
         max_source_chars: int = 24_000,
     ) -> None:
-        if min(max_observations, max_findings, max_evidence, max_text_chars, max_methods, max_source_snippets, max_source_chars) < 1:
+        limits = (
+            max_observations, max_findings, max_evidence, max_text_chars,
+            max_methods, max_source_snippets, max_source_chars,
+        )
+        if min(limits) < 1:
             raise ValueError("evidence package limits must be positive")
         self.session = session
         self.max_observations = max_observations
@@ -137,7 +141,8 @@ class EvidencePackageBuilder:
             if component and metadata.get("component") != component:
                 continue
             source_rows.append((source_row, metadata))
-        if len(source_rows) > self.max_source_snippets:
+        eligible_source_count = len(source_rows)
+        if eligible_source_count > self.max_source_snippets:
             truncated = True
         source_rows = source_rows[: self.max_source_snippets]
 
@@ -302,7 +307,7 @@ class EvidencePackageBuilder:
             limitations.insert(0, "No persisted verified JADX source excerpts were selected for this package.")
         if source_integrity_limited:
             limitations.append("One or more persisted source evidence records could not be integrity-verified or read.")
-        if len(all_source_rows) > len(source_rows):
+        if eligible_source_count > len(source_rows):
             limitations.append("Source evidence selection was capped; omitted excerpts are not evidence of absence.")
         if any(bool((row.attributes or {}).get("index_truncated")) for row in obs_rows):
             limitations.append("At least one selected observation came from a truncated DEX index.")
