@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import time
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
@@ -17,7 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..adapters.models import (
-    ApplicationRow, AuthorizationRow, HypothesisRow, InvestigationRow, ObservationRow,
+    ApplicationRow, AuthorizationRow, ApprovalRow, HypothesisRow, InvestigationRow, ObservationRow,
 )
 from ..adapters.events import utcnow
 from ..core.schemas import PoCTestPlan
@@ -66,6 +67,7 @@ class PoCExecutionResult:
     output_json: dict[str, Any]
     tool_versions: tuple[str, ...]
     limitations: tuple[str, ...]
+    cleanup_results: tuple[dict[str, Any], ...]
 
 
 class SafePoCRunner:
@@ -81,95 +83,96 @@ class SafePoCRunner:
             "safe_webview_guard_v1": self._safe_webview_guard,
         }
 
-    def run(self, plan: PoCTestPlan) -> PoCExecutionResult:
+    def run(self, plan: PoCTestPlan, *, cancel_check: Callable[[], bool] | None = None) -> PoCExecutionResult:
         self._validate_scope(plan)
-        if plan.safety_class != "read_only":
-            raise PoCExecutionError("D-041 executes read-only adapters only; non-read-only cleanup is added in D-043")
+        if plan.safety_class == "state_changing":
+            raise PoCExecutionError("state-changing actions remain disabled; no state-changing adapter is registered")
         if plan.requires_approval:
-            raise PoCApprovalRequired("approval workflow is implemented in D-043")
+            approval = self.session.get(ApprovalRow, plan.approval_id) if plan.approval_id else None
+            if (approval is None or approval.investigation_id != plan.investigation_id
+                or approval.requested_action != "poc.execute" or approval.state != "granted"
+                or datetime.fromisoformat(approval.expires_at.replace("Z", "+00:00")) <= datetime.now(timezone.utc)):
+                raise PoCApprovalRequired("a matching, unexpired granted PoC approval is required")
+        elif plan.safety_class != "read_only":
+            raise PoCApprovalRequired("non-read-only plans require explicit approval")
         if plan.target_kind == "emulator":
-            raise PoCAdapterUnavailable(
-                "no verified Android emulator adapter is configured on this host"
-            )
+            raise PoCAdapterUnavailable("no verified Android emulator adapter is configured on this host")
+        if plan.cleanup_steps and plan.target_kind != "local_harness":
+            raise PoCAdapterUnavailable("cleanup adapters are currently limited to local_harness targets")
 
-        started = datetime.now(timezone.utc)
+        started_clock = time.monotonic()
         started_at = utcnow()
         context: dict[str, Any] = {}
         results: list[PoCStepResult] = []
+        cleanup_results: list[dict[str, Any]] = []
         versions: set[str] = set()
-        for index, step in enumerate(plan.steps):
-            step_started = datetime.now(timezone.utc)
-            if plan.target_kind == "lab_apk":
-                actual, tool, version = self._run_manifest_step(plan, step.action, step.target_ref)
-            elif plan.target_kind == "local_harness":
-                actual, tool, version = self._run_harness_step(
-                    step.action, step.target_ref, step.input_values, context
-                )
-            else:  # pragma: no cover - Literal schema prevents this branch
-                raise PoCAdapterUnavailable(f"unsupported target kind: {plan.target_kind}")
-            versions.add(f"{tool}/{version}")
-            passed = (
-                actual == step.expected_value
-                if step.action in {"assert_manifest_component", "assert_manifest_permission",
-                                   "assert_local_harness_result"}
-                else True
-            )
-            duration_ms = max(
-                0, int((datetime.now(timezone.utc) - step_started).total_seconds() * 1000)
-            )
-            results.append(PoCStepResult(
-                index=index,
-                action=step.action,
-                target_ref=step.target_ref,
-                status="passed" if passed else "failed",
-                passed=passed,
-                actual_value=actual,
-                expected_value=step.expected_value,
-                duration_ms=duration_ms,
-                tool_name=tool,
-                tool_version=version,
-            ))
-            if not passed:
-                break
+        status = "passed"
+        try:
+            for index, step in enumerate(plan.steps):
+                if cancel_check is not None and cancel_check():
+                    status = "cancelled"
+                    break
+                if time.monotonic() - started_clock >= plan.max_duration_seconds:
+                    status = "timed_out"
+                    break
+                step_started = time.monotonic()
+                if plan.target_kind == "lab_apk":
+                    actual, tool, version = self._run_manifest_step(plan, step.action, step.target_ref)
+                elif plan.target_kind == "local_harness":
+                    actual, tool, version = self._run_harness_step(step.action, step.target_ref, step.input_values, context)
+                else:
+                    raise PoCAdapterUnavailable(f"unsupported target kind: {plan.target_kind}")
+                versions.add(f"{tool}/{version}")
+                passed = actual == step.expected_value if step.action in {
+                    "assert_manifest_component", "assert_manifest_permission", "assert_local_harness_result"
+                } else True
+                duration_ms = max(0, int((time.monotonic() - step_started) * 1000))
+                results.append(PoCStepResult(index=index, action=step.action, target_ref=step.target_ref,
+                    status="passed" if passed else "failed", passed=passed, actual_value=actual,
+                    expected_value=step.expected_value, duration_ms=duration_ms, tool_name=tool, tool_version=version))
+                if duration_ms > step.timeout_seconds * 1000 or time.monotonic() - started_clock > plan.max_duration_seconds:
+                    status = "timed_out"
+                    break
+                if not passed:
+                    status = "failed"
+                    break
+        finally:
+            for cleanup in plan.cleanup_steps:
+                cleanup_started = time.monotonic()
+                if cleanup.action == "reset_local_harness":
+                    context.clear()
+                    cleanup_status = "completed"
+                    detail = "in-memory harness context reset"
+                elif cleanup.action == "remove_temporary_workspace":
+                    cleanup_status = "completed"
+                    detail = "no temporary workspace was created by the in-process harness"
+                else:
+                    cleanup_status = "unavailable"
+                    detail = "cleanup action is not registered"
+                cleanup_results.append({"action": cleanup.action, "target_ref": cleanup.target_ref,
+                    "status": cleanup_status, "detail": detail,
+                    "duration_ms": max(0, int((time.monotonic() - cleanup_started) * 1000))})
 
-        finished = datetime.now(timezone.utc)
         finished_at = utcnow()
-        total_ms = max(0, int((finished - started).total_seconds() * 1000))
-        output = {
-            "plan_id": plan.id,
-            "target_sha256": plan.target_sha256,
-            "steps": [
-                {
-                    "index": r.index, "action": r.action, "target_ref": r.target_ref,
-                    "status": r.status, "passed": r.passed, "actual_value": r.actual_value,
-                    "expected_value": r.expected_value, "tool": r.tool_name,
-                    "tool_version": r.tool_version,
-                }
-                for r in results
-            ],
-            "simulation_only": plan.target_kind == "local_harness",
-        }
+        total_ms = max(0, int((time.monotonic() - started_clock) * 1000))
+        output = {"plan_id": plan.id, "target_sha256": plan.target_sha256,
+            "steps": [{"index": r.index, "action": r.action, "target_ref": r.target_ref,
+                "status": r.status, "passed": r.passed, "actual_value": r.actual_value,
+                "expected_value": r.expected_value, "tool": r.tool_name, "tool_version": r.tool_version}
+                for r in results],
+            "cleanup": cleanup_results, "simulation_only": plan.target_kind == "local_harness"}
         encoded = json.dumps(output, sort_keys=True, default=str).encode("utf-8")
         if len(encoded) > plan.max_output_bytes:
             raise PoCExecutionError("PoC output exceeds the plan's max_output_bytes")
-        status = "passed" if results and all(r.passed for r in results) else "failed"
-        return PoCExecutionResult(
-            plan_id=plan.id,
-            investigation_id=plan.investigation_id,
-            target_sha256=plan.target_sha256,
-            status=status,
-            started_at=started_at,
-            finished_at=finished_at,
-            duration_ms=total_ms,
-            steps=tuple(results),
-            output_json=output,
-            tool_versions=tuple(sorted(versions)),
-            limitations=(
-                "Local harness results are deterministic simulations, not execution of the APK.",
-                "No shell, subprocess, network, emulator, or state-changing action is available in D-041.",
-                "Persisting execution evidence is handled by D-042; approval/cancel/cleanup by D-043.",
-            ),
-        )
+        if status == "passed" and not results:
+            status = "failed"
+        return PoCExecutionResult(plan_id=plan.id, investigation_id=plan.investigation_id,
+            target_sha256=plan.target_sha256, status=status, started_at=started_at, finished_at=finished_at,
+            duration_ms=total_ms, steps=tuple(results), output_json=output, tool_versions=tuple(sorted(versions)),
+            limitations=("Local harness results are deterministic simulations, not execution of the APK.",
+                "No shell, subprocess, network, emulator, or state-changing action is available.",
+                "Cancellation is cooperative between bounded allowlisted steps; it cannot interrupt a running step."),
+            cleanup_results=tuple(cleanup_results))
 
     def _validate_scope(self, plan: PoCTestPlan) -> None:
         investigation = self.session.get(InvestigationRow, plan.investigation_id)

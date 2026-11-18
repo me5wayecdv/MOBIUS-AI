@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, U
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 
 from ..adapters.events import SqlEventStore, utcnow
-from ..adapters.models import ApplicationRow, EvidenceRow, FindingRow, InvestigationRow, WorkerJobRow
+from ..adapters.models import ApplicationRow, EvidenceRow, FindingRow, InvestigationRow, WorkerJobRow, PoCRunRow
 from ..core import fsm, gates
 from ..core.enums import EvidenceKind, InvestigationState, RejectionReason
 from ..services.evidence import EvidenceService
@@ -21,6 +21,9 @@ from ..services.recon import ReconService
 from ..services.spectre import SpectreService
 from ..services.validation import ValidationService
 from ..services.worker_queue import WorkerQueue
+from ..core.schemas import PoCTestPlan
+from ..services.poc_approval import PoCApprovalService
+from ..services.poc_execution import PoCExecutionService, request_poc_cancel
 from .deps import analyst_id, get_context
 from .schemas import (
     AuthorizationCreate,
@@ -28,6 +31,8 @@ from .schemas import (
     ScanCreate,
     ValidationRequest,
     ModelConsentRequest,
+    PoCApprovalRequest,
+    PoCApprovalDecision,
 )
 
 router = APIRouter()
@@ -761,6 +766,106 @@ def run_nexus(
             ),
         )
     return NexusService(session, ctx.store).run(scan_id, max_steps=max_steps)
+
+
+
+# ------------------------------------------------------------------------------------
+# Safe PoC execution, approvals and cancellation
+# ------------------------------------------------------------------------------------
+
+
+@router.post("/scans/{scan_id}/poc/approvals", status_code=201, tags=["poc"])
+def request_poc_approval(
+    scan_id: str, payload: PoCApprovalRequest,
+    session=Depends(_session), who: str = Depends(analyst_id),
+):
+    _require_scan_owner(session, scan_id, who)
+    plan = PoCTestPlan.model_validate(payload.plan)
+    if plan.investigation_id != scan_id:
+        raise HTTPException(status_code=422, detail="plan investigation_id must match route")
+    from ..services.poc_runner import SafePoCRunner
+    SafePoCRunner(session)._validate_scope(plan)
+    row = PoCApprovalService(session).request(
+        plan, requested_by=who, justification=payload.justification,
+        risk_summary=payload.risk_summary, expires_at=payload.expires_at,
+    )
+    return {"id": row.id, "state": row.state, "requested_action": row.requested_action,
+            "expires_at": row.expires_at, "investigation_id": row.investigation_id}
+
+
+@router.post("/scans/{scan_id}/poc/approvals/{approval_id}/resolve", tags=["poc"])
+def resolve_poc_approval(
+    scan_id: str, approval_id: str, payload: PoCApprovalDecision,
+    session=Depends(_session), who: str = Depends(analyst_id),
+):
+    _require_scan_owner(session, scan_id, who)
+    try:
+        row = PoCApprovalService(session).resolve(
+            approval_id, investigation_id=scan_id, decision=payload.decision,
+            decided_by=who, note=payload.note,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"id": row.id, "state": row.state, "decided_at": row.decided_at}
+
+
+@router.post("/scans/{scan_id}/poc/approvals/{approval_id}/cancel", tags=["poc"])
+def cancel_poc_approval(
+    scan_id: str, approval_id: str,
+    session=Depends(_session), who: str = Depends(analyst_id),
+):
+    _require_scan_owner(session, scan_id, who)
+    try:
+        row = PoCApprovalService(session).cancel(
+            approval_id, investigation_id=scan_id, cancelled_by=who,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"id": row.id, "state": row.state}
+
+
+@router.post("/scans/{scan_id}/poc/execute", tags=["poc"])
+def execute_poc(
+    scan_id: str, payload: PoCTestPlan,
+    session=Depends(_session), who: str = Depends(analyst_id),
+):
+    _require_scan_owner(session, scan_id, who)
+    if payload.investigation_id != scan_id:
+        raise HTTPException(status_code=422, detail="plan investigation_id must match route")
+    ctx = get_context()
+    result = PoCExecutionService(session, ctx.store).execute_and_persist(payload)
+    return {"run_id": result.run_id, "plan_id": result.plan_id, "status": result.status,
+            "evidence_ids": list(result.evidence_ids), "input_sha256": result.input_sha256,
+            "output_sha256": result.output_sha256, "output": result.result.output_json}
+
+
+@router.post("/scans/{scan_id}/poc/plans/{plan_id}/cancel", tags=["poc"])
+def cancel_poc_execution(
+    scan_id: str, plan_id: str, session=Depends(_session), who: str = Depends(analyst_id),
+):
+    _require_scan_owner(session, scan_id, who)
+    if not request_poc_cancel(plan_id):
+        raise HTTPException(status_code=409, detail="no active PoC execution for this plan in this process")
+    SqlEventStore(session).emit(
+        scan_id, "poc_cancel_requested", {"plan_id": plan_id}, actor=who,
+    )
+    return {"plan_id": plan_id, "cancel_requested": True, "mode": "cooperative-between-steps"}
+
+
+@router.get("/scans/{scan_id}/poc/runs", tags=["poc"])
+def list_poc_runs(scan_id: str, session=Depends(_session), who: str = Depends(analyst_id)):
+    _require_scan_owner(session, scan_id, who)
+    rows = session.query(PoCRunRow).filter(
+        PoCRunRow.investigation_id == scan_id
+    ).order_by(PoCRunRow.created_at.desc()).limit(100).all()
+    return {"items": [{
+        "id": row.id, "plan_id": row.plan_id, "approval_id": row.approval_id,
+        "status": row.status, "exit_status": row.exit_status,
+        "target_sha256": row.target_sha256, "input_sha256": row.input_sha256,
+        "output_sha256": row.output_sha256, "tool_versions": row.tool_versions,
+        "started_at": row.started_at, "finished_at": row.finished_at,
+        "duration_ms": row.duration_ms, "cleanup": row.cleanup_json,
+    } for row in rows]}
 
 
 # ------------------------------------------------------------------------------------

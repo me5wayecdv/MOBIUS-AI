@@ -588,3 +588,12 @@ composite foreign keys that enforce same-investigation ownership.
 The D-042 migration is additive. CI migration tests use disposable SQLite/PostgreSQL databases.
 Downgrade refuses to remove populated PoC run/evidence tables; no valuable database migration
 or data deletion is authorized.
+
+
+### 3.12 PoC approval and execution controls (D-043)
+
+Migration `0006` adds the optional approval reference, cancellation timestamp and cleanup
+record to `poc_runs`, and expands terminal statuses to `passed`, `failed`, `cancelled`
+and `timed_out`. Human approval requests are stored in the existing `approvals` table
+and generate durable `approval_requested` / `approval_resolved` events. CI applies this
+migration only to disposable SQLite and PostgreSQL databases.

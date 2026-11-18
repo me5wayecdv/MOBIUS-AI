@@ -488,7 +488,7 @@ class PoCRunRow(Base):
     __tablename__ = "poc_runs"
     __table_args__ = (
         UniqueConstraint("investigation_id", "id", name="uq_poc_run_investigation_id"),
-        CheckConstraint("status IN ('passed','failed')", name="poc_run_status_known"),
+        CheckConstraint("status IN ('passed','failed','cancelled','timed_out')", name="poc_run_status_known"),
         Index("ix_poc_runs_investigation_created", "investigation_id", "created_at"),
     )
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
@@ -496,6 +496,9 @@ class PoCRunRow(Base):
         String(40), ForeignKey("investigations.id"), nullable=False
     )
     plan_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    approval_id: Mapped[str | None] = mapped_column(String(40), ForeignKey("approvals.id"))
+    cancel_requested_at: Mapped[str | None] = mapped_column(String(40))
+    cleanup_json: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     authorization_id: Mapped[str] = mapped_column(
         String(40), ForeignKey("authorizations.id"), nullable=False
     )
