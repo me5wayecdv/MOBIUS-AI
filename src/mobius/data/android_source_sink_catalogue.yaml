@@ -130,6 +130,46 @@ sinks:
     impact: confidentiality
     description: Exposes a native object to WebView JavaScript; actual exposed methods and loaded origins require review
     references: [MASTG-KNOW-0018]
+  - id: webview-file-access
+    class_descriptor: Landroid/webkit/WebSettings;
+    method: setAllowFileAccess
+    family: webview-local-resource
+    maswe: [MASWE-0034]
+    masvs: [MASVS-PLATFORM-2, MASVS-STORAGE-2, MASVS-CODE-4]
+    confidence: medium
+    impact: confidentiality
+    description: Enables WebView file access; exposure requires untrusted content to be loaded
+    references: [MASTG-KNOW-0018, MASWE-0034]
+  - id: webview-content-access
+    class_descriptor: Landroid/webkit/WebSettings;
+    method: setAllowContentAccess
+    family: webview-local-resource
+    maswe: [MASWE-0034]
+    masvs: [MASVS-PLATFORM-2, MASVS-STORAGE-2, MASVS-CODE-4]
+    confidence: medium
+    impact: confidentiality
+    description: Enables WebView content URI access; exposure depends on loaded content and URI scope
+    references: [MASTG-KNOW-0018, MASWE-0034]
+  - id: webview-file-url-access
+    class_descriptor: Landroid/webkit/WebSettings;
+    method: setAllowFileAccessFromFileURLs
+    family: webview-local-resource
+    maswe: [MASWE-0034]
+    masvs: [MASVS-PLATFORM-2, MASVS-STORAGE-2, MASVS-CODE-4]
+    confidence: medium
+    impact: confidentiality
+    description: Enables file URL access from file URLs; untrusted local content context must be established
+    references: [MASTG-KNOW-0018, MASWE-0034]
+  - id: webview-universal-access
+    class_descriptor: Landroid/webkit/WebSettings;
+    method: setAllowUniversalAccessFromFileURLs
+    family: webview-local-resource
+    maswe: [MASWE-0034]
+    masvs: [MASVS-PLATFORM-2, MASVS-STORAGE-2, MASVS-CODE-4]
+    confidence: medium
+    impact: confidentiality
+    description: Enables universal cross-origin access from file URLs; loaded content context must be established
+    references: [MASTG-KNOW-0018, MASWE-0034]
   - id: process-exec
     class_descriptor: Ljava/lang/Runtime;
     method: exec
