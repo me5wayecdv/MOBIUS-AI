@@ -232,3 +232,23 @@ def test_string_builder_receiver_taint_survives_subsequent_clean_append():
 
     assert result.status == "flow-found"
     assert result.findings[0].sink_offset == 26
+
+
+
+def test_guard_before_sink_on_only_one_branch_does_not_dominate_sink():
+    guard = FlowInstruction(
+        2, "invoke-virtual", registers=(0, 1),
+        invoke_class=CONTEXT, invoke_method="checkCallingPermission",
+    )
+    flow = MethodFlow(M(), (
+        FlowBlock(0, (), (10, 20)),
+        FlowBlock(10, (guard,), (30,)),
+        FlowBlock(20, (source(4), move_result(8)), (30,)),
+        FlowBlock(30, (sink(10, 2),), ()),
+    ), 0)
+
+    finding = analyse_method(flow).findings[0]
+
+    assert finding.guard_ids_before == ("check-calling-permission",)
+    assert finding.guard_dominates_sink is False
+    assert finding.guard_outcome_verified is False
