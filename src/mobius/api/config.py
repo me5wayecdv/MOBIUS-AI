@@ -19,6 +19,8 @@ class Settings:
     model_base_url: str = "http://127.0.0.1:11434"
     model_name: str = ""
     model_timeout_seconds: int = 120
+    jadx_cache_root: Path | None = None
+    jadx_image: str | None = None
 
     @property
     def is_production(self) -> bool:
@@ -34,4 +36,11 @@ class Settings:
             model_base_url=os.environ.get("MOBIUS_MODEL_BASE_URL", "http://127.0.0.1:11434"),
             model_name=os.environ.get("MOBIUS_MODEL_NAME", ""),
             model_timeout_seconds=int(os.environ.get("MOBIUS_MODEL_TIMEOUT_SECONDS", "120")),
+            jadx_cache_root=Path(
+                os.environ.get(
+                    "MOBIUS_JADX_CACHE_ROOT",
+                    str(Path(os.environ.get("MOBIUS_ARTIFACT_ROOT", _DEFAULT_ROOT)) / "jadx-cache"),
+                )
+            ).expanduser().resolve(),
+            jadx_image=os.environ.get("MOBIUS_JADX_IMAGE") or None,
         )

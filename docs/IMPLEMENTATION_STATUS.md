@@ -9,7 +9,7 @@
 > exactly the failure mode the project forbids: describing a proposal as if it were a working system
 > (master prompt §23). Every row states its evidence; a row without a test is not `DONE`.
 
-**Last updated:** 2026-11-18 · **Status baseline:** main includes PR #49; D-030–D-032 graph persistence, correlation and candidate paths are implemented. D-033 graph API/React Flow code is implemented (PR #43) but visual acceptance is pending. D-040–D-044 PoC schema, adapters, persistence, approval controls and positive/negative integration tests are merged (PRs #44–#49); exact-plan approval digest hardening is in PR #49.
+**Last updated:** 2026-11-18 · **Status baseline:** main includes PR #52. D-012 adapter/cache and D-013 lookup APIs are merged; D-013 queue, OCI registration and local-image smoke are implemented on `feat/d-013-jadx-local-image-smoke`. GHCR publication remains owner-gated and has not been run.
 
 ---
 
@@ -44,7 +44,7 @@
 | Dex index (androguard) | `PARTIAL` | §5, `ISOLATED_DEX_WORKER.md` | Multi-DEX enumeration, per-entry coverage/provenance, duplicate-entry rejection and bounded expansion are implemented. This PR adds a durable `dex_index` queue kind, a closed OCI worker dispatch path, a versioned/size-bounded CodeIndex JSON contract, APK SHA-256 binding, and API enqueue/status/apply endpoints. The API validates and reconstructs the typed CodeIndex before SPECTRE persists evidence. The DEX image is published and its real-DEX smoke test passes: `ghcr.io/me5wayecdv/mobius-dex@sha256:b0c1bd54df1e7b7c3e96066a3c3eb63f4d13ec19a88b39b2d6802d5497852f23`. The first smoke test exposed missing `/tmp` tmpfs; PR #32 fixed it. A real worker host, restricted DB role, shared artifact mount, and end-to-end deployed worker smoke test are still pending before shared SPECTRE execution can be considered operational. Reflection, CFG and data flow remain unimplemented. |
 | Call graph + reachability | `PARTIAL` | §5 | Bounded deterministic BFS, application classes only, node budget with `truncated`. `test_reachability.py` (24 tests): truncation is never absence, a guard off the path is not counted, same-method guard is conservative regardless of order (R-21). **No data flow, no CFG** |
 | SPECTRE | `PARTIAL` | §5 | Turns RECON candidates into gate evidence and emits `code_analysis_complete`; `test_spectre.py` + 2 HTTP tests. **Validated on one real APK** (`com.politedroid_4.apk`): 10 classes / 34 methods / 41 calls → `not-reached` over a complete traversal → `REJECTED`. No true positive on real code yet |
-| JADX / smali decompilation | `NOT STARTED` | §5 | Blocked on JDK host (R-01). SPECTRE does not need it for reachability, only for the model-backed pass |
+| JADX / smali decompilation (D-012/D-013) | `ENGINEERING COMPLETE; PUBLICATION PENDING` | `JADX_ADAPTER.md`, `ISOLATED_JADX_WORKER.md`, `CODE_LOOKUP_API.md` | D-012 adapter/cache and D-013 owner-scoped lookup APIs merged. Current D-013 branch adds authorized durable queue, isolated worker registration and local-only image build/load plus real `AnalysisTest.dex` cache smoke. GHCR publication is separate `workflow_dispatch` only and blocked pending project-owner decision and explicit approval. No JADX image push has been run. |
 | PHANTOM / emulator | `NOT STARTED` | §7 | **Blocked: no KVM** (R-02) |
 | VECTOR / mitmproxy | `NOT STARTED` | §4 | Blocked: no egress from sandbox |
 | VERITAS + gates | `PARTIAL` | `AGENT_DESIGN.md §6` | Gate evaluation, verdict persistence and `ValidatorMustDiffer` implemented and tested. PR #39 adds an opt-in independent reviewer for persisted findings. It requires a different requested and provider-resolved model from the producer, explicit investigation consent, evidence IDs confined to the finding, and stores a provenance-bearing advisory DecisionRow/event. It cannot change findings or verdicts; deterministic gates remain authoritative. Not yet wired into scan orchestration/UI; real Ollama/model-quality validation remains outstanding. `test_recon.py::test_recon_candidates_can_never_confirm` pins the honest outcome |
@@ -194,3 +194,15 @@ See `docs/DEMO_BLOCKERS.md` for the ordered path from APK selection through the 
 - The API process deliberately has no isolated execution backend configured. Cache hits can be browsed; cache misses return explicit 503 rather than running JADX unsandboxed. Runtime OCI registration remains a blocker.
 - D-021 remains partial: decompiled source must still be persisted as investigation evidence and included as bounded snippets in evidence packages. The D-013 endpoints do not silently upgrade D-021 completion.
 - No migrations, new dependencies, paid services, deployments, emulator use or real APK execution were added.
+
+
+## 2026-11-18 — D-013 worker integration; GHCR publication held
+
+- D-013 adds `jadx_decompile` to the existing durable `worker_jobs` queue. Enqueue requires an owner-scoped investigation in `SURFACE_READY`, a live authorization, and an exact APK artifact binding. Duplicate active/unapplied jobs are rejected.
+- The worker registers JADX 1.5.6 through the existing `ToolRunner` and digest-pinned `OciBackend`; it writes the verified SHA-256/version cache to the configured shared cache volume. The API reads the cache only and never runs JADX itself.
+- `MOBIUS_JADX_IMAGE` must be an immutable repository@sha256 reference. It remains unset until publication is explicitly approved; enqueue returns 503 without it.
+- `.github/workflows/jadx-worker-image-ci.yml` builds the image with Buildx `load: true`, `push: false`, then runs the real checked-in `AnalysisTest.dex` fixture in a hardened networkless container. Image CI Run #16 (`44272473218`, HEAD `f8516909`) passed: one Java source file was generated, the SHA-256/JADX-version manifest was verified, and a second call returned a verified cache hit. The image remained local; no GHCR push occurred.
+- `.github/workflows/publish-jadx-worker-image.yml` is separate and `workflow_dispatch`-only, requiring `owner_approval=APPROVED` plus an approval reference. It has not been run and has no push/PR/schedule/workflow-call trigger.
+- Existing DEX and RECON image publication workflows were changed on main to remove automatic push triggers and require manual owner approval input.
+- No image publication was initiated during this work. Historical DEX publication from the earlier DEX worker work remains documented separately.
+- D-021 remains partial: this queue/cache integration does not itself persist decompiled snippets as investigation evidence or include them in evidence packages.

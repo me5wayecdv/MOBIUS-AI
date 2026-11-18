@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import re
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
@@ -432,7 +433,7 @@ def _jadx_lookup(session):
     return JadxCodeLookup(
         session=session,
         store=ctx.store,
-        cache_root=ctx.settings.artifact_root / "jadx-cache",
+        cache_root=ctx.settings.jadx_cache_root or (ctx.settings.artifact_root / "jadx-cache"),
         runner=runner,
     )
 
@@ -454,14 +455,10 @@ def _jadx_http_error(exc):
     raise exc
 
 
-@router.post("/scans/{scan_id}/code/decompile", tags=["code"])
-def decompile_scan_code(
-    scan_id: str,
-    session=Depends(_session),
-    who: str = Depends(analyst_id),
-):
-    """Decompile the authorized APK through the configured isolated tool boundary."""
+def _enqueue_jadx_job(scan_id: str, session, who: str):
+    """Queue decompilation only when an immutable worker image is configured."""
     scan = _require_scan_owner(session, scan_id, who)
+    ctx = get_context()
     application = session.get(ApplicationRow, scan.application_id)
     authorization = session.get(AuthorizationRow, scan.authorization_id) if scan.authorization_id else None
     if (
@@ -471,10 +468,72 @@ def decompile_scan_code(
         or authorization.expires_at <= utcnow()
     ):
         raise HTTPException(status_code=409, detail={"code": "AUTHORIZATION_NOT_LIVE"})
-    try:
-        return _jadx_lookup(session).decompile(scan_id)
-    except Exception as exc:
-        _jadx_http_error(exc)
+    image = ctx.settings.jadx_image
+    if not image or not re.fullmatch(r"[A-Za-z0-9./:_-]+@sha256:[0-9a-f]{64}", image):
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "JADX_WORKER_IMAGE_UNAVAILABLE", "detail": "Configure MOBIUS_JADX_IMAGE with an approved immutable SHA-256 image reference."},
+        )
+    job = WorkerQueue(session).enqueue_jadx_decompile(scan_id, application.artifact_key)
+    SqlEventStore(session).emit(
+        scan_id, "worker_job_queued",
+        {"job_id": job.id, "kind": job.kind, "status": job.status},
+        actor="M2",
+    )
+    return {
+        "job_id": job.id,
+        "investigation_id": scan_id,
+        "kind": job.kind,
+        "status": job.status,
+        "created_at": job.created_at,
+    }
+
+
+@router.post("/scans/{scan_id}/code/decompile", status_code=202, tags=["code"])
+def decompile_scan_code(
+    scan_id: str,
+    session=Depends(_session),
+    who: str = Depends(analyst_id),
+):
+    """Queue the authorized APK for isolated JADX decompilation."""
+    return _enqueue_jadx_job(scan_id, session, who)
+
+
+@router.post("/scans/{scan_id}/code/decompile/jobs", status_code=202, tags=["code"])
+def enqueue_jadx_decompile(
+    scan_id: str,
+    session=Depends(_session),
+    who: str = Depends(analyst_id),
+):
+    """Explicit queued-job alias for clients that prefer a /jobs resource."""
+    return _enqueue_jadx_job(scan_id, session, who)
+
+
+@router.get("/scans/{scan_id}/code/decompile/jobs/{job_id}", tags=["code"])
+def get_jadx_decompile_job(
+    scan_id: str,
+    job_id: str,
+    session=Depends(_session),
+    who: str = Depends(analyst_id),
+):
+    _require_scan_owner(session, scan_id, who)
+    job = WorkerQueue(session).get(job_id)
+    if job.investigation_id != scan_id or job.kind != "jadx_decompile":
+        from ..services.errors import NotFound
+        raise NotFound(f"JADX worker job {job_id} not found")
+    return {
+        "job_id": job.id,
+        "kind": job.kind,
+        "status": job.status,
+        "attempts": job.attempts,
+        "worker_id": job.worker_id,
+        "error_code": job.error_code,
+        "error_detail": job.error_detail,
+        "result": job.result_json if job.status == "succeeded" else None,
+        "created_at": job.created_at,
+        "started_at": job.started_at,
+        "finished_at": job.finished_at,
+    }
 
 
 @router.get("/scans/{scan_id}/code/classes", tags=["code"])

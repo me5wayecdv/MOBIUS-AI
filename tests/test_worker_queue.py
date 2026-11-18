@@ -98,3 +98,38 @@ def test_worker_queue_prevents_duplicate_unapplied_recon_jobs(session, store, fu
     queue.enqueue_recon(scan.id, app.artifact_key)
     with pytest.raises(Exception, match="already active"):
         queue.enqueue_recon(scan.id, app.artifact_key)
+
+
+
+def test_worker_queue_enqueues_and_claims_authorized_jadx_job(session, store, future_iso):
+    scan, app = _recon_job(session, store, future_iso)
+    session.get(InvestigationRow, scan.id).state = "SURFACE_READY"
+    session.flush()
+    queue = WorkerQueue(session)
+
+    job = queue.enqueue_jadx_decompile(scan.id, app.artifact_key)
+    assert job.kind == "jadx_decompile"
+    assert job.status == "queued"
+
+    claimed = queue.claim("jadx-worker")
+    assert claimed is not None
+    assert claimed.id == job.id
+    assert claimed.kind == "jadx_decompile"
+    assert claimed.status == "running"
+
+
+def test_worker_queue_prevents_duplicate_unapplied_jadx_jobs(session, store, future_iso):
+    scan, app = _recon_job(session, store, future_iso)
+    session.get(InvestigationRow, scan.id).state = "SURFACE_READY"
+    session.flush()
+    queue = WorkerQueue(session)
+    queue.enqueue_jadx_decompile(scan.id, app.artifact_key)
+
+    with pytest.raises(Exception, match="already active"):
+        queue.enqueue_jadx_decompile(scan.id, app.artifact_key)
+
+
+def test_worker_queue_refuses_jadx_job_without_surface_ready_state(session, store, future_iso):
+    scan, app = _recon_job(session, store, future_iso)
+    with pytest.raises(Exception, match="requires SURFACE_READY state"):
+        WorkerQueue(session).enqueue_jadx_decompile(scan.id, app.artifact_key)

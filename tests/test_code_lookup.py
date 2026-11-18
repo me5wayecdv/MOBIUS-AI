@@ -4,6 +4,7 @@ import hashlib
 import json
 
 from conftest import make_apk
+from mobius.adapters.models import InvestigationRow
 
 
 def _upload_authorized_scan(client, *, analyst="analyst-1"):
@@ -112,7 +113,7 @@ def test_decompile_endpoint_fails_closed_without_verified_isolation(client):
     _app, scan = _upload_authorized_scan(client)
     response = client.post(f"/api/v1/scans/{scan['id']}/code/decompile")
     assert response.status_code == 503
-    assert response.json()["detail"]["code"] == "JADX_BACKEND_UNAVAILABLE"
+    assert response.json()["detail"]["code"] == "JADX_WORKER_IMAGE_UNAVAILABLE"
 
 
 def test_code_lookup_enforces_scan_owner_and_source_bounds(client, ctx):
@@ -147,3 +148,48 @@ def test_code_lookup_rejects_tampered_source_cache(client, ctx):
     )
     assert response.status_code == 409
     assert response.json()["detail"]["code"] == "JADX_CACHE_INVALID"
+
+
+
+def test_jadx_decompile_is_queued_and_owner_scoped(client, ctx):
+    from dataclasses import replace
+
+    _app, scan = _upload_authorized_scan(client)
+    ctx.settings = replace(
+        ctx.settings,
+        jadx_image="ghcr.io/example/mobius-jadx@sha256:" + "a" * 64,
+    )
+    with ctx.session() as session:
+        row = session.get(InvestigationRow, scan["id"])
+        row.state = "SURFACE_READY"
+        session.commit()
+
+    base = f"/api/v1/scans/{scan['id']}/code/decompile/jobs"
+    queued = client.post(base)
+    assert queued.status_code == 202, queued.text
+    body = queued.json()
+    assert body["kind"] == "jadx_decompile"
+    assert body["status"] == "queued"
+
+    status = client.get(base + "/" + body["job_id"])
+    assert status.status_code == 200, status.text
+    assert status.json()["status"] == "queued"
+
+    denied = client.get(
+        base + "/" + body["job_id"],
+        headers={"X-Analyst-ID": "another-analyst"},
+    )
+    assert denied.status_code == 404
+
+
+
+def test_jadx_queue_rejects_mutable_worker_image_reference(client, ctx):
+    from dataclasses import replace
+
+    _app, scan = _upload_authorized_scan(client)
+    ctx.settings = replace(ctx.settings, jadx_image="ghcr.io/example/mobius-jadx:latest")
+    response = client.post(
+        f"/api/v1/scans/{scan['id']}/code/decompile/jobs",
+    )
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "JADX_WORKER_IMAGE_UNAVAILABLE"

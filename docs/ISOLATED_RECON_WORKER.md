@@ -22,7 +22,7 @@ The old `POST /recon` endpoint is disabled by default. Tests may use the inline 
 
 ## Build and pin the parser image
 
-On changes to the parser, its dependencies, or the Dockerfile, the GitHub Actions workflow `.github/workflows/recon-worker-image.yml` builds and publishes the image to GHCR. It writes the immutable `ghcr.io/<owner>/mobius-recon@sha256:<digest>` reference to the workflow run summary. Copy that exact reference into `MOBIUS_RECON_IMAGE` on the worker host. The workflow requires the repository's Actions token to have package write access. The application intentionally has no default image digest and fails closed without one.
+The GitHub Actions workflow `.github/workflows/recon-worker-image.yml` is now `workflow_dispatch`-only and requires `owner_approval=APPROVED`. It has no push, pull-request, schedule, or workflow-call trigger. Do not run it or publish a replacement image until the project owner explicitly approves. The digest below records an earlier publication and is historical evidence, not permission to push another image. The application intentionally has no default image digest and fails closed without one.
 
 ### Currently published image
 
@@ -39,7 +39,7 @@ printf '%s' "$GHCR_READ_PACKAGES_TOKEN" | podman login ghcr.io --username "$GHCR
 podman pull ghcr.io/me5wayecdv/mobius-recon@sha256:85af4c8ff733dac74cdd9f1123b1428686339fa46d790400bcad85822b43e7a9
 ```
 
-The image workflow updates this digest on each successful main-branch build. Always prefer the latest workflow summary when updating a deployment.
+The manual publication workflow does not update this digest automatically. Do not change the worker image reference until a new publication has been explicitly approved and its immutable digest has been verified.
 
 
 For a local build only:
@@ -86,10 +86,10 @@ The API role retains INSERT/SELECT/UPDATE access required to create and apply jo
 
 ## Recovery and limitations
 
-- Claims use a five-minute lease. An expired job may be reclaimed up to three attempts; an exhausted lease is marked failed.
+- RECON/DEX claims use a five-minute lease; JADX claims use ten minutes to exceed the bounded 300-second decompiler timeout. An expired job may be reclaimed up to three attempts; an exhausted lease is marked failed.
 - A worker crash does not leave a job permanently locked, though recovery waits for lease expiry.
 - The worker writes only queue results; API applies results to investigation state and evidence.
 - Result XML is bounded to 10 MiB and stored in the job JSON field. A later object-store result channel may be preferable at larger scale.
 - The worker must run on a dedicated host/VM with rootless Podman preferred. Do not mount a rootful Docker socket into the API or a workload container.
-- The parser image digest has not been published or verified by this repository. Until a trusted digest is configured and a real worker deployment is smoke-tested, isolated execution is implemented but not operationally enabled.
+- A parser image digest was published in earlier work (see the historical digest above); a deployed worker-host smoke test remains pending. No replacement publication may occur until explicit project-owner approval. Until a trusted digest is configured and a real worker deployment is smoke-tested, isolated execution is implemented but not operationally enabled.
 - Real authentication remains a separate release blocker. The header-based analyst identity must not be exposed to an untrusted network.
