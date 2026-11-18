@@ -49,7 +49,7 @@ AGENT = "ARCHIVIST"
 
 #: What this build's analysis structurally cannot establish. Printed in every report, because
 #: a reader who only sees the positives will over-read them.
-_LIMITATIONS = """\\
+_LIMITATIONS = """\
 - **Static only.** Nothing was executed and no runtime exploitability was observed.
 - **No data-flow analysis.** Call-graph reachability does not establish that attacker-controlled data reaches a sensitive operation.
 - **No control-flow analysis.** Guard order and effectiveness are not proven by this baseline.
