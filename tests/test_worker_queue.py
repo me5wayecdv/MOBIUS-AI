@@ -103,7 +103,7 @@ def test_worker_queue_prevents_duplicate_unapplied_recon_jobs(session, store, fu
 
 def test_worker_queue_enqueues_and_claims_authorized_jadx_job(session, store, future_iso):
     scan, app = _recon_job(session, store, future_iso)
-    scan.state = "SURFACE_READY"
+    session.get(InvestigationRow, scan.id).state = "SURFACE_READY"
     session.flush()
     queue = WorkerQueue(session)
 
@@ -120,7 +120,7 @@ def test_worker_queue_enqueues_and_claims_authorized_jadx_job(session, store, fu
 
 def test_worker_queue_prevents_duplicate_unapplied_jadx_jobs(session, store, future_iso):
     scan, app = _recon_job(session, store, future_iso)
-    scan.state = "SURFACE_READY"
+    session.get(InvestigationRow, scan.id).state = "SURFACE_READY"
     session.flush()
     queue = WorkerQueue(session)
     queue.enqueue_jadx_decompile(scan.id, app.artifact_key)
