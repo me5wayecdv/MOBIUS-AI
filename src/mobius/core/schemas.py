@@ -71,6 +71,22 @@ class PoCStep(_Model):
     input_values: dict[str, str | bool | int] = Field(default_factory=dict, max_length=12)
     timeout_seconds: int = Field(default=15, ge=1, le=60)
 
+    @model_validator(mode="after")
+    def _closed_harness_inputs(self) -> PoCStep:
+        if self.action == "invoke_local_harness":
+            if set(self.input_values) - {"url"}:
+                raise ValueError("local harness accepts only the bounded url input")
+            url = self.input_values.get("url")
+            if url is not None and (not isinstance(url, str) or len(url) > 2048):
+                raise ValueError("local harness url input must be a string of at most 2048 chars")
+        elif self.input_values:
+            raise ValueError("input_values are allowed only for invoke_local_harness")
+        if self.action == "assert_local_harness_result" and self.target_ref not in {
+            "sink_invoked", "blocked", "scheme", "forwarded_url", "source", "simulation"
+        }:
+            raise ValueError("local harness result key is not allowlisted")
+        return self
+
 
 class PoCCleanupStep(_Model):
     action: Literal["remove_temporary_workspace", "reset_local_harness"]

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from mobius.adapters.models import HypothesisRow, InvestigationRow
+from mobius.adapters.models import AuthorizationRow, HypothesisRow
 from mobius.core.enums import EvidenceKind
 from mobius.core.ids import IdPrefix, new_id
 from mobius.core.schemas import PoCStep, PoCTestPlan
@@ -128,7 +128,7 @@ def test_runner_rejects_emulator_and_approval_gated_plans(session, store, future
 
 def test_runner_rejects_revoked_authorization(session, store, future_iso):
     app, auth, scan, hyp = _context(session, store, future_iso)
-    row = session.get(type(auth), auth.id)
+    row = session.get(AuthorizationRow, auth.id)
     row.revoked_at = "2026-11-18T00:00:00Z"
     session.flush()
     plan = _plan(app, auth, scan, hyp, (
