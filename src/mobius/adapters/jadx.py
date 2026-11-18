@@ -147,6 +147,8 @@ class JadxAdapter:
             raise JadxCacheError("unsafe_cache", "APK cache path escaped the configured root")
         entry = apk_root / version_key
         lock_path = apk_root / f".{version_key}.lock"
+        if lock_path.is_symlink():
+            raise JadxCacheError("unsafe_cache", "cache lock must not be a symlink")
 
         try:
             with lock_path.open("a+b") as lock_file:
@@ -318,6 +320,11 @@ class JadxAdapter:
             if pure.is_absolute() or any(part in {"", ".", ".."} for part in pure.parts):
                 raise JadxCacheError("corrupt_cache", "cache manifest contains an unsafe source path")
             path = source_root.joinpath(*pure.parts)
+            parent = source_root
+            for part in pure.parts[:-1]:
+                parent = parent / part
+                if parent.is_symlink():
+                    raise JadxCacheError("corrupt_cache", "cached source parent is a symlink")
             if path.is_symlink() or not path.is_file() or not path.resolve(strict=True).is_relative_to(root):
                 raise JadxCacheError("corrupt_cache", "cached source reference does not resolve safely")
             data = path.read_bytes()
@@ -329,7 +336,7 @@ class JadxAdapter:
             ):
                 raise JadxCacheError("corrupt_cache", "cached source failed integrity validation")
             names.append(pure.as_posix())
-        if not names or len(names) > _MAX_SOURCE_FILES or total_bytes > _MAX_SOURCE_BYTES:
+        if not names or len(names) != len(set(names)) or len(names) > _MAX_SOURCE_FILES or total_bytes > _MAX_SOURCE_BYTES:
             raise JadxCacheError("corrupt_cache", "cache source inventory is empty or exceeds limits")
         return JadxResult(digest, self.tool_version, source_root, tuple(sorted(names)), True)
 
@@ -346,12 +353,22 @@ class JadxAdapter:
             raise JadxError("source_not_found", "source reference is not present in the verified cache manifest")
         source_root = result.cache_dir.resolve(strict=True)
         path = source_root.joinpath(*pure.parts)
+        parent = source_root
+        for part in pure.parts[:-1]:
+            parent = parent / part
+            if parent.is_symlink():
+                raise JadxCacheError("corrupt_cache", "decompiled source parent is a symlink")
         if path.is_symlink() or not path.is_file() or not path.resolve(strict=True).is_relative_to(source_root):
             raise JadxError("source_not_found", "decompiled source reference does not resolve")
         try:
-            lines = path.read_text(encoding="utf-8").splitlines()
-        except (OSError, UnicodeError) as exc:
-            raise JadxError("source_unreadable", "decompiled source could not be read as UTF-8") from exc
+            data = path.read_bytes()
+            manifest = json.loads((source_root.parent / "manifest.json").read_text(encoding="utf-8"))
+            record = next((item for item in manifest["source_files"] if item.get("path") == pure.as_posix()), None)
+            if record is None or len(data) != record.get("size") or hashlib.sha256(data).hexdigest() != record.get("sha256"):
+                raise JadxCacheError("corrupt_cache", "source reference failed cache integrity validation")
+            lines = data.decode("utf-8").splitlines()
+        except (OSError, UnicodeError, json.JSONDecodeError, KeyError, TypeError) as exc:
+            raise JadxError("source_unreadable", "decompiled source or cache manifest could not be read") from exc
         if end_line > len(lines):
             raise JadxError("line_range_invalid", "source reference line range exceeds the file")
         return SourceSnippet(
