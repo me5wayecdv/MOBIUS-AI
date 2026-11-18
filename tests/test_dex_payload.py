@@ -117,6 +117,7 @@ def test_data_flow_payload_rejects_confirmed_or_guard_verified_claims():
     apk = _apk()
     digest = hashlib.sha256(apk).hexdigest()
     payload = code_index_payload(index_apk(apk), digest)
+    payload["data_flow_methods"] = 1
     payload["data_flows"] = [{
         "method": {"class_name": "com.example.Entry", "name": "onCreate", "descriptor": "()V"},
         "source_id": "intent-string-extra",
