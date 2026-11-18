@@ -584,6 +584,20 @@ def get_code_source(
         _jadx_http_error(exc)
 
 
+@router.get("/scans/{scan_id}/coverage-manifest", tags=["scans"])
+def get_coverage_manifest(
+    scan_id: str,
+    session=Depends(_session),
+    who: str = Depends(analyst_id),
+):
+    """Return the investigation's structured, evidence-backed code coverage manifest."""
+    _require_scan_owner(session, scan_id, who)
+    from ..services.coverage_manifest import CoverageManifestBuilder
+
+    ctx = get_context()
+    return CoverageManifestBuilder(session, ctx.store).build(scan_id)
+
+
 @router.get("/scans/{scan_id}/evidence-package", tags=["scans"])
 def get_evidence_package(
     scan_id: str,
