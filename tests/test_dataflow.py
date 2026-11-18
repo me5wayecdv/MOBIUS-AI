@@ -170,7 +170,7 @@ def test_tracks_intent_uri_through_to_string_to_webview_sink():
 def test_taint_reaches_sink_after_cfg_join_from_source_predecessor():
     flow = MethodFlow(M(), (
         FlowBlock(0, (), (10, 20)),
-        FlowBlock(10, (source(), move_result()), (30,)),
+        FlowBlock(10, (source(10), move_result(14)), (30,)),
         FlowBlock(20, (), (30,)),
         FlowBlock(30, (sink(30, 2),), ()),
     ), 0)
@@ -184,7 +184,7 @@ def test_taint_reaches_sink_after_cfg_join_from_source_predecessor():
 def test_taint_does_not_cross_between_unconnected_cfg_branches():
     flow = MethodFlow(M(), (
         FlowBlock(0, (), (10, 20)),
-        FlowBlock(10, (source(), move_result()), ()),
+        FlowBlock(10, (source(10), move_result(14)), ()),
         FlowBlock(20, (sink(20, 2),), ()),
     ), 0)
 
