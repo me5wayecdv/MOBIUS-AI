@@ -312,8 +312,12 @@ def analyse_method(
 
             pending_result = frozenset()
             if instruction.unsupported:
-                if any(state.get(register) for register in instruction.uses):
+                touched = set(instruction.registers) | set(instruction.uses)
+                if any(state.get(register) for register in touched):
                     limitations.add(f"tainted value used by unsupported opcode {opcode}")
+                # Unknown write semantics must not leave stale taint in a register.
+                for register in touched:
+                    state.pop(register, None)
                 if instruction.dest is not None:
                     state.pop(instruction.dest, None)
                 continue
