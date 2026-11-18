@@ -89,7 +89,7 @@ test("D-056: upload → investigation → evidence → graph → PoC → report;
   expect(report.markdown).toContain("Evidence");
   await page.reload();
   await expect(page.locator("#report-viewer")).toContainText("Outcome");
-  await expect(page.locator("#report-viewer h2, #report-viewer h3")).toHaveCount(8,{timeout:15000});
+  await expect(page.locator("#report-viewer h2, #report-viewer h3")).toHaveCount(9,{timeout:15000});
   await expect(page.locator("#report-viewer table")).toBeVisible();
   await page.screenshot({ path: shots + "/d056-05-report.png", fullPage: true });
 
