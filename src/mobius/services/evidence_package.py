@@ -258,7 +258,13 @@ class EvidencePackageBuilder:
                         or payload.get("apk_sha256") != metadata.get("apk_sha256")
                         or payload.get("tool_version") != metadata.get("tool_version")
                         or payload.get("path") != metadata.get("path")
+                        or payload.get("class_name") != metadata.get("class_name")
+                        or payload.get("component") != metadata.get("component")
+                        or payload.get("method_name") != metadata.get("method_name")
                         or payload.get("method_reference") != metadata.get("method_reference")
+                        or payload.get("start_line") != metadata.get("start_line")
+                        or payload.get("end_line") != metadata.get("end_line")
+                        or payload.get("fidelity") != metadata.get("fidelity")
                         or not isinstance(payload.get("text"), str)
                     ):
                         source_integrity_limited = True
