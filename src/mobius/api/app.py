@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from importlib.resources import files
+from pathlib import Path
 import tempfile
 
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from starlette.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from ..services.errors import DomainError
@@ -131,6 +133,23 @@ def create_app() -> FastAPI:
         """
         page = files("mobius.api").joinpath("static/war_room.html").read_text(encoding="utf-8")
         return HTMLResponse(page)
+
+
+    graph_ui_dir = Path(__file__).parent / "static" / "graph-ui"
+    graph_assets = graph_ui_dir / "assets"
+    if graph_assets.is_dir():
+        app.mount("/ui/graph/assets", StaticFiles(directory=graph_assets), name="attack-graph-assets")
+
+    @app.get("/ui/graph", response_class=HTMLResponse, include_in_schema=False)
+    async def _attack_graph_ui() -> HTMLResponse:
+        index = graph_ui_dir / "index.html"
+        if not index.is_file():
+            return HTMLResponse(
+                "<h1>Attack graph UI is not built</h1>"
+                "<p>Run <code>npm install && npm run build</code> in frontend/.</p>",
+                status_code=503,
+            )
+        return HTMLResponse(index.read_text(encoding="utf-8"))
 
     @app.exception_handler(DomainError)
     async def _domain_error(_request: Request, exc: DomainError) -> JSONResponse:
