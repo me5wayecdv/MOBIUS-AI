@@ -111,7 +111,7 @@ def _build_method_flow(vm, encoded_method: object) -> MethodFlow | None:
     if code is None or code.get_length() * 2 > MAX_FLOW_METHOD_BYTES:
         return None
     analysis = MethodAnalysis(vm, encoded_method)
-    raw_blocks = analysis.get_basic_blocks().get()
+    raw_blocks = list(analysis.get_basic_blocks().get())
     if not raw_blocks:
         return None
     blocks = []
