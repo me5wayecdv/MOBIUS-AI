@@ -409,7 +409,11 @@ def test_coverage_manifest_reports_per_dex_native_assets_and_unsupported_capabil
     assert entries["classes.dex"]["status"] == "indexed"
     assert entries["classes2.dex"]["status"] == "failed"
     assert manifest["dex_analysis"]["failed_entries"] == 1
+    assert manifest["dex_analysis"]["internal_calls"] == 0
     assert manifest["dex_analysis"]["truncated"] is True
+    assert manifest["analysis_budgets"]["reachability_max_depth"] == 8
+    assert manifest["analysis_budgets"]["reachability_max_nodes"] == 5000
+    assert manifest["analysis_budgets"]["per_investigation_reachability_limits_persisted"] is True
     assert manifest["reachability"]["truncated"] is True
 
     limits = {item["capability"]: item["status"] for item in manifest["limitations"]}
