@@ -40,18 +40,28 @@ class InContainerSmokeBackend:
                 timeout=limits.timeout_seconds,
                 check=False,
                 shell=False,
-                env={"PATH": "/opt/jadx/bin:/usr/local/bin:/usr/bin:/bin", "HOME": "/tmp", "TMPDIR": "/tmp"},
+                env={
+                    "PATH": "/opt/jadx/bin:/usr/lib/jvm/java-17-openjdk-amd64/bin:/usr/local/bin:/usr/bin:/bin",
+                    "JAVA_HOME": "/usr/lib/jvm/java-17-openjdk-amd64",
+                    "HOME": "/tmp",
+                    "TMPDIR": "/tmp",
+                },
             )
         except subprocess.TimeoutExpired as exc:
             return BackendResult(
                 "timeout", None, exc.stdout or b"", exc.stderr or b"",
                 int((time.monotonic() - started) * 1000),
             )
+        diagnostic = result.stderr
+        if result.returncode != 0:
+            diagnostic = diagnostic + b"\\n[stdout]\\n" + result.stdout
+            print("JADX command:", command, file=__import__("sys").stderr)
+            print(diagnostic.decode("utf-8", errors="replace"), file=__import__("sys").stderr)
         return BackendResult(
             "ok" if result.returncode == 0 else "error",
             result.returncode,
             result.stdout,
-            result.stderr,
+            diagnostic,
             int((time.monotonic() - started) * 1000),
         )
 
