@@ -9,6 +9,7 @@ from ..core.dataflow import (DataFlowFinding, FlowBlock, FlowInstruction, Method
 
 MAX_METHODS = 50_000
 MAX_STRING_CONSTANTS = 25
+MAX_FLOW_METHOD_BYTES = 4 * 1024
 MAX_DEX_BYTES = 64 * 1024 * 1024
 MAX_TOTAL_DEX_BYTES = 256 * 1024 * 1024
 _DEX_ENTRY = re.compile(r"^classes\d*\.dex$")
@@ -106,7 +107,8 @@ def _build_method_flow(vm, encoded_method: object) -> MethodFlow | None:
     from androguard.core.analysis.analysis import MethodAnalysis
     from androguard.core.dex.dex_types import Operand
 
-    if encoded_method.get_code() is None:
+    code = encoded_method.get_code()
+    if code is None or code.get_bc().get_length() > MAX_FLOW_METHOD_BYTES:
         return None
     analysis = MethodAnalysis(vm, encoded_method)
     raw_blocks = analysis.get_basic_blocks().get()
