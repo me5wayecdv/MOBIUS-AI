@@ -1,6 +1,6 @@
 # D-012 — JADX adapter and decompilation cache
 
-**Status: implementation in progress.** The adapter is implemented behind the existing fail-closed
+**Status: engineering implementation complete; image publication pending owner decision.** The adapter is implemented behind the existing fail-closed
 `ToolRunner` boundary. It does not invoke a process itself and cannot run unless the caller supplies
 a registered JADX `ToolSpec` and a backend that reports verified isolation.
 
@@ -41,10 +41,22 @@ tool invocation, timeout/non-zero exit, invalid/empty output, output-budget exha
 conflict, I/O failure, and corrupt cache. No failed decompilation is represented as a successful
 empty source result.
 
-## Remaining integration
+## D-013 worker integration and publication boundary
 
-D-013 owns class/method/source lookup APIs and War Room navigation. Wiring a configured, digest-pinned
-JADX OCI image into the isolated worker/runtime and connecting decompiled references to persisted
-CodeObservation/Evidence records remain follow-up integration work; this PR does not claim either is
-operational. No migration, production database change, deploy, publication, paid service, or new
-Python dependency is introduced.
+The queued worker integration and API registration are documented in
+[`ISOLATED_JADX_WORKER.md`](ISOLATED_JADX_WORKER.md). The API enqueues a `jadx_decompile` job;
+the worker uses the digest-pinned OCI backend and writes a verified digest/version cache shared with
+the API. The API reads only verified cache entries.
+
+The local-image CI workflow builds and loads `mobius-jadx:ci` on the runner with `push: false`,
+then runs the real checked-in `AnalysisTest.dex` fixture through JADX 1.5.6 and verifies the
+resulting cache and a second-call cache hit. This is a local runner test, not a publication.
+
+GHCR publication is a separate `workflow_dispatch`-only workflow requiring an explicit approval
+input and approval reference. It has not been run. The D-013 engineering work is complete on this
+branch except for publication of the immutable image, which remains blocked pending the project
+owner's decision and explicit approval. Until an approved digest is configured, the API refuses
+to enqueue decompilation (503); no mutable tag or unsandboxed fallback is accepted.
+
+No migration, production database change, deployment, GHCR push, paid service, or new Python
+dependency is introduced by the local-only CI workflow.
