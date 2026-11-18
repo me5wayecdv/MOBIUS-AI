@@ -1,0 +1,20 @@
+# Safe PoC adapters (D-041)
+
+D-041 currently provides two execution surfaces:
+
+1. **Persisted manifest assertions** for a `lab_apk` plan. These read only same-investigation
+   `fact` observations and do not execute APK code.
+2. **Two deterministic local harnesses** for a `local_harness` plan:
+   - `unsafe_webview_forwarder_v1`: models an exported input being forwarded to a WebView sink.
+   - `safe_webview_guard_v1`: negative control that blocks non-HTTPS / non-trusted-host input.
+
+The local harness is an explicitly labelled simulation, not execution of the APK. It makes no
+network requests and performs no process execution. No arbitrary shell, command, URL fetch,
+emulator, or state-changing adapter is registered.
+
+Before any step, the runner revalidates the investigation, authorization, APK SHA-256, package,
+authorization expiry/revocation/intensity, and same-investigation hypothesis IDs. Emulator
+execution remains unavailable until a verified emulator/KVM capability and adapter are supplied.
+
+D-041 returns an in-memory execution result. D-042 persists reproducible evidence; D-043 adds
+approval, cancellation, timeout and cleanup orchestration.

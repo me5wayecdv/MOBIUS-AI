@@ -68,6 +68,7 @@ class PoCStep(_Model):
     ]
     target_ref: str = Field(min_length=1, max_length=500)
     expected_value: str | bool | int | None = None
+    input_values: dict[str, str | bool | int] = Field(default_factory=dict, max_length=12)
     timeout_seconds: int = Field(default=15, ge=1, le=60)
 
 
