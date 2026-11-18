@@ -197,7 +197,10 @@ class WorkerQueue:
         row.worker_id = worker_id
         row.attempts += 1
         row.started_at = utcnow()
-        row.lease_until = (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
+        lease_minutes = 10 if row.kind == "jadx_decompile" else 5
+        row.lease_until = (
+            datetime.now(timezone.utc) + timedelta(minutes=lease_minutes)
+        ).isoformat(timespec="milliseconds").replace("+00:00", "Z")
         self.session.flush()
         return row
 
