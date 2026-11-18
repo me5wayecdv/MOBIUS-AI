@@ -11,7 +11,7 @@
 - Existing War Room is a basic HTML page reading API data. It is not the intended final investigation cockpit.
 - A local Ollama/structured-output provider boundary and deterministic mock implement the core ModelGateway port (PR #33). NEXUS hypothesis generation (PR #35) and D-026 VERITAS review (PR #39) use the investigation-bound gateway only with explicit per-investigation consent; deterministic fallback remains the default.
 - No full decompilation workflow, CFG/taint analysis, model-driven adaptive NEXUS, PoC runner, persisted attack graph, PHANTOM, or VECTOR. D-026 VERITAS independent review is being implemented on PR #39; it is advisory and not yet wired into the scan pipeline. The DEX OCI worker image smoke test passed; dedicated worker deployment remains pending.
-- PR #50 merged to main as `0cf634338bb14c47bd98928aa10824431d42121b`; owner visual acceptance is complete for D-033 and D-050–D-056. D-012 is now the active engineering task.
+- PR #50 merged to main as `0cf634338bb14c47bd98928aa10824431d42121b`; owner visual acceptance is complete for D-033 and D-050–D-056. D-013 engineering is implemented; immutable image publication remains blocked pending the project owner's decision.
 
 ## Priority 0 — Establish reproducible demo target
 
