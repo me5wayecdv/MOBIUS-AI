@@ -22,7 +22,7 @@ The old `POST /recon` endpoint is disabled by default. Tests may use the inline 
 
 ## Build and pin the parser image
 
-On changes to the parser, its dependencies, or the Dockerfile, the GitHub Actions workflow `.github/workflows/recon-worker-image.yml` builds and publishes the image to GHCR. It writes the immutable `ghcr.io/<owner>/mobius-recon@sha256:<digest>` reference to the workflow run summary. Copy that exact reference into `MOBIUS_RECON_IMAGE` on the worker host. The workflow requires the repository's Actions token to have package write access. The application intentionally has no default image digest and fails closed without one.
+The GitHub Actions workflow `.github/workflows/recon-worker-image.yml` is now `workflow_dispatch`-only and requires `owner_approval=APPROVED`. It has no push, pull-request, schedule, or workflow-call trigger. Do not run it or publish a replacement image until the project owner explicitly approves. The digest below records an earlier publication and is historical evidence, not permission to push another image. The application intentionally has no default image digest and fails closed without one.
 
 ### Currently published image
 
@@ -39,7 +39,7 @@ printf '%s' "$GHCR_READ_PACKAGES_TOKEN" | podman login ghcr.io --username "$GHCR
 podman pull ghcr.io/me5wayecdv/mobius-recon@sha256:85af4c8ff733dac74cdd9f1123b1428686339fa46d790400bcad85822b43e7a9
 ```
 
-The image workflow updates this digest on each successful main-branch build. Always prefer the latest workflow summary when updating a deployment.
+The manual publication workflow does not update this digest automatically. Do not change the worker image reference until a new publication has been explicitly approved and its immutable digest has been verified.
 
 
 For a local build only:
