@@ -155,11 +155,15 @@ def test_no_candidate_is_created_without_a_sink_reachability_edge(session, store
     evidence, component, method_a, method_b, sink = _seed_path(session, store, scan)
     # The test uses a fresh investigation with a component but no complete route to a sink.
     other = _investigation(session, store, future_iso)
+    other_evidence = EvidenceService(session, store).record(
+        investigation_id=other, kind=EvidenceKind.DEX_STRING,
+        content=b"other-attack-path-evidence", summary="Other static evidence", produced_by="SPECTRE",
+    )
     persistence = GraphPersistenceService(session)
     component2 = persistence.add_node(GraphNode(
         investigation_id=other, node_type="component", label="Exported",
         ref="com.example.Other", assertion=AssertionLevel.OBSERVED,
-        attributes={"exported": True}, evidence_refs=(evidence.id,),
+        attributes={"exported": True}, evidence_refs=(other_evidence.id,),
     ))
     result = CandidateAttackPathService(session).build(other)
     assert result.candidates == ()

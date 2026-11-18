@@ -255,14 +255,13 @@ class CandidateAttackPathService:
                 GraphNodeRow.ref == path_ref,
             )
         ).scalar_one_or_none()
-        path_node = GraphNode(
-            id=existing.id if existing else None,
-            investigation_id=investigation_id,
-            node_type="candidate_path",
-            label=f"Candidate path: {component.label} → {sink.label}"[:1000],
-            ref=path_ref,
-            assertion=AssertionLevel.HYPOTHESIS,
-            attributes={
+        path_fields = {
+            "investigation_id": investigation_id,
+            "node_type": "candidate_path",
+            "label": f"Candidate path: {component.label} → {sink.label}"[:1000],
+            "ref": path_ref,
+            "assertion": AssertionLevel.HYPOTHESIS,
+            "attributes": {
                 "status": "candidate",
                 "component_node_id": component.id,
                 "sink_node_id": sink_id,
@@ -275,8 +274,11 @@ class CandidateAttackPathService:
                 "missing_proof": missing,
                 "not_an_exploitability_verdict": True,
             },
-            evidence_refs=evidence_refs,
-        )
+            "evidence_refs": evidence_refs,
+        }
+        if existing is not None:
+            path_fields["id"] = existing.id
+        path_node = GraphNode(**path_fields)
         persisted_path = self.persistence.add_node(path_node)
         for index, node_id in enumerate(path_nodes):
             step_evidence = tuple(sorted({
