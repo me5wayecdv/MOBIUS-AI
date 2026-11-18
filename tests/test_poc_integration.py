@@ -53,5 +53,5 @@ def test_positive_and_negative_poc_controls_persist_without_auto_confirming(sess
         select(FindingRow.id).where(FindingRow.investigation_id == scan.id)
     ).first() is None
     assert session.execute(
-        select(VerdictRow.id).where(VerdictRow.investigation_id == scan.id)
+        select(VerdictRow.id).join(FindingRow, VerdictRow.finding_id == FindingRow.id).where(FindingRow.investigation_id == scan.id)
     ).first() is None
