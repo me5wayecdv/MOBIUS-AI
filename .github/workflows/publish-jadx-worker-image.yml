@@ -58,7 +58,7 @@ jobs:
           set -euo pipefail
           smoke_root="$RUNNER_TEMP/jadx-image-smoke"
           mkdir -p "$smoke_root"
-          chown 65532:65532 "$smoke_root"
+          chmod 0777 "$smoke_root"
           docker run --rm --network none --read-only --cap-drop ALL \
             --security-opt no-new-privileges --user 65532:65532 \
             --pids-limit 128 --memory 4096m --cpus 2 \
