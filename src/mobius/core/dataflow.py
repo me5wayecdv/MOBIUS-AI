@@ -211,7 +211,7 @@ def analyse_method(
     finding_budget_exhausted = False
     limitations = set()
     if not flow.complete:
-        limitations.add("DEX method/CFG extraction was incomplete")
+        limitations.add("DEX method/CFG extraction was incomplete (including exception edges or operand decoding)")
     iterations = 0
     instructions_seen = 0
 
