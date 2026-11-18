@@ -138,6 +138,8 @@ def _build_method_flow(vm, encoded_method: object) -> MethodFlow | None:
                 registers = ()
                 extraction_complete = False
             dest, uses, unsupported = _instruction_effect(opcode, registers)
+            if unsupported and not registers:
+                extraction_complete = False
             unsupported = unsupported or range_form
             target = _parse_reference(instruction.get_output()) if opcode.startswith("invoke-") else None
             if opcode.startswith("invoke-") and target is None:
