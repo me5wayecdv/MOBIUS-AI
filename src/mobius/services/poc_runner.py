@@ -187,7 +187,7 @@ class SafePoCRunner:
             application.sha256 != plan.target_sha256
             or authorization.apk_sha256 != plan.target_sha256
             or authorization.target_package != plan.target_package
-            or application.package_name != plan.target_package
+            or (application.package_name is not None and application.package_name != plan.target_package)
         ):
             raise PoCScopeRejected("plan target identity does not match authorized APK")
         if authorization.revoked_at is not None:
