@@ -193,3 +193,16 @@ def test_taint_does_not_cross_between_unconnected_cfg_branches():
     assert result.status == "no-flow"
     assert result.findings == ()
     assert result.complete is True
+
+
+
+def test_exception_edge_coverage_gap_cannot_be_reported_as_no_flow():
+    flow = MethodFlow(M(), (
+        FlowBlock(0, (FlowInstruction(0, "const-string", registers=(2,), dest=2),), ()),
+    ), 0, complete=False)
+
+    result = analyse_method(flow)
+
+    assert result.status == "incomplete"
+    assert result.complete is False
+    assert any("exception edges" in item for item in result.limitations)
