@@ -149,10 +149,10 @@ def run_once() -> bool:
                 )
 
             if kind == "recon_manifest":
-            value = result.stdout.decode("utf-8", errors="strict")
-            if not value.startswith("<?xml") and "<manifest" not in value[:2048]:
-                raise RuntimeError("isolated RECON returned no recognizable XML manifest")
-            output = {"manifest_xml": value}
+                value = result.stdout.decode("utf-8", errors="strict")
+                if not value.startswith("<?xml") and "<manifest" not in value[:2048]:
+                    raise RuntimeError("isolated RECON returned no recognizable XML manifest")
+                output = {"manifest_xml": value}
             elif kind == "dex_index":
                 # Validate JSON syntax and size here; the API performs the full schema and
                 # artifact-digest validation before accepting or applying the result.
