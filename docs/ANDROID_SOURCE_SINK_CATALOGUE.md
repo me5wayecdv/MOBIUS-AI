@@ -29,6 +29,7 @@ change; the loader validates identifiers, descriptors, mappings and duplicate ID
 | Bundle / content URI | `Bundle.getString`, `ContentResolver.openInputStream` | File open/write, provider file open, SQL | MASWE-0050 |
 | Clipboard | `ClipboardManager.getPrimaryClip` | No sink implied by source alone | MASWE-0030 |
 | WebView bridge | — | `WebView.addJavascriptInterface` | MASWE-0033 |
+| WebView local resources | — | `WebSettings.setAllowFileAccess`, `setAllowContentAccess`, file-URL access setters | MASWE-0034 |
 | Dynamic code | — | `DexClassLoader.<init>` | MASWE-0049 |
 | Process execution | — | `Runtime.exec`, `ProcessBuilder.start` | MASWE-0050 |
 
@@ -49,3 +50,12 @@ D-014 does not connect sources to sinks, infer attacker control, evaluate saniti
 perform CFG/dominator analysis, or emit findings. Existing reachability still answers only whether a
 catalogued sink API is reachable from an entry point. D-015 owns bounded CFG/data-flow and guard order.
 D-021 remains partial until actual decompiled source is persisted and included as bounded evidence.
+
+
+## OWASP references
+
+- [MASWE-0033 — Sensitive Native Functionality Exposed in WebViews](https://mas.owasp.org/MASWE/MASVS-PLATFORM/MASWE-0033/)
+- [MASWE-0034 — WebViews Allow Access to Local Resources with Untrusted Content](https://mas.owasp.org/MASWE/MASVS-PLATFORM/MASWE-0034/)
+- [MASWE-0035 — WebViews Loading Untrusted Content](https://mas.owasp.org/MASWE/MASVS-PLATFORM/MASWE-0035/)
+- [MASWE-0049 — Unsafe Dynamic Code Loading](https://mas.owasp.org/MASWE/MASVS-CODE/MASWE-0049/)
+- [MASWE-0050 — Unsafe Handling of Untrusted Data](https://mas.owasp.org/MASWE/MASVS-CODE/MASWE-0050/)
