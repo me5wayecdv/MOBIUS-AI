@@ -172,6 +172,14 @@ Evaluates a confirmation gate over supplied attributes and persists a finding pl
   "discovered_by": "RECON", "validated_by": "VERITAS" }
 ```
 
+**Operator-asserted authority.** The attribute values here are supplied by the caller and are
+not derived by the engine; a clause the caller sets to `false` rejects with the stated or mapped
+reason. This endpoint is unchanged. It is an operator assertion, not engine evidence, and the
+resulting finding does not show that the engine verified the attribute. Likewise the
+`permission` clause only tests that a manifest permission string is present: its protection
+level (`normal`, `dangerous`, `signature`) is not resolved, so a present permission is not
+proof that another app cannot obtain it.
+
 Responses are `confirmed`, `rejected` (with a `rejection_reason` from a fixed taxonomy) or
 `insufficient_evidence` — the last when some clauses were not established, which is **not** the
 same as "safe". With only RECON's attributes the result is always `insufficient_evidence`: RECON
@@ -205,8 +213,11 @@ re-validate, and it will fail the state check rather than duplicate evidence.
 `reachability` is `reached`, `not-reached`, `guarded`, or `unknown`. `sink_reachable` is `true`
 only when a path was found, and `false` **only** when the traversal completed and the index was
 not truncated; a truncated search yields `null`, which becomes `insufficient_evidence`, never
-`rejected`. `rejection_reason` is `not-reachable` or `guarded-by-caller-check` — a guard refutes
-the "no caller check" clause, it does not prove the component safe.
+`rejected`. A guard-like call on the path (matched by class and method name) is recorded in
+`guards` but does **not** refute the "no caller check" clause: `caller_check_absent` is `null`,
+the verdict is `insufficient_evidence` (manual review), never `confirmed` and never `rejected`.
+Only an unguarded path gives `caller_check_absent: true`. `guarded-by-caller-check` is no longer
+issued by SPECTRE.
 
 #### `POST /scans/{id}/nexus`
 Drives the investigation from the frontier to `CLOSED` within a step budget. Requires

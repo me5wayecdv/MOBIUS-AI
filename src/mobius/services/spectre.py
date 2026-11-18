@@ -393,6 +393,11 @@ class SpectreService:
         the question were still open.
         """
         short = component.rsplit(".", 1)[-1]
+        if result.reached and result.guarded:
+            return (
+                f"Exported {kind} {short} reaches a sensitive sink; guard call observed "
+                "(enforcement not established)"
+            )
         if result.reached:
             return f"Exported {kind} {short} reaches a sensitive sink"
         if result.status == "not-reached":
