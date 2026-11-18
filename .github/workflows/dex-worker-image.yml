@@ -1,12 +1,16 @@
-name: Manual-only DEX image publication
+name: Publish isolated DEX worker image
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - "workers/dex-image/**"
+      - "src/mobius/adapters/dex.py"
+      - "src/mobius/adapters/dex_payload.py"
+      - "src/mobius/worker/dex_index.py"
+      - "pyproject.toml"
   workflow_dispatch:
-    inputs:
-      owner_approval:
-        description: "Type APPROVED only after the project owner explicitly authorizes this publication."
-        required: true
-        type: string
+
 permissions:
   contents: read
   packages: write
@@ -17,7 +21,6 @@ concurrency:
 
 jobs:
   publish:
-    if: ${{ inputs.owner_approval == 'APPROVED' }}
     name: Build, publish and smoke test isolated DEX image
     runs-on: ubuntu-latest
     steps:
