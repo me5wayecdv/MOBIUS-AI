@@ -138,9 +138,13 @@ class CoverageManifestBuilder:
                 "apk_inventory_max_entries": _MAX_INVENTORY_ENTRIES,
                 "archive_name_samples_per_category": _SAMPLE_LIMIT,
                 "jadx_source_file_sample": _JADX_SAMPLE_LIMIT,
-                "reachability_max_depth_default": 8,
-                "reachability_max_nodes_default": 5000,
-                "per_investigation_reachability_limits_persisted": False,
+                "reachability_max_depth": dex_payload.get("reachability_max_depth") if dex_payload else None,
+                "reachability_max_nodes": dex_payload.get("reachability_max_nodes") if dex_payload else None,
+                "per_investigation_reachability_limits_persisted": bool(
+                    dex_payload
+                    and isinstance(dex_payload.get("reachability_max_depth"), int)
+                    and isinstance(dex_payload.get("reachability_max_nodes"), int)
+                ),
             },
             "limitations": limitations,
             "interpretation": (
@@ -283,7 +287,11 @@ class CoverageManifestBuilder:
             "classes": int(payload.get("classes", 0)),
             "methods": int(payload.get("methods", 0)),
             "graph_nodes": int(payload.get("graph_nodes", 0)),
-            "internal_calls": int(payload.get("internal_calls", 0)),
+            "internal_calls": (
+                int(payload["internal_calls"])
+                if isinstance(payload.get("internal_calls"), int)
+                else None
+            ),
             "dex_entry_count": len(coverage),
             "indexed_entries": sum(item.get("status") == "indexed" for item in coverage.values()),
             "failed_entries": failed,
