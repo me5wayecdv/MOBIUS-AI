@@ -52,7 +52,7 @@ _LIMITATIONS = """\
   runtime, and no dynamic-analysis capability exists in this build.
 - **Bounded, selected-family data flow only.** The current slice tracks a small set of
   incoming Intent/URI source candidates to selected direct sinks within one method; external caller control is not established. It does not model
-  field/array memory, cross-method propagation, reflection, dynamic dispatch, or framework
+  exception edges (try/catch methods are marked incomplete), field/array memory, cross-method propagation, reflection, dynamic dispatch, or framework
   internals. Results are `may-flow` evidence, never a confirmed vulnerability; no-flow is
   not proof that no tainted path exists.
 - **Bounded CFG and guard evidence.** Basic-block order and dominance are recorded for selected
