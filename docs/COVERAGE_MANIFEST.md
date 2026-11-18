@@ -28,7 +28,8 @@ The endpoint uses the same owner check as the report and evidence routes. It rea
 | `partial` | Some entries failed, were skipped, were not indexed, or a reporting cap was reached. |
 | `not_run` / `not_requested` | No persisted evidence/job proves that stage ran. |
 | `inventory_only` | Names/counts were collected; content was not analyzed. |
-| `unsupported` / `not_implemented` | The capability is not provided by this baseline. |
+| `unsupported` | The capability is not provided. |
+| `bounded_partial` | A bounded slice exists (selected methods and source/sink families); it never implies full coverage or a confirmed finding. |
 
 Overall status remains `partial` while unsupported capabilities exist. Truncation and parse failures are explicit; a missing entry or absent finding must never be read as proof of safety.
 

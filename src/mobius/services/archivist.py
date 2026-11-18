@@ -63,6 +63,9 @@ _LIMITATIONS = """\
   not verified. The existing call-graph gate remains conservative.
 - **Incomplete graphs are reported as such.** A truncated index can neither confirm nor refute
   absence; those candidates are listed under "Not determined", not as clean.
+- **Native code and resources are inventory-only.** Native libraries, assets and resources are listed where the APK archive can be read; they are not semantically analyzed.
+- **Obfuscation is not reversed.** Names remain as exposed by DEX/JADX; no deobfuscation is claimed.
+- **Multi-DEX coverage is per-entry.** The coverage manifest lists indexed, failed, skipped and truncated DEX entries; a partial entry set cannot support a clean bill of health.
 - **Incomplete semantic coverage.** JADX output is reconstructed code, not original source. Native boundaries, reflection, dynamic dispatch, obfuscation and framework internals remain unsupported or partial; DEX entry coverage is reported separately.
 - **Absence of a finding is not evidence of absence.** An empty findings list means this
   pipeline found nothing by these methods, not that the application is safe.

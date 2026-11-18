@@ -420,7 +420,8 @@ def test_coverage_manifest_reports_per_dex_native_assets_and_unsupported_capabil
     assert limits["reflection"] == "unsupported"
     assert limits["native_code"] == "inventory_only"
     assert limits["obfuscation"] == "not_deobfuscated"
-    assert limits["data_flow"] == "not_implemented"
+    assert limits["control_flow"] == "bounded_partial"
+    assert limits["data_flow"] == "bounded_partial"
 
 
 def test_archivist_report_embeds_machine_readable_coverage_manifest(
@@ -436,8 +437,8 @@ def test_archivist_report_embeds_machine_readable_coverage_manifest(
     assert '"status": "failed"' in report
     assert "Native code and resources are inventory-only" in report
     assert "Obfuscation is not reversed" in report
-    assert "No data-flow analysis" in report
-    assert "No control-flow analysis" in report
+    assert "Bounded, selected-family data flow only" in report
+    assert "Bounded CFG and guard evidence" in report
 
 
 def test_coverage_manifest_api_is_owner_scoped_and_returns_the_same_contract(

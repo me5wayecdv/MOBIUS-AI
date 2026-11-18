@@ -97,13 +97,13 @@ class CoverageManifestBuilder:
             },
             {
                 "capability": "control_flow",
-                "status": "not_implemented",
-                "detail": "Path-sensitive CFG reasoning and guard-order/effectiveness proof are not part of this main baseline.",
+                "status": "bounded_partial",
+                "detail": "Basic-block order and dominance are recorded for selected methods only. Branch polarity, permission correctness and guard effectiveness are not proven; exception edges are not modelled.",
             },
             {
                 "capability": "data_flow",
-                "status": "not_implemented",
-                "detail": "No taint propagation proves that attacker-controlled data reaches a sensitive sink.",
+                "status": "bounded_partial",
+                "detail": "Selected Intent/URI source candidates to selected direct sinks within one method are tracked as may-flow evidence only. External caller control, cross-method, field/array, reflection and framework flows are not established; no-flow is not proof of absence.",
             },
             {
                 "capability": "framework_calls",
