@@ -14,9 +14,10 @@ from mobius.adapters.jadx import (
     JadxCacheError,
     JadxError,
     JadxExecutionFailed,
+    JadxUnavailable,
     build_jadx_tool_spec,
 )
-from mobius.services.tool_runner import BackendResult, ToolLimits, ToolRunner, ToolUnavailable
+from mobius.services.tool_runner import BackendResult, ToolRunner
 
 SCAN = "scn_01J8Z5K9WQ7R3T2M6N4P8V0ABC"
 
@@ -169,9 +170,9 @@ def test_missing_isolation_backend_is_explicit(tmp_path):
     spec = build_jadx_tool_spec()
     runner = ToolRunner(workspace_root=tmp_path / "workspaces", backend=None, tools=(spec,))
     adapter = JadxAdapter(runner=runner, cache_root=tmp_path / "cache")
-    with pytest.raises(Exception) as error:
+    with pytest.raises(JadxUnavailable) as error:
         adapter.decompile(investigation_id=SCAN, artifact=b"fixture")
-    assert isinstance(error.value, ToolUnavailable) or getattr(error.value, "status", None) == "tool_unavailable"
+    assert error.value.status == "tool_unavailable"
 
 
 def test_jadx_decompiles_checked_in_dex_fixture_when_cli_is_installed(tmp_path):
