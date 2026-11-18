@@ -204,14 +204,19 @@ class JadxAdapter:
                         f"truncated={run.truncated}): {run.stderr_tail[-4096:]}",
                     )
 
-                source_root = output_path / "sources"
-                files = self._collect_sources(source_root)
-                if not files:
-                    raise JadxExecutionFailed("empty_output", "JADX completed without producing Java or smali source files")
-
-                return self._write_cache(
-                    entry=entry, digest=digest, source_root=source_root, files=files,
-                )
+                try:
+                    source_root = output_path / "sources"
+                    files = self._collect_sources(source_root)
+                    if not files:
+                        raise JadxExecutionFailed("empty_output", "JADX completed without producing Java or smali source files")
+                    return self._write_cache(
+                        entry=entry, digest=digest, source_root=source_root, files=files,
+                    )
+                finally:
+                    # The verified cache is the durable output; remove the raw tool workspace
+                    # so unverified intermediate files are not retained after each job.
+                    if output_path.exists() and not output_path.is_symlink():
+                        shutil.rmtree(output_path, ignore_errors=True)
         except OSError as exc:
             raise JadxExecutionFailed("io_error", f"JADX cache/workspace I/O failed: {exc}") from exc
 
