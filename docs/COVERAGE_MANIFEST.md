@@ -36,7 +36,7 @@ Overall status remains `partial` while unsupported capabilities exist. Truncatio
 - APK inventory first verifies the content-addressed APK SHA-256, then reads ZIP central-directory metadata only; it does not extract or execute APK contents.
 - DEX coverage is taken from the latest same-investigation DEX evidence whose stored bytes pass SHA-256 verification.
 - JADX worker results are accepted only when their reported APK SHA-256 matches the investigation artifact.
-- Archive inventory is capped at 20,000 entries; DEX entry names at 64; native/assets/resources samples at 50 each; JADX source-file sample at 20.
+- Archive inventory and the DEX entry list are capped at 20,000 entries; native/assets/resources samples at 50 each; JADX source-file sample at 20.
 - No schema migration, new dependency, image publication, or tool execution is performed by the manifest builder.
 
 The manifest reports the scope and evidence available to this run, not a guarantee that every possible code path or behavior was discovered.
