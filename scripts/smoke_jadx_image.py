@@ -43,7 +43,7 @@ class InContainerSmokeBackend:
                 env={
                     "PATH": "/opt/jadx/bin:/usr/lib/jvm/java-17-openjdk-amd64/bin:/usr/local/bin:/usr/bin:/bin",
                     "JAVA_HOME": "/usr/lib/jvm/java-17-openjdk-amd64",
-                    "HOME": "/tmp",
+                    "HOME": "/work/home",
                     "TMPDIR": "/tmp",
                 },
             )
