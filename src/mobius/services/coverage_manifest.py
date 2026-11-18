@@ -19,6 +19,7 @@ from ..adapters.models import (
     WorkerJobRow,
 )
 from ..core.enums import EvidenceKind
+from ..adapters.dex import MAX_METHODS
 from .artifacts import ArtifactStore
 from .errors import NotFound
 
@@ -131,6 +132,16 @@ class CoverageManifestBuilder:
             "dex_analysis": dex_analysis,
             "jadx": jadx,
             "reachability": reachability,
+            "analysis_budgets": {
+                "dex_max_methods_default": MAX_METHODS,
+                "dex_payload_max_entries": 64,
+                "apk_inventory_max_entries": _MAX_INVENTORY_ENTRIES,
+                "archive_name_samples_per_category": _SAMPLE_LIMIT,
+                "jadx_source_file_sample": _JADX_SAMPLE_LIMIT,
+                "reachability_max_depth_default": 8,
+                "reachability_max_nodes_default": 5000,
+                "per_investigation_reachability_limits_persisted": False,
+            },
             "limitations": limitations,
             "interpretation": (
                 "Coverage describes only the recorded inventory and analysis. "
