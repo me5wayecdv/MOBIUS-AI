@@ -459,12 +459,6 @@ def _enqueue_jadx_job(scan_id: str, session, who: str):
     """Queue decompilation only when an immutable worker image is configured."""
     scan = _require_scan_owner(session, scan_id, who)
     ctx = get_context()
-    image = ctx.settings.jadx_image
-    if not image or not re.fullmatch(r"[A-Za-z0-9./:_-]+@sha256:[0-9a-f]{64}", image):
-        raise HTTPException(
-            status_code=503,
-            detail={"code": "JADX_WORKER_IMAGE_UNAVAILABLE", "detail": "Configure MOBIUS_JADX_IMAGE with an approved immutable SHA-256 image reference."},
-        )
     application = session.get(ApplicationRow, scan.application_id)
     authorization = session.get(AuthorizationRow, scan.authorization_id) if scan.authorization_id else None
     if (
@@ -474,6 +468,12 @@ def _enqueue_jadx_job(scan_id: str, session, who: str):
         or authorization.expires_at <= utcnow()
     ):
         raise HTTPException(status_code=409, detail={"code": "AUTHORIZATION_NOT_LIVE"})
+    image = ctx.settings.jadx_image
+    if not image or not re.fullmatch(r"[A-Za-z0-9./:_-]+@sha256:[0-9a-f]{64}", image):
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "JADX_WORKER_IMAGE_UNAVAILABLE", "detail": "Configure MOBIUS_JADX_IMAGE with an approved immutable SHA-256 image reference."},
+        )
     job = WorkerQueue(session).enqueue_jadx_decompile(scan_id, application.artifact_key)
     SqlEventStore(session).emit(
         scan_id, "worker_job_queued",
