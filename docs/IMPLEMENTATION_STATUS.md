@@ -9,7 +9,7 @@
 > exactly the failure mode the project forbids: describing a proposal as if it were a working system
 > (master prompt §23). Every row states its evidence; a row without a test is not `DONE`.
 
-**Last updated:** 2026-11-18 · **Status baseline:** main includes PR #39 (merge commit 8f78071e); D-026 VERITAS advisory review is implemented but not yet wired into scan orchestration. D-030 is in progress on a feature branch.
+**Last updated:** 2026-11-18 · **Status baseline:** main includes PR #40 (merge commit 310b0cdb); D-030 graph persistence is implemented. D-026 VERITAS remains advisory and is not yet wired into scan orchestration. D-031 correlation is in progress.
 
 ---
 
@@ -49,7 +49,7 @@
 | VECTOR / mitmproxy | `NOT STARTED` | §4 | Blocked: no egress from sandbox |
 | VERITAS + gates | `PARTIAL` | `AGENT_DESIGN.md §6` | Gate evaluation, verdict persistence and `ValidatorMustDiffer` implemented and tested. PR #39 adds an opt-in independent reviewer for persisted findings. It requires a different requested and provider-resolved model from the producer, explicit investigation consent, evidence IDs confined to the finding, and stores a provenance-bearing advisory DecisionRow/event. It cannot change findings or verdicts; deterministic gates remain authoritative. Not yet wired into scan orchestration/UI; real Ollama/model-quality validation remains outstanding. `test_recon.py::test_recon_candidates_can_never_confirm` pins the honest outcome |
 | Authorisation enforcement (trigger) | `PARTIAL` | `DATABASE_SCHEMA.md §3.2` | SQL in `adapters/sql/scope_guard.sql`, installed by migration on PostgreSQL; PostgreSQL 16 trigger integration tests now execute in CI (PR #11). Deployment enforcement and production auth remain unverified. |
-| Attack graph persistence (D-030) | `PARTIAL` | `DATABASE_SCHEMA.md §3.8` | PR in progress: graph nodes/edges and normalized node/edge evidence links with composite same-investigation FKs; additive idempotent projection only. No correlation or chain reasoning in D-030. |
+| Attack graph persistence (D-030) | `DONE` | `DATABASE_SCHEMA.md §3.8` | PR #40 merged; four graph/provenance tables, composite same-investigation FKs, dedicated graph-edge IDs, idempotent additive reconstruction from persisted observations/findings/evidence. Python 3.11/3.12 + PostgreSQL 16 CI green (439 tests each). |\n| Attack graph correlation (D-031) | `PARTIAL` | `TASK_BOARD.md`, `DEMO_FIRST_PRODUCT_PLAN.md` | PR in progress: direct component/method/permission/source/sink/guard relations with evidence provenance and assertion levels. No candidate-chain reasoning. Current pipeline does not yet emit data-source observations, so no source node is invented. |
 | Attack graph (UI) | `NOT STARTED` | ADR-014 | The War Room lists findings and surface; the reachability *graph* view is not built |
 | ARCHIVIST (report) | `PARTIAL` | `REQUIREMENTS.md §1.9` | `services/archivist.py`: eight sections generated from stored rows, written as evidence, `POST/GET /scans/{id}/report`. **Markdown only** |
 | Evidence package builder (D-021) | `PARTIAL` | `TASK_BOARD.md`, `EVIDENCE_PACKAGE.md` | Bounded component-scoped packages include persisted observations, finding gate evidence, method/caller path identifiers, sink/guard references, evidence IDs/hashes and explicit truncation/coverage limits. Current SPECTRE evidence does not contain decompiled source text; D-012/JADX integration remains required before claiming source snippets are included. |
