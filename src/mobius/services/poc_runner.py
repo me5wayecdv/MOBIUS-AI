@@ -1,0 +1,282 @@
+"""Allowlisted, non-destructive PoC adapters (D-041).
+
+This runner never spawns processes, invokes shell commands, or contacts the network.
+It supports read-only checks against persisted manifest observations and two explicitly
+named in-process local harnesses. Emulator execution remains unavailable until a verified
+emulator adapter and host capability are supplied.
+"""
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any, Callable
+from urllib.parse import urlsplit
+
+from sqlalchemy import select
+from sqlalchemy.orm import Session
+
+from ..adapters.models import (
+    ApplicationRow, AuthorizationRow, HypothesisRow, InvestigationRow, ObservationRow,
+)
+from ..adapters.events import utcnow
+from ..core.schemas import PoCTestPlan
+
+
+class PoCExecutionError(RuntimeError):
+    """The requested proof cannot safely run."""
+
+
+class PoCScopeRejected(PoCExecutionError):
+    """The plan is not bound to the investigation's current authorization and APK."""
+
+
+class PoCAdapterUnavailable(PoCExecutionError):
+    """No approved adapter exists for this target kind/action."""
+
+
+class PoCApprovalRequired(PoCExecutionError):
+    """The plan requires a future approval workflow that is not part of D-041."""
+
+
+@dataclass(frozen=True, slots=True)
+class PoCStepResult:
+    index: int
+    action: str
+    target_ref: str
+    status: str
+    passed: bool
+    actual_value: Any
+    expected_value: Any
+    duration_ms: int
+    tool_name: str
+    tool_version: str
+
+
+@dataclass(frozen=True, slots=True)
+class PoCExecutionResult:
+    plan_id: str
+    investigation_id: str
+    target_sha256: str
+    status: str
+    started_at: str
+    finished_at: str
+    duration_ms: int
+    steps: tuple[PoCStepResult, ...]
+    output_json: dict[str, Any]
+    tool_versions: tuple[str, ...]
+    limitations: tuple[str, ...]
+
+
+class SafePoCRunner:
+    """Runs only typed, scope-checked read-only/local-harness plans."""
+
+    VERSION = "mobius-safe-poc/0.1.0"
+    _HARNESS_VERSION = "mobius-local-harness/1.0.0"
+
+    def __init__(self, session: Session) -> None:
+        self.session = session
+        self._harnesses: dict[str, Callable[[dict[str, str | bool | int]], dict[str, Any]]] = {
+            "unsafe_webview_forwarder_v1": self._unsafe_webview_forwarder,
+            "safe_webview_guard_v1": self._safe_webview_guard,
+        }
+
+    def run(self, plan: PoCTestPlan) -> PoCExecutionResult:
+        self._validate_scope(plan)
+        if plan.safety_class != "read_only":
+            raise PoCExecutionError("D-041 executes read-only adapters only; non-read-only cleanup is added in D-043")
+        if plan.requires_approval:
+            raise PoCApprovalRequired("approval workflow is implemented in D-043")
+        if plan.target_kind == "emulator":
+            raise PoCAdapterUnavailable(
+                "no verified Android emulator adapter is configured on this host"
+            )
+
+        started = datetime.now(timezone.utc)
+        started_at = utcnow()
+        context: dict[str, Any] = {}
+        results: list[PoCStepResult] = []
+        versions: set[str] = set()
+        for index, step in enumerate(plan.steps):
+            step_started = datetime.now(timezone.utc)
+            if plan.target_kind == "lab_apk":
+                actual, tool, version = self._run_manifest_step(plan, step.action, step.target_ref)
+            elif plan.target_kind == "local_harness":
+                actual, tool, version = self._run_harness_step(
+                    step.action, step.target_ref, step.input_values, context
+                )
+            else:  # pragma: no cover - Literal schema prevents this branch
+                raise PoCAdapterUnavailable(f"unsupported target kind: {plan.target_kind}")
+            versions.add(f"{tool}/{version}")
+            passed = (
+                actual == step.expected_value
+                if step.action in {"assert_manifest_component", "assert_manifest_permission",
+                                   "assert_local_harness_result"}
+                else True
+            )
+            duration_ms = max(
+                0, int((datetime.now(timezone.utc) - step_started).total_seconds() * 1000)
+            )
+            results.append(PoCStepResult(
+                index=index,
+                action=step.action,
+                target_ref=step.target_ref,
+                status="passed" if passed else "failed",
+                passed=passed,
+                actual_value=actual,
+                expected_value=step.expected_value,
+                duration_ms=duration_ms,
+                tool_name=tool,
+                tool_version=version,
+            ))
+            if not passed:
+                break
+
+        finished = datetime.now(timezone.utc)
+        finished_at = utcnow()
+        total_ms = max(0, int((finished - started).total_seconds() * 1000))
+        output = {
+            "plan_id": plan.id,
+            "target_sha256": plan.target_sha256,
+            "steps": [
+                {
+                    "index": r.index, "action": r.action, "target_ref": r.target_ref,
+                    "status": r.status, "passed": r.passed, "actual_value": r.actual_value,
+                    "expected_value": r.expected_value, "tool": r.tool_name,
+                    "tool_version": r.tool_version,
+                }
+                for r in results
+            ],
+            "simulation_only": plan.target_kind == "local_harness",
+        }
+        encoded = json.dumps(output, sort_keys=True, default=str).encode("utf-8")
+        if len(encoded) > plan.max_output_bytes:
+            raise PoCExecutionError("PoC output exceeds the plan's max_output_bytes")
+        status = "passed" if results and all(r.passed for r in results) else "failed"
+        return PoCExecutionResult(
+            plan_id=plan.id,
+            investigation_id=plan.investigation_id,
+            target_sha256=plan.target_sha256,
+            status=status,
+            started_at=started_at,
+            finished_at=finished_at,
+            duration_ms=total_ms,
+            steps=tuple(results),
+            output_json=output,
+            tool_versions=tuple(sorted(versions)),
+            limitations=(
+                "Local harness results are deterministic simulations, not execution of the APK.",
+                "No shell, subprocess, network, emulator, or state-changing action is available in D-041.",
+                "Persisting execution evidence is handled by D-042; approval/cancel/cleanup by D-043.",
+            ),
+        )
+
+    def _validate_scope(self, plan: PoCTestPlan) -> None:
+        investigation = self.session.get(InvestigationRow, plan.investigation_id)
+        if investigation is None:
+            raise PoCScopeRejected("investigation does not exist")
+        if investigation.authorization_id != plan.authorization_id:
+            raise PoCScopeRejected("plan authorization does not match the investigation")
+        authorization = self.session.get(AuthorizationRow, plan.authorization_id)
+        if authorization is None:
+            raise PoCScopeRejected("authorization does not exist")
+        application = self.session.get(ApplicationRow, investigation.application_id)
+        if application is None:
+            raise PoCScopeRejected("investigation application does not exist")
+        if (
+            application.sha256 != plan.target_sha256
+            or authorization.apk_sha256 != plan.target_sha256
+            or authorization.target_package != plan.target_package
+            or (application.package_name is not None and application.package_name != plan.target_package)
+        ):
+            raise PoCScopeRejected("plan target identity does not match authorized APK")
+        if authorization.revoked_at is not None:
+            raise PoCScopeRejected("authorization has been revoked")
+        expiry = datetime.fromisoformat(authorization.expires_at.replace("Z", "+00:00"))
+        if expiry <= datetime.now(timezone.utc):
+            raise PoCScopeRejected("authorization has expired")
+        if investigation.intensity > authorization.max_intensity:
+            raise PoCScopeRejected("investigation intensity exceeds authorization")
+        if investigation.state in {"CLOSED", "CANCELLED", "FAILED"}:
+            raise PoCScopeRejected("investigation is not in an executable state")
+        hypotheses = set(self.session.execute(
+            select(HypothesisRow.id).where(
+                HypothesisRow.investigation_id == plan.investigation_id,
+                HypothesisRow.id.in_(plan.hypothesis_ids),
+            )
+        ).scalars())
+        if hypotheses != set(plan.hypothesis_ids):
+            raise PoCScopeRejected("one or more hypotheses do not belong to this investigation")
+
+    def _run_manifest_step(self, plan: PoCTestPlan, action: str, target_ref: str):
+        if action == "assert_manifest_component":
+            found = self.session.execute(
+                select(ObservationRow.id).where(
+                    ObservationRow.investigation_id == plan.investigation_id,
+                    ObservationRow.subject_type == "component",
+                    ObservationRow.subject_ref == target_ref,
+                    ObservationRow.kind == "fact",
+                ).limit(1)
+            ).scalar_one_or_none()
+            return found is not None, "persisted-manifest-observation", "1"
+        if action == "assert_manifest_permission":
+            rows = self.session.execute(
+                select(ObservationRow).where(
+                    ObservationRow.investigation_id == plan.investigation_id,
+                    ObservationRow.subject_type == "component",
+                )
+            ).scalars()
+            declared = any((row.attributes or {}).get("permission") == target_ref for row in rows)
+            return declared, "persisted-manifest-observation", "1"
+        raise PoCAdapterUnavailable(f"action {action} is not available for lab_apk targets")
+
+    def _run_harness_step(
+        self,
+        action: str,
+        target_ref: str,
+        input_values: dict[str, str | bool | int],
+        context: dict[str, Any],
+    ):
+        if action == "invoke_local_harness":
+            harness = self._harnesses.get(target_ref)
+            if harness is None:
+                raise PoCAdapterUnavailable(f"local harness is not registered: {target_ref}")
+            result = harness(input_values)
+            context["last_result"] = result
+            return result, target_ref, self._HARNESS_VERSION
+        if action == "assert_local_harness_result":
+            result = context.get("last_result")
+            if not isinstance(result, dict):
+                raise PoCExecutionError("no local harness result is available to assert")
+            actual = result.get(target_ref)
+            return actual, "local-harness-assertion", self._HARNESS_VERSION
+        raise PoCAdapterUnavailable(f"action {action} is not available for local_harness targets")
+
+    @staticmethod
+    def _unsafe_webview_forwarder(values: dict[str, str | bool | int]) -> dict[str, Any]:
+        url = values.get("url")
+        if not isinstance(url, str) or not url or len(url) > 2048:
+            raise PoCExecutionError("unsafe_webview_forwarder requires a bounded url string")
+        parsed = urlsplit(url)
+        return {
+            "source": "intent_extra",
+            "sink_invoked": True,
+            "forwarded_url": url,
+            "scheme": parsed.scheme.lower(),
+            "simulation": True,
+        }
+
+    @staticmethod
+    def _safe_webview_guard(values: dict[str, str | bool | int]) -> dict[str, Any]:
+        url = values.get("url")
+        if not isinstance(url, str) or not url or len(url) > 2048:
+            raise PoCExecutionError("safe_webview_guard requires a bounded url string")
+        parsed = urlsplit(url)
+        allowed = parsed.scheme.lower() in {"https"} and parsed.hostname == "trusted.example"
+        return {
+            "source": "intent_extra",
+            "sink_invoked": allowed,
+            "blocked": not allowed,
+            "scheme": parsed.scheme.lower(),
+            "simulation": True,
+        }
