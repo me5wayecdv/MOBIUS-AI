@@ -233,7 +233,7 @@ def test_nexus_receives_and_records_persisted_source_excerpt(session, store, fut
     )
     investigation = session.get(InvestigationRow, scan_id)
     application = session.get(ApplicationRow, investigation.application_id)
-    source_text = "private void writeSecret() {\\n    persistSensitiveValue();\\n}"
+    source_text = "private void writeSecret() {\x5cn    persistSensitiveValue();\x5cn}"
     payload = {
         "schema_version": 1,
         "apk_sha256": application.sha256,
