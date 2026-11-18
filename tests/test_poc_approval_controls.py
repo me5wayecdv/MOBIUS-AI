@@ -83,3 +83,19 @@ def test_step_timeout_runs_cleanup(session, store, future_iso):
     result = runner.run(ready)
     assert result.status == "timed_out"
     assert result.cleanup_results[0]["status"] == "completed"
+
+
+def test_approval_is_bound_to_exact_plan_digest(session, store, future_iso):
+    scan, plan, approval = _approval_plan(session, store, future_iso)
+    PoCApprovalService(session).resolve(
+        approval.id, investigation_id=scan.id, decision="granted",
+        decided_by="reviewer-1", note="Approved for this exact plan.",
+    )
+    approved = plan.model_copy(update={"approval_id": approval.id})
+    changed = approved.model_copy(update={
+        "steps": (PoCStep(action="invoke_local_harness", target_ref="safe_webview_guard_v1",
+                          input_values={"url": "javascript:alert(1)"}),),
+    })
+    with pytest.raises(PoCApprovalRequired, match="matching"):
+        SafePoCRunner(session).run(changed)
+    assert SafePoCRunner(session).run(approved).status == "passed"
