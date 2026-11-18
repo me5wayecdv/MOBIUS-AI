@@ -236,7 +236,6 @@ def analyse_method(
             opcode = instruction.opcode
             invoke_key = (instruction.invoke_class, instruction.invoke_method)
             source = source_for(*invoke_key) if all(invoke_key) else None
-            guard_id = _GUARD_IDS.get(invoke_key) if all(invoke_key) else None
 
             if instruction.invoke_class and instruction.invoke_method:
                 sink_spec = _sink_argument(instruction.invoke_class, instruction.invoke_method)
@@ -273,6 +272,8 @@ def analyse_method(
                                 finding_budget_exhausted = True
                                 limitations.add("data-flow finding budget exhausted")
                                 break
+                    else:
+                        limitations.add("sink call register operands were incomplete")
                 if source:
                     pending_result = frozenset({(source.id, instruction.offset)})
                 elif (instruction.invoke_class, instruction.invoke_method) == ("Ljava/lang/StringBuilder;", "append"):
@@ -328,7 +329,7 @@ def analyse_method(
                     state[instruction.dest] = origins
                 else:
                     state.pop(instruction.dest, None)
-            elif opcode.startswith(("iput", "sput", "aput", "return")) and any(
+            elif opcode.startswith(("iput", "sput", "aput", "return", "throw")) and any(
                 state.get(register) for register in instruction.uses
             ):
                 limitations.add("tainted value escaped through a field, array, or method return; memory/interprocedural flow is not modelled")
