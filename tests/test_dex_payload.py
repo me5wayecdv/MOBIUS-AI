@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import hashlib
 import pathlib
 import zipfile
@@ -8,6 +10,8 @@ from io import BytesIO
 import pytest
 
 from mobius.adapters.dex import index_apk
+from mobius.core.dataflow import DataFlowFinding
+from mobius.core.reachability import MethodRef
 from mobius.adapters.dex_payload import (
     code_index_payload,
     validate_dex_index_payload,
@@ -68,3 +72,41 @@ def test_dex_index_wire_format_rejects_unknown_fields():
     import json
     with pytest.raises(ValueError, match="invalid schema"):
         validate_dex_index_payload(json.dumps(payload).encode(), hashlib.sha256(apk).hexdigest())
+
+
+
+def test_data_flow_evidence_round_trips_through_worker_payload():
+    apk = _apk()
+    digest = hashlib.sha256(apk).hexdigest()
+    index = index_apk(apk)
+    finding = DataFlowFinding(
+        method=MethodRef("com.example.Entry", "onCreate", "()V"),
+        source_id="intent-string-extra",
+        sink_id="webview-load",
+        source_offset=12,
+        sink_offset=48,
+        sink_register=3,
+        guard_ids_before=("check-calling-permission",),
+        guard_ids_after=(),
+        guard_dominates_sink=True,
+        guard_outcome_verified=False,
+    )
+    enriched = replace(
+        index,
+        data_flows=(finding,),
+        data_flow_methods=1,
+        data_flow_complete=True,
+    )
+    import json
+    encoded = json.dumps(
+        code_index_payload(enriched, digest),
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode()
+
+    restored = validate_dex_index_payload(encoded, digest)
+
+    assert restored.data_flows == (finding,)
+    assert restored.data_flow_methods == 1
+    assert restored.data_flow_complete is True
+    assert restored.data_flows[0].assertion == "may-flow"
