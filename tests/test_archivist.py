@@ -200,7 +200,7 @@ def test_an_empty_undetermined_section_still_states_the_blind_spots(session, sto
 
     assert "Nothing in this investigation was left undetermined" in text
     # ...but never without the caveat that follows it.
-    assert "no data-flow analysis" in text.lower()
+    assert "bounded, selected-family data flow" in text.lower()
 
 
 # -- the part that must always be there ------------------------------------------------
@@ -212,10 +212,10 @@ def test_every_report_states_what_the_method_cannot_see(session, store, future_i
         _rejected_scan(session, store, future_iso),
     ):
         text = _text(session, store, scan)
-        assert "No data-flow analysis" in text
+        assert "Bounded, selected-family data flow only" in text
         assert "Absence of a finding is not evidence of absence." in text
         assert "No language model was called" in text
-        assert "No control-flow analysis" in text
+        assert "Bounded CFG and guard evidence" in text
 
 
 # -- storage and reproducibility -------------------------------------------------------

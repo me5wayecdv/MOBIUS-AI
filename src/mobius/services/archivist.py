@@ -50,15 +50,22 @@ AGENT = "ARCHIVIST"
 #: What this build's analysis structurally cannot establish. Printed in every report, because
 #: a reader who only sees the positives will over-read them.
 _LIMITATIONS = """\
-- **Static only.** Nothing was executed and no runtime exploitability was observed.
-- **No data-flow analysis.** Call-graph reachability does not establish that attacker-controlled data reaches a sensitive operation.
-- **No control-flow analysis.** Guard order and effectiveness are not proven by this baseline.
-- **Reflection and dynamic loading are unresolved.** Reflective dispatch and code loaded at runtime may be missed.
-- **Native code and resources are inventory-only.** Native libraries, assets and resources are listed where the APK archive can be read; they are not semantically analyzed.
-- **Obfuscation is not reversed.** Names remain as exposed by DEX/JADX; no deobfuscation is claimed.
-- **Multi-DEX coverage is per-entry.** The coverage manifest lists indexed, failed, skipped and truncated DEX entries; a partial entry set cannot support a clean bill of health.
-- **Framework calls are boundaries.** Calls into framework code are recorded but not followed into platform implementation.
-- **Absence of a finding is not evidence of absence.** An empty findings list means this pipeline found nothing by these methods, not that the application is safe.
+- **Static only.** Nothing was executed. No finding was confirmed by observing the target at
+  runtime, and no dynamic-analysis capability exists in this build.
+- **Bounded, selected-family data flow only.** The current slice tracks a small set of
+  incoming Intent/URI source candidates to selected direct sinks within one method; external caller control is not established. It does not model
+  exception edges (try/catch methods are marked incomplete), field/array memory, cross-method propagation, reflection, dynamic dispatch, or framework
+  internals. Results are `may-flow` evidence, never a confirmed vulnerability; no-flow is
+  not proof that no tainted path exists.
+- **Bounded CFG and guard evidence.** Basic-block order and dominance are recorded for selected
+  methods. Guard invocation before/dominating a sink is not proof that the successful branch
+  protects it: branch polarity, permission correctness and semantic guard effectiveness are
+  not verified. The existing call-graph gate remains conservative.
+- **Incomplete graphs are reported as such.** A truncated index can neither confirm nor refute
+  absence; those candidates are listed under "Not determined", not as clean.
+- **Incomplete semantic coverage.** JADX output is reconstructed code, not original source. Native boundaries, reflection, dynamic dispatch, obfuscation and framework internals remain unsupported or partial; DEX entry coverage is reported separately.
+- **Absence of a finding is not evidence of absence.** An empty findings list means this
+  pipeline found nothing by these methods, not that the application is safe.
 """
 
 
