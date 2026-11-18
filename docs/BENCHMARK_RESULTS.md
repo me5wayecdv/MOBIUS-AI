@@ -28,11 +28,28 @@ screaming false positive and nowhere near enough to establish a false-positive r
 | `mastg-uncrackable-1` | vulnerable | 0 | missed (no candidate) |
 | `mastg-uncrackable-2` | vulnerable | 0 | missed (no candidate) |
 | `mastg-uncrackable-3` | vulnerable | 0 | missed (no candidate) |
-| `androguard-test-debug` | benign | 0 | correct rejection |
-| `androguard-testactivity` | benign | 0 | correct rejection |
-| `a2dp-volume` | benign | 0 | not flagged, **1 component in manual review** |
+| `androguard-test-debug` | benign | 0 | not flagged (no candidate) |
+| `androguard-testactivity` | benign | 0 | not flagged (no candidate) |
+| `a2dp-volume` | benign | 0 | not flagged, **2 components in manual review** (re-measured, see §2a) |
 
 Counts: **tp = 1, fp = 0, fn = 3, tn = 3, error = 0.**
+
+### 2a. Re-measurement after the "no catalogued sink is NOT_DETERMINED" change
+
+Same corpus, same pinned hashes, same harness (`python -m mobius.tools.benchmark`), before
+(`f916496`) versus after (`guard/not-determined`). The headline metrics are identical, because
+they count samples *flagged* (confirmed > 0). What moved is where bounded-search negatives go:
+
+| Sample | manual_review before | manual_review after | Reason |
+|---|---|---|---|
+| `insecurebankv2` | 0 (5 components were `rejected` / `not-reachable`) | 5 | no catalogued sink on direct calls: not determined |
+| `a2dp-volume` | 1 | 2 | the same |
+| all others | 0 | 0 | no candidate |
+
+Read-across: the earlier "correct rejection" wording for the benign samples was never a
+measured correctness claim and is withdrawn; those samples simply had no candidate that
+confirmed. A benign sample is "not flagged", not "proven benign". Specificity and recall remain
+as measured above and carry the same wide intervals.
 
 ## 3. The one true positive, examined
 
@@ -53,10 +70,12 @@ data-flow analysis in this build (R-21), so the claim is exactly "an exported ac
 permission and no caller check calls a WebView loader", not "an attacker can inject a URL".
 The report says the same thing in §3 and §6.
 
-Five other exported components in the same app were **rejected**: complete traversals found no
-sink in `ChangePassword`, `DoTransfer`, `MyBroadCastReceiver`, `PostLogin`,
-`TrackUserContentProvider`. Whether those rejections are correct is not established by this
-harness — a rejection is evidence-based, not audited ground truth.
+Five other exported components in the same app (`ChangePassword`, `DoTransfer`,
+`MyBroadCastReceiver`, `PostLogin`, `TrackUserContentProvider`) had complete traversals that
+found no catalogued sink. They were originally reported as "rejected"; they are now
+**NOT_DETERMINED / manual review**. That outcome is a fact about the bounded search (lifecycle
+roots, direct calls, catalogued sinks only), not a finding that those components are safe. Real
+recall is unestablished.
 
 ## 4. Why the three crackmes were missed
 
