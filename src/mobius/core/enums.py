@@ -80,6 +80,9 @@ class EvidenceKind(StrEnum):
     CERTIFICATE = "certificate"
     SCREENSHOT = "screenshot"
     REPORT = "report"
+    POC_PLAN = "poc-plan"
+    POC_RESULT = "poc-result"
+    POC_LOG = "poc-log"
 
 
 class Severity(StrEnum):

@@ -36,6 +36,7 @@ class IdPrefix:
     GRAPH_NODE = "gph"
     GRAPH_EDGE = "ged"
     POC_PLAN = "poc"
+    POC_RUN = "pcr"
     FRONTIER = "fro"
     AUTHORIZATION = "ath"
 

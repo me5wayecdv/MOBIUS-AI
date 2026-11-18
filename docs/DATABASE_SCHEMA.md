@@ -576,3 +576,15 @@ features are load-bearing.
      tool execution occurred at an intensity above the highest live grant.
 - These four assertions are the machine-checkable version of the project's honesty claims. They should
   run in CI and fail the build.
+
+
+### 3.11 PoC execution evidence (D-042)
+
+`poc_runs` stores the plan identity, investigation/authorization/target binding, hypothesis IDs,
+input/output SHA-256, structured input/output JSON, tool versions, timestamps, duration and exit
+status. `poc_run_evidence` links the plan, result and execution log evidence to the run with
+composite foreign keys that enforce same-investigation ownership.
+
+The D-042 migration is additive. CI migration tests use disposable SQLite/PostgreSQL databases.
+Downgrade refuses to remove populated PoC run/evidence tables; no valuable database migration
+or data deletion is authorized.

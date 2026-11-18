@@ -484,6 +484,57 @@ class GraphEdgeEvidenceRow(Base):
 
 
 
+class PoCRunRow(Base):
+    __tablename__ = "poc_runs"
+    __table_args__ = (
+        UniqueConstraint("investigation_id", "id", name="uq_poc_run_investigation_id"),
+        CheckConstraint("status IN ('passed','failed')", name="poc_run_status_known"),
+        Index("ix_poc_runs_investigation_created", "investigation_id", "created_at"),
+    )
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    investigation_id: Mapped[str] = mapped_column(
+        String(40), ForeignKey("investigations.id"), nullable=False
+    )
+    plan_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    authorization_id: Mapped[str] = mapped_column(
+        String(40), ForeignKey("authorizations.id"), nullable=False
+    )
+    target_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    hypothesis_ids: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    status: Mapped[str] = mapped_column(String(20), nullable=False)
+    exit_status: Mapped[str] = mapped_column(String(20), nullable=False)
+    input_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    output_sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    input_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    output_json: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False)
+    tool_versions: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    started_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    finished_at: Mapped[str] = mapped_column(String(40), nullable=False)
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+
+
+class PoCRunEvidenceRow(Base):
+    __tablename__ = "poc_run_evidence"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["investigation_id", "run_id"],
+            ["poc_runs.investigation_id", "poc_runs.id"],
+            name="fk_poc_run_evidence_run_same_investigation",
+        ),
+        ForeignKeyConstraint(
+            ["investigation_id", "evidence_id"],
+            ["evidence.investigation_id", "evidence.id"],
+            name="fk_poc_run_evidence_evidence_same_investigation",
+        ),
+    )
+    investigation_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    run_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    evidence_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(20), nullable=False)
+
+
+
 ALL_TABLES = (
     UserRow,
     AuthorizationRow,
@@ -504,4 +555,6 @@ ALL_TABLES = (
     GraphEdgeRow,
     GraphNodeEvidenceRow,
     GraphEdgeEvidenceRow,
+    PoCRunRow,
+    PoCRunEvidenceRow,
 )
