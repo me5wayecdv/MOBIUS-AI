@@ -33,10 +33,10 @@ container/VM backend needs independent integration tests and deployment review b
 
 ## Current limitations
 
-- No backend implementation is wired to the API or NEXUS.
-- No tool binary is registered by default.
+- The API process does not invoke the OCI runtime; the existing queue worker uses `OciBackend` for explicitly registered RECON, DEX and JADX jobs when immutable image digests are configured.
+- No tool binary or image is enabled by default.
 - No subprocess is started by this module.
-- No database persistence or ARCHIVIST event emission is integrated yet.
+- Worker job lifecycle/result metadata is persisted in `worker_jobs` and enqueue events are emitted; per-invocation `ToolExecution` rows and ARCHIVIST execution events are not yet integrated.
 - The existing API still processes current APK parsing in-process; this contract does not fix that
   existing exposure. Production/internet deployment remains blocked pending worker isolation and
   authentication/authorization work.
