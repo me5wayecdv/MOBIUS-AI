@@ -249,11 +249,16 @@ class CoverageManifestBuilder:
         failed = sum(item["status"] == "failed" for item in entries)
         skipped = sum(item["status"] == "skipped" for item in entries)
         entry_truncated = sum(item["status"] == "truncated" for item in entries)
-        truncated = bool(payload.get("truncated")) or entry_truncated > 0
+        truncated = (
+            bool(payload.get("truncated"))
+            or entry_truncated > 0
+            or bool(inventory.get("dex_entries_truncated"))
+        )
         complete = (
             bool(payload.get("complete"))
             and inventory.get("status") == "complete"
             and not unexpected
+            and not inventory.get("dex_entries_truncated")
             and len(entries) == len(coverage)
         )
         return {
