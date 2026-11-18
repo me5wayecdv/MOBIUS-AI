@@ -50,15 +50,18 @@ AGENT = "ARCHIVIST"
 _LIMITATIONS = """\
 - **Static only.** Nothing was executed. No finding was confirmed by observing the target at
   runtime, and no dynamic-analysis capability exists in this build.
-- **No data-flow analysis.** Reachability means a call path exists in the bytecode from an
-  entry point to a security-relevant operation. It does **not** establish that
-  attacker-controlled data reaches that operation.
-- **No control-flow analysis.** A guard anywhere in the same method suppresses the
-  "no caller check" clause, whatever order it executes in. This biases toward *not* confirming.
+- **Bounded, selected-family data flow only.** The current slice tracks a small set of
+  incoming Intent/URI sources to selected direct sinks within one method. It does not model
+  field/array memory, cross-method propagation, reflection, dynamic dispatch, or framework
+  internals. Results are `may-flow` evidence, never a confirmed vulnerability; no-flow is
+  not proof that no tainted path exists.
+- **Bounded CFG and guard evidence.** Basic-block order and dominance are recorded for selected
+  methods. Guard invocation before/dominating a sink is not proof that the successful branch
+  protects it: branch polarity, permission correctness and semantic guard effectiveness are
+  not verified. The existing call-graph gate remains conservative.
 - **Incomplete graphs are reported as such.** A truncated index can neither confirm nor refute
   absence; those candidates are listed under "Not determined", not as clean.
-- **No decompilation, no reflection, no multi-dex.** Source-level intent, reflective dispatch
-  and secondary dex files are outside what this build can see.
+- **Incomplete semantic coverage.** JADX output is reconstructed code, not original source. Native boundaries, reflection, dynamic dispatch, obfuscation and framework internals remain unsupported or partial; DEX entry coverage is reported separately.
 - **Absence of a finding is not evidence of absence.** An empty findings list means this
   pipeline found nothing by these methods, not that the application is safe.
 """
