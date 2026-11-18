@@ -91,5 +91,5 @@ The API role retains INSERT/SELECT/UPDATE access required to create and apply jo
 - The worker writes only queue results; API applies results to investigation state and evidence.
 - Result XML is bounded to 10 MiB and stored in the job JSON field. A later object-store result channel may be preferable at larger scale.
 - The worker must run on a dedicated host/VM with rootless Podman preferred. Do not mount a rootful Docker socket into the API or a workload container.
-- The parser image digest has not been published or verified by this repository. Until a trusted digest is configured and a real worker deployment is smoke-tested, isolated execution is implemented but not operationally enabled.
+- A parser image digest was published in earlier work (see the historical digest above); a deployed worker-host smoke test remains pending. No replacement publication may occur until explicit project-owner approval. Until a trusted digest is configured and a real worker deployment is smoke-tested, isolated execution is implemented but not operationally enabled.
 - Real authentication remains a separate release blocker. The header-based analyst identity must not be exposed to an untrusted network.
