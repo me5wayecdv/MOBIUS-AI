@@ -26,6 +26,7 @@ test("D-056: upload → investigation → evidence → graph → PoC → report;
   });
   await page.getByRole("button", { name: "Upload & create investigation" }).click();
   await expect(page.locator("#intake-status")).toContainText("INVESTIGATION CREATED");
+  await expect(page.locator("#scan-select")).toHaveValue(/^scn_/);
   const scanId = await page.locator("#scan-select").inputValue();
   expect(scanId).toMatch(/^scn_/);
   await page.screenshot({ path: shots + "/d056-01-upload-and-investigation.png", fullPage: true });
