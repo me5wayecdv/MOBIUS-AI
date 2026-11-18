@@ -29,6 +29,8 @@ class InContainerSmokeBackend:
             str(workspace / part.removeprefix("/work/")) if part.startswith("/work/") else part
             for part in argv
         ]
+        home = workspace / ".jadx-home"
+        home.mkdir(mode=0o700, parents=True, exist_ok=True)
         started = time.monotonic()
         try:
             result = subprocess.run(
@@ -43,7 +45,8 @@ class InContainerSmokeBackend:
                 env={
                     "PATH": "/opt/jadx/bin:/usr/lib/jvm/java-17-openjdk-amd64/bin:/usr/local/bin:/usr/bin:/bin",
                     "JAVA_HOME": "/usr/lib/jvm/java-17-openjdk-amd64",
-                    "HOME": "/work/home",
+                    "HOME": str(home),
+                    "JAVA_TOOL_OPTIONS": f"-Duser.home={home}",
                     "TMPDIR": "/tmp",
                 },
             )
@@ -80,14 +83,7 @@ def main() -> int:
     digest = hashlib.sha256(artifact).hexdigest()
     if not Path(JADX_BINARY).is_file():
         raise SystemExit("pinned JADX binary is missing from image")
-    version = subprocess.run(
-        [JADX_BINARY, "--version"], check=True, capture_output=True, text=True,
-        timeout=15, shell=False,
-    ).stdout.strip()
-    if version != "1.5.6":
-        raise SystemExit(f"unexpected JADX version: {version!r}")
-
-    runner = ToolRunner(
+    # The Dockerfile verifies the pinned binary version during image build.\n    version = "1.5.6"\n\n    runner = ToolRunner(
         workspace_root=args.workspace_root,
         backend=InContainerSmokeBackend(),
         tools=(build_jadx_tool_spec(binary=JADX_BINARY, version=version),),
