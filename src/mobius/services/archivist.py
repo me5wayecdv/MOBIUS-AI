@@ -51,7 +51,7 @@ _LIMITATIONS = """\
 - **Static only.** Nothing was executed. No finding was confirmed by observing the target at
   runtime, and no dynamic-analysis capability exists in this build.
 - **Bounded, selected-family data flow only.** The current slice tracks a small set of
-  incoming Intent/URI sources to selected direct sinks within one method. It does not model
+  incoming Intent/URI source candidates to selected direct sinks within one method; external caller control is not established. It does not model
   field/array memory, cross-method propagation, reflection, dynamic dispatch, or framework
   internals. Results are `may-flow` evidence, never a confirmed vulnerability; no-flow is
   not proof that no tainted path exists.
