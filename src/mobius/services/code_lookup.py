@@ -202,7 +202,7 @@ class JadxCodeLookup:
         return {
             "apk_sha256": result.apk_sha256,
             "tool_version": result.tool_version,
-            "method_reference": f"{class_name}->{method.name}{method.signature[len(method.name):]}",
+            "method_reference": f"{class_name}#{method.name}@{method.start_line}",
             "path": snippet.path,
             "start_line": snippet.start_line,
             "end_line": snippet.end_line,
