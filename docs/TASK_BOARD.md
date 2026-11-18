@@ -59,7 +59,7 @@
 
 | # | Task | Owner | State | Acceptance |
 |---|---|---|---|---|
-| D-040 | Define typed PoC/TestPlan schema | M1 + M3 | [ ] | Target digest, scope, hypothesis, steps, expected outcome, budgets and cleanup |
+| D-040 | Define typed PoC/TestPlan schema | M1 + M3 | [~] | PR in progress: typed scoped target, hypothesis links, closed action registry, budgets, safety class, approval and cleanup constraints. | Target digest, scope, hypothesis, steps, expected outcome, budgets and cleanup |
 | D-041 | Implement allowlisted non-destructive test adapters | M3 | [ ] | Only prepared lab APK/emulator/local harness targets |
 | D-042 | Capture reproducible PoC evidence | M1 + M3 | [ ] | Tool version, inputs, outputs, logs, timestamps and exit status persisted |
 | D-043 | Add approval, timeout, cancel and cleanup paths | M1 + M3 | [ ] | Out-of-scope or state-changing tests blocked without approval |
