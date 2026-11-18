@@ -194,7 +194,7 @@ def test_reachability_is_recorded_as_an_inference_not_a_fact(session, store, sur
     )
     assert observation.confidence < 1.0
     assert observation.attributes["sink"] == "file-write"
-    assert observation.maswe == ["MASWE-0001"]
+    assert observation.maswe == ["MASWE-0050"]
     assert observation.attributes["path"] == [f"{CLS}->onCreate", f"{CLS}->writeSecret"]
 
 
