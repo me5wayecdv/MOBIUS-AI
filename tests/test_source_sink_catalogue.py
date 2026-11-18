@@ -36,6 +36,10 @@ def test_source_and_sink_entries_include_maswe_masvs_and_provenance():
     assert "MASVS-CODE-4" in sink.masvs
     assert sink.impact == "integrity"
     assert sink.confidence in {"low", "medium", "high"}
+    webview_access = sink_for("Landroid/webkit/WebSettings;", "setAllowUniversalAccessFromFileURLs")
+    assert webview_access is not None
+    assert "MASWE-0034" in webview_access.maswe
+    assert "MASVS-PLATFORM-2" in webview_access.masvs
 
 
 def test_catalogue_extension_adds_rules_without_python_changes(tmp_path: Path):
