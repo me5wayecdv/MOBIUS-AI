@@ -333,7 +333,7 @@ def analyse_method(
                     state[instruction.dest] = origins
                 else:
                     state.pop(instruction.dest, None)
-            elif opcode.startswith(("iput", "sput", "aput", "return", "throw")) and any(
+            elif opcode.startswith(("iput", "sput", "aput", "return", "throw", "fill-array-data")) and any(
                 state.get(register) for register in instruction.uses
             ):
                 limitations.add("tainted value escaped through a field, array, or method return; memory/interprocedural flow is not modelled")
