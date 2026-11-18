@@ -43,7 +43,7 @@ class CodeIndex:
     data_flows: tuple[DataFlowFinding, ...] = ()
     data_flow_methods: int = 0
     data_flow_truncated_methods: int = 0
-    data_flow_complete: bool = True
+    data_flow_complete: bool = False
     data_flow_limitations: tuple[str, ...] = ()
     @property
     def complete(self) -> bool:
