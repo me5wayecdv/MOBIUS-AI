@@ -171,3 +171,8 @@ Implemented a durable `worker_jobs` queue, API enqueue/status/apply endpoints, l
 - D-056 Playwright E2E exercises upload, investigation, evidence, graph rebuild, PoC execution and report on one synthetic CI fixture. It compares the complete persisted event sequence before and after a browser reload.
 - Visual acceptance requires CI artifact `mobius-war-room-visual-e2e-<run_id>`: per-panel D-050–D-055 screenshots at 1280px and 390px, React Flow screenshots at both sizes, and D-056 stage screenshots. CI success alone does not accept the UI.
 - The synthetic fixture validates the UI/API/persistence path and local PoC harness only. It is not a replacement for the final intentionally vulnerable APK or a real Ollama-backed adaptive investigation.
+
+
+## Critical path and external blockers
+
+See `docs/DEMO_BLOCKERS.md` for the ordered path from APK selection through the defence-ready demo, the one-time owner decisions (D-001/D-002/D-003/D-004), and the actual Ollama/runtime requirements. The synthetic CI fixture must not be represented as the final APK or a runtime vulnerability reproduction.
