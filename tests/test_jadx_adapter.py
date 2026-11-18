@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import os
-import shutil
 import subprocess
 import time
 from pathlib import Path
@@ -176,7 +175,7 @@ def test_missing_isolation_backend_is_explicit(tmp_path):
 
 
 def test_jadx_decompiles_checked_in_dex_fixture_when_cli_is_installed(tmp_path):
-    binary = os.environ.get("MOBIUS_JADX_BIN") or shutil.which("jadx")
+    binary = os.environ.get("MOBIUS_JADX_BIN")
     if not binary:
         pytest.skip("JADX 1.5.6 is installed only in the CI tool-validation job")
     fixture = Path(__file__).parent / "fixtures" / "dex" / "AnalysisTest.dex"
