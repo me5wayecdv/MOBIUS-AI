@@ -127,6 +127,10 @@ class SpectreService:
                 "index_truncated": index.truncated,
                 "index_complete": index.complete,
                 "dex_coverage": [item.describe() for item in index.dex_coverage],
+                "data_flow_findings": len(index.data_flows),
+                "data_flow_methods": index.data_flow_methods,
+                "data_flow_complete": index.data_flow_complete,
+                "data_flow_limitations": list(index.data_flow_limitations),
                 "candidates": len(candidates),
                 "confirmed": confirmed,
                 "rejected": rejected,
@@ -201,6 +205,12 @@ class SpectreService:
             "truncated": index.truncated,
             "complete": index.complete,
             "dex_coverage": [item.describe() for item in index.dex_coverage],
+            "data_flow_scope": "intra-procedural-selected-families",
+            "data_flow_findings": [item.describe() for item in index.data_flows],
+            "data_flow_methods": index.data_flow_methods,
+            "data_flow_truncated_methods": index.data_flow_truncated_methods,
+            "data_flow_complete": index.data_flow_complete,
+            "data_flow_limitations": list(index.data_flow_limitations),
             "class_sources_sample": {name: list(index.class_sources.get(name, ())) for name in index.classes[:20]},
             "class_sample": list(index.classes[:20]),
         }
@@ -298,6 +308,12 @@ class SpectreService:
                 for method in result.path
             ],
             "maswe": list(result.sink.maswe) if result.sink else [],
+            "data_flows": [
+                item.describe() for item in index.data_flows
+                if item.method.class_name == component
+            ][:100],
+            "data_flow_complete": index.data_flow_complete,
+            "data_flow_limitations": list(index.data_flow_limitations)[:20],
             "explanation": result.explain(),
             "observation_id": observation.id,
             "attributes": attributes,
@@ -348,6 +364,13 @@ class SpectreService:
                 "caller_count": len(callers),
                 "exhaustive": exhaustive,
                 "index_truncated": index.truncated,
+                "data_flow_scope": "intra-procedural-selected-families",
+                "data_flows": [
+                    item.describe() for item in index.data_flows
+                    if item.method.class_name == component
+                ][:100],
+                "data_flow_complete": index.data_flow_complete,
+                "data_flow_limitations": list(index.data_flow_limitations)[:20],
             },
             maswe=[],
             confidence=1.0 if target_present else 0.5,
