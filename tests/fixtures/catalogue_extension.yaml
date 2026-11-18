@@ -1,0 +1,27 @@
+version: 1
+catalogue_id: test.extension
+platform: android
+sources:
+  - id: fixture-source
+    class_descriptor: Lexample/Input;
+    method: read
+    descriptor: ()Ljava/lang/String;
+    family: test
+    trust_boundary: external
+    maswe: [MASWE-0050]
+    masvs: [MASVS-CODE-4]
+    confidence: high
+    description: Fixture source for data-only extension test
+    references: [MASTG-TEST-0375]
+sinks:
+  - id: fixture-sink
+    class_descriptor: Lexample/Output;
+    method: write
+    family: test
+    maswe: [MASWE-0050]
+    masvs: [MASVS-CODE-4]
+    confidence: medium
+    impact: integrity
+    description: Fixture sink for data-only extension test
+    references: [MASTG-TEST-0339]
+guards: []
