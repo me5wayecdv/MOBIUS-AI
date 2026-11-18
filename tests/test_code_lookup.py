@@ -180,3 +180,16 @@ def test_jadx_decompile_is_queued_and_owner_scoped(client, ctx):
         headers={"X-Analyst-ID": "another-analyst"},
     )
     assert denied.status_code == 404
+
+
+
+def test_jadx_queue_rejects_mutable_worker_image_reference(client, ctx):
+    from dataclasses import replace
+
+    _app, scan = _upload_authorized_scan(client)
+    ctx.settings = replace(ctx.settings, jadx_image="ghcr.io/example/mobius-jadx:latest")
+    response = client.post(
+        f"/api/v1/scans/{scan['id']}/code/decompile/jobs",
+    )
+    assert response.status_code == 503
+    assert response.json()["detail"]["code"] == "JADX_WORKER_IMAGE_UNAVAILABLE"
