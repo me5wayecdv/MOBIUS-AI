@@ -20,6 +20,7 @@ class Settings:
     model_name: str = ""
     model_timeout_seconds: int = 120
     jadx_cache_root: Path | None = None
+    jadx_image: str | None = None
 
     @property
     def is_production(self) -> bool:
@@ -41,4 +42,5 @@ class Settings:
                     str(Path(os.environ.get("MOBIUS_ARTIFACT_ROOT", _DEFAULT_ROOT)) / "jadx-cache"),
                 )
             ),
+            jadx_image=os.environ.get("MOBIUS_JADX_IMAGE") or None,
         )
