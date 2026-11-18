@@ -57,8 +57,13 @@ _LIMITATIONS = """\
   "no caller check" clause, whatever order it executes in. This biases toward *not* confirming.
 - **Incomplete graphs are reported as such.** A truncated index can neither confirm nor refute
   absence; those candidates are listed under "Not determined", not as clean.
-- **No decompilation, no reflection, no multi-dex.** Source-level intent, reflective dispatch
-  and secondary dex files are outside what this build can see.
+- **No data-flow analysis.** Call-graph reachability does not establish that attacker-controlled data reaches a sensitive operation.
+- **No control-flow analysis.** Guard order and effectiveness are not proven by this baseline.
+- **Reflection and dynamic loading are unresolved.** Reflective dispatch and code loaded at runtime may be missed.
+- **Native code and resources are inventory-only.** Native libraries, assets and resources are listed where the APK archive can be read; they are not semantically analyzed.
+- **Obfuscation is not reversed.** Names remain as exposed by DEX/JADX; no deobfuscation is claimed.
+- **Multi-DEX coverage is per-entry.** The coverage manifest lists indexed, failed, skipped and truncated DEX entries; a partial entry set cannot support a clean bill of health.
+- **Framework calls are boundaries.** Calls into framework code are recorded but not followed into platform implementation.
 - **Absence of a finding is not evidence of absence.** An empty findings list means this
   pipeline found nothing by these methods, not that the application is safe.
 """
@@ -94,6 +99,7 @@ class ArchivistService:
             self._method(row),
             self._evidence(row),
             self._events(row),
+            self._coverage_manifest(row),
         ]
         return Report(investigation_id, "\n".join(sections).rstrip() + "\n", generated)
 
@@ -468,6 +474,50 @@ class ArchivistService:
             "The full event log is replayable from `GET /api/v1/scans/{id}/stream?after=0`.",
         ]
         return "\n".join(lines) + "\n"
+
+    def _coverage_manifest(self, row: InvestigationRow) -> str:
+        """Embed the same structured manifest exposed by the read-only API route."""
+        from .coverage_manifest import CoverageManifestBuilder
+
+        manifest = CoverageManifestBuilder(self._session, self._store).build(row.id)
+        encoded = json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2)
+        # APK-controlled ZIP names are data. Prevent a filename from closing the Markdown
+        # fence while preserving the exact JSON string after decoding the escaped backticks.
+        encoded = encoded.replace("```", r"\u0060\u0060\u0060")
+        limitations = [
+            f"| `{item['capability']}` | `{item['status']}` | {item['detail']} |"
+            for item in manifest["limitations"]
+        ]
+        return "\\n".join([
+            "## 9. Code coverage and limitations manifest",
+            "",
+            f"**Overall coverage status:** `{manifest['overall_status'].upper()}`"
+            + (" · **truncation detected**" if manifest["truncated"] else ""),
+            "",
+            "| Area | Status / coverage |",
+            "|---|---|",
+            f"| APK archive inventory | `{manifest['apk_inventory'].get('status', 'unknown')}` |",
+            f"| RECON manifest | `{manifest['recon']['status']}` · {manifest['recon']['manifest_evidence_count']} evidence record(s) |",
+            f"| DEX index | `{manifest['dex_analysis']['status']}` · {manifest['dex_analysis'].get('indexed_entries', 0)}/{manifest['dex_analysis'].get('dex_entry_count', 0)} indexed entries |",
+            f"| JADX | `{manifest['jadx']['status']}` · {manifest['jadx'].get('source_file_count', 0)} source file(s) reported |",
+            f"| SPECTRE reachability | {manifest['reachability']['observation_count']} observation(s), {manifest['reachability']['truncated_observations']} truncated |",
+            f"| Native libraries | {manifest['apk_inventory'].get('native_libraries', {}).get('count', 0)} inventoried; not analyzed |",
+            f"| Assets / resources | {manifest['apk_inventory'].get('assets', {}).get('count', 0)} asset(s), {manifest['apk_inventory'].get('resources', {}).get('count', 0)} resource(s); inventory only |",
+            "",
+            "### Unsupported or inventory-only capabilities",
+            "",
+            "| Capability | Status | Limitation |",
+            "|---|---|---|",
+            *limitations,
+            "",
+            "### Machine-readable manifest",
+            "",
+            "```json",
+            encoded,
+            "```",
+            "",
+            "A missing or truncated entry is not evidence that the corresponding code or behavior is absent.",
+        ]) + "\\n"
 
     # -- helpers --------------------------------------------------------------------
 
