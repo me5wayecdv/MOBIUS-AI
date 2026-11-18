@@ -290,7 +290,8 @@ def test_nexus_receives_and_records_persisted_source_excerpt(session, store, fut
 
     assert result["mode"] == "model_gateway"
     assert provider.calls == 1
-    assert source_text in json.dumps(provider.last_call, default=str)
+    packaged = json.loads(provider.last_call["user_payload"]["input"])
+    assert packaged["source_snippets"][0]["text"] == source_text
     decision = session.query(DecisionRow).filter_by(
         investigation_id=scan_id, action="generate_hypotheses"
     ).one()
