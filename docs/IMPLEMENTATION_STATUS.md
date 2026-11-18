@@ -122,8 +122,8 @@ Reachability is a **graph property**, and it is the only thing SPECTRE claims to
 | Verdict path | What it means | What it does *not* mean |
 |---|---|---|
 | `reached`, no guard → `confirmed` | An exported entry point reaches a security-relevant operation with no caller check on the path | That attacker-controlled data reaches it — there is no data flow analysis |
-| `reached`, guard on the path → `REJECTED` / `guarded-by-caller-check` | A catalogued guard call (matched by class and method name) occurs on a path method | That the check is effective, runs before the sink, or constrains the caller: adequacy is not proven (no CFG, no data flow). Under review |
 | exhaustive `not-reached` → manual review / `insufficient_evidence` | The complete traversal found no catalogued sink on direct calls (kept as a bounded-search observation) | That the component is safe: unmodelled catalogue entries, callbacks, inter-component flows, reflection, native code, multi-dex. Allsafe v1.6 showed this; real recall is UNESTABLISHED |
+| `reached`, guard call on the path → manual review / `insufficient_evidence` (guard kept as observation) | A catalogued guard call (by class and method name) occurs on the path | That the check is enforced, ignores its result, runs before the sink or constrains the caller: unproven, so neither confirmed nor rejected |
 | truncated / no entry point / no index → `insufficient_evidence` | The search did not finish, or could not start | **Nothing about safety.** Treated as missing evidence, never as a negative |
 
 The graph holds application classes only. A call into the framework is recorded as a boundary

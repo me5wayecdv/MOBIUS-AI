@@ -407,9 +407,11 @@ is not known to be complete. Real-APK validation (Allsafe v1.6) showed lifecycle
 direct-call search "rejecting" 4 known-vulnerable components.
 
 **What the search deliberately cannot see.** No data flow: reachability to a *sink
-invocation* is not proof that attacker-controlled data reaches it. No CFG: a guard anywhere
-in the same method counts, even if it executes after the sink (conservative — it biases
-toward not confirming, recorded as R-21). No reflection, no obfuscated dynamic dispatch, no
+invocation* is not proof that attacker-controlled data reaches it. No CFG: a guard-like call
+(matched by class and method name) anywhere on the path may execute after the sink, be ignored,
+or only read an id. **Amended (conservative draft):** such a call no longer refutes; it leaves
+`caller_check_absent` undetermined (`None`), so the finding goes to manual review with the guard
+kept as an observation (R-21). No reflection, no obfuscated dynamic dispatch, no
 framework internals (the graph holds application classes only, so the search cannot walk
 the framework and manufacture a path). These are false-negative sources, and they are why
 the sink catalogue was tightened mid-development: `SharedPreferences.getString` and

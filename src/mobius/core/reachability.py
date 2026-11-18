@@ -133,8 +133,13 @@ class ReachabilityResult:
         # "No caller check on the path" is only meaningful if there *is* a path. On a search
         # that found no sink this was reporting `True` - a claim about a call chain that does
         # not exist. Absence of a path cannot establish absence of a check.
-        if self.status == "reached" and not self.truncated:
-            caller_check_absent: bool | None = not self.guarded
+        # A guard CALL on the path (matched by class and method name) never refutes "no caller
+        # check": the call may be ignored, run after the sink, only read an id (getCallingUid)
+        # or guard a different branch. Without CFG and data flow, enforcement is unproven, so
+        # a guarded path is undetermined (None), recorded as an observation for a human.
+        # Only an unguarded path establishes "absent"; nothing here establishes enforcement.
+        if self.status == "reached" and not self.truncated and not self.guarded:
+            caller_check_absent: bool | None = True
         else:
             caller_check_absent = None
         return {
@@ -147,10 +152,18 @@ class ReachabilityResult:
             return "no lifecycle entry point found for this component in the application code"
         if self.status == "reached":
             hops = " -> ".join(f"{m.class_name.rsplit('.', 1)[-1]}.{m.name}" for m in self.path)
-            return (
+            text = (
                 f"reaches {self.sink.id} ({self.sink.class_descriptor}) in {len(self.path) - 1} "
                 f"call hop(s): {hops}"
             )
+            if self.guards:
+                ids = ", ".join(g.id for g in self.guards)
+                text += (
+                    f"; guard call(s) observed on the path ({ids}): a call is not proof of "
+                    "enforcement (it may be ignored, run after the sink, or only read an id), "
+                    "so caller verification is not determined"
+                )
+            return text
         if self.status == "truncated":
             return (
                 f"search truncated after {self.visited} method(s) without finding a sink; "

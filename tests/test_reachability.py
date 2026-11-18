@@ -55,7 +55,7 @@ def test_sink_reached_through_one_internal_hop():
     assert result.explain().startswith("reaches file-write")
 
 
-def test_guard_on_the_path_refutes_caller_check_absent():
+def test_guard_on_the_path_leaves_caller_check_undetermined():
     root, helper = M("com.x.A", "onCreate"), M("com.x.A", "writeFile")
     graph, boundary = build(
         edges={root: [helper], helper: []},
@@ -67,7 +67,8 @@ def test_guard_on_the_path_refutes_caller_check_absent():
     assert [g.id for g in result.guards] == ["check-calling-permission"]
     attrs = result.attributes()
     assert attrs["sink_reachable"] is True
-    assert attrs["caller_check_absent"] is False
+    assert attrs["caller_check_absent"] is None  # a guard call is not proof of enforcement
+    assert "not proof of enforcement" in result.explain()
 
 
 def test_guard_off_the_path_is_not_counted():

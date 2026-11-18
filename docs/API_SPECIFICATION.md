@@ -172,6 +172,14 @@ Evaluates a confirmation gate over supplied attributes and persists a finding pl
   "discovered_by": "RECON", "validated_by": "VERITAS" }
 ```
 
+**Operator-asserted authority.** The attribute values here are supplied by the caller and are
+not derived by the engine; a clause the caller sets to `false` rejects with the stated or mapped
+reason. This endpoint is unchanged. It is an operator assertion, not engine evidence, and the
+resulting finding does not show that the engine verified the attribute. Likewise the
+`permission` clause only tests that a manifest permission string is present: its protection
+level (`normal`, `dangerous`, `signature`) is not resolved, so a present permission is not
+proof that another app cannot obtain it.
+
 Responses are `confirmed`, `rejected` (with a `rejection_reason` from a fixed taxonomy) or
 `insufficient_evidence` — the last when some clauses were not established, which is **not** the
 same as "safe". With only RECON's attributes the result is always `insufficient_evidence`: RECON
@@ -207,8 +215,12 @@ only when a path was found. It is never `false`: a search that finds no catalogu
 or truncated) yields `null`, which becomes `insufficient_evidence` / manual review. The bounded
 search fact stays on the finding as an observation (`reachability: not-reached`); it is not a
 refutation, because the sink catalogue, callbacks, inter-component flows, reflection and data flow
-are not modelled. Only independent refuting evidence could reject, and the engine has none. `rejection_reason` is `not-reachable` or `guarded-by-caller-check` — a guard refutes
-the "no caller check" clause, it does not prove the component safe.
+are not modelled. A guard-like call on the path (matched by class and method name) is recorded in
+`guards` but does **not** refute the "no caller check" clause: `caller_check_absent` is `null`
+and the verdict is `insufficient_evidence` (manual review), never `confirmed` and never
+`rejected`. Only an unguarded path gives `caller_check_absent: true`. SPECTRE no longer issues
+`not-reachable` or `guarded-by-caller-check`; only independent refuting evidence could reject,
+and the engine has none.
 
 #### `POST /scans/{id}/nexus`
 Drives the investigation from the frontier to `CLOSED` within a step budget. Requires
