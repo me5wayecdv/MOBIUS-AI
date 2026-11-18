@@ -417,6 +417,114 @@ def generate_nexus_hypotheses(
     ).generate(scan_id, component=component)
 
 
+def _jadx_lookup(session):
+    """Build a fail-closed lookup over the configured per-artifact JADX cache."""
+    from ..services.code_lookup import JadxCodeLookup
+    from ..services.tool_runner import ToolRunner
+    from ..adapters.jadx import build_jadx_tool_spec
+
+    ctx = get_context()
+    runner = ToolRunner(
+        workspace_root=ctx.settings.artifact_root / "tool-workspaces",
+        backend=None,  # Until a verified digest-pinned OCI backend is registered, cache misses fail closed.
+        tools=(build_jadx_tool_spec(),),
+    )
+    return JadxCodeLookup(
+        session=session,
+        store=ctx.store,
+        cache_root=ctx.settings.artifact_root / "jadx-cache",
+        runner=runner,
+    )
+
+
+def _jadx_http_error(exc):
+    """Map lookup failures to stable HTTP errors without hiding tool/cache failures."""
+    from ..adapters.jadx import JadxCacheError, JadxError, JadxExecutionFailed, JadxUnavailable
+
+    if isinstance(exc, JadxUnavailable):
+        raise HTTPException(status_code=503, detail={"code": "JADX_BACKEND_UNAVAILABLE", "detail": exc.detail})
+    if isinstance(exc, JadxCacheError):
+        raise HTTPException(status_code=409, detail={"code": "JADX_CACHE_INVALID", "detail": exc.detail})
+    if isinstance(exc, JadxExecutionFailed):
+        raise HTTPException(status_code=422, detail={"code": "JADX_EXECUTION_FAILED", "detail": exc.detail})
+    if isinstance(exc, JadxError):
+        code = exc.status.upper().replace("-", "_")
+        status = 404 if exc.status in {"source_unavailable", "class_not_found", "source_not_found"} else 422
+        raise HTTPException(status_code=status, detail={"code": f"JADX_{code}", "detail": exc.detail})
+    raise exc
+
+
+@router.post("/scans/{scan_id}/code/decompile", tags=["code"])
+def decompile_scan_code(
+    scan_id: str,
+    session=Depends(_session),
+    who: str = Depends(analyst_id),
+):
+    """Decompile the authorized APK through the configured isolated tool boundary."""
+    scan = _require_scan_owner(session, scan_id, who)
+    application = session.get(ApplicationRow, scan.application_id)
+    authorization = session.get(AuthorizationRow, scan.authorization_id) if scan.authorization_id else None
+    if (
+        application is None or authorization is None
+        or authorization.apk_sha256 != application.sha256
+        or authorization.revoked_at is not None
+        or authorization.expires_at <= utcnow()
+    ):
+        raise HTTPException(status_code=409, detail={"code": "AUTHORIZATION_NOT_LIVE"})
+    try:
+        return _jadx_lookup(session).decompile(scan_id)
+    except Exception as exc:
+        _jadx_http_error(exc)
+
+
+@router.get("/scans/{scan_id}/code/classes", tags=["code"])
+def get_code_classes(
+    scan_id: str,
+    prefix: str | None = Query(default=None, max_length=300),
+    limit: int = Query(default=200, ge=1, le=5000),
+    session=Depends(_session),
+    who: str = Depends(analyst_id),
+):
+    _require_scan_owner(session, scan_id, who)
+    try:
+        return _jadx_lookup(session).classes(scan_id, prefix=prefix, limit=limit)
+    except Exception as exc:
+        _jadx_http_error(exc)
+
+
+@router.get("/scans/{scan_id}/code/methods", tags=["code"])
+def get_code_methods(
+    scan_id: str,
+    class_name: str = Query(min_length=1, max_length=500),
+    limit: int = Query(default=200, ge=1, le=500),
+    session=Depends(_session),
+    who: str = Depends(analyst_id),
+):
+    _require_scan_owner(session, scan_id, who)
+    try:
+        return _jadx_lookup(session).methods(scan_id, class_name=class_name, limit=limit)
+    except Exception as exc:
+        _jadx_http_error(exc)
+
+
+@router.get("/scans/{scan_id}/code/source", tags=["code"])
+def get_code_source(
+    scan_id: str,
+    path: str = Query(min_length=1, max_length=1000),
+    start_line: int = Query(default=1, ge=1),
+    end_line: int = Query(default=40, ge=1),
+    session=Depends(_session),
+    who: str = Depends(analyst_id),
+):
+    _require_scan_owner(session, scan_id, who)
+    try:
+        return _jadx_lookup(session).source(
+            scan_id, path=path, start_line=start_line, end_line=end_line
+        )
+    except Exception as exc:
+        _jadx_http_error(exc)
+
+
 @router.get("/scans/{scan_id}/evidence-package", tags=["scans"])
 def get_evidence_package(
     scan_id: str,
