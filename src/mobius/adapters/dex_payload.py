@@ -82,7 +82,7 @@ class DexIndexDTO(StrictModel):
     boundary: list[BoundaryDTO] = Field(max_length=50000)
     class_sources: dict[str, list[str]]
     method_sources: list[MethodSourcesDTO]
-    data_flows: list[DataFlowDTO] = Field(default_factory=list, max_length=5000)
+    data_flows: list[DataFlowDTO] = Field(default_factory=list, max_length=1000)
     data_flow_methods: int = Field(default=0, ge=0, le=50000)
     data_flow_truncated_methods: int = Field(default=0, ge=0, le=50000)
     data_flow_complete: bool = True
