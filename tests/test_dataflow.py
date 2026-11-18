@@ -164,3 +164,32 @@ def test_tracks_intent_uri_through_to_string_to_webview_sink():
     assert result.status == "flow-found"
     assert result.findings[0].source_id == "intent-data"
     assert result.findings[0].sink_id == "webview-load"
+
+
+
+def test_taint_reaches_sink_after_cfg_join_from_source_predecessor():
+    flow = MethodFlow(M(), (
+        FlowBlock(0, (), (10, 20)),
+        FlowBlock(10, (source(), move_result()), (30,)),
+        FlowBlock(20, (), (30,)),
+        FlowBlock(30, (sink(30, 2),), ()),
+    ), 0)
+
+    result = analyse_method(flow)
+
+    assert result.status == "flow-found"
+    assert result.findings[0].sink_offset == 30
+
+
+def test_taint_does_not_cross_between_unconnected_cfg_branches():
+    flow = MethodFlow(M(), (
+        FlowBlock(0, (), (10, 20)),
+        FlowBlock(10, (source(), move_result()), ()),
+        FlowBlock(20, (sink(20, 2),), ()),
+    ), 0)
+
+    result = analyse_method(flow)
+
+    assert result.status == "no-flow"
+    assert result.findings == ()
+    assert result.complete is True
