@@ -5,6 +5,7 @@ import hashlib
 import json
 from dataclasses import asdict, dataclass
 from typing import Any
+from threading import Event, Lock
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -16,6 +17,19 @@ from ..core.ids import IdPrefix, new_id
 from ..core.schemas import PoCTestPlan
 from .evidence import EvidenceService
 from .poc_runner import PoCExecutionResult, SafePoCRunner
+
+_CANCEL_EVENTS: dict[str, Event] = {}
+_CANCEL_LOCK = Lock()
+
+
+def request_poc_cancel(plan_id: str) -> bool:
+    """Signal an active plan in this process; cancellation is cooperative between steps."""
+    with _CANCEL_LOCK:
+        event = _CANCEL_EVENTS.get(plan_id)
+        if event is None:
+            return False
+        event.set()
+        return True
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,7 +52,16 @@ class PoCExecutionService:
         self.artifact_store = artifact_store
 
     def execute_and_persist(self, plan: PoCTestPlan) -> PersistedPoCExecution:
-        result = SafePoCRunner(self.session).run(plan)
+        cancel_event = Event()
+        with _CANCEL_LOCK:
+            if plan.id in _CANCEL_EVENTS:
+                raise RuntimeError("a PoC execution with this plan ID is already running")
+            _CANCEL_EVENTS[plan.id] = cancel_event
+        try:
+            result = SafePoCRunner(self.session).run(plan, cancel_check=cancel_event.is_set)
+        finally:
+            with _CANCEL_LOCK:
+                _CANCEL_EVENTS.pop(plan.id, None)
         input_json = plan.model_dump(mode="json")
         output_json = asdict(result)
         input_bytes = json.dumps(input_json, sort_keys=True, separators=(",", ":")).encode()
@@ -78,11 +101,14 @@ class PoCExecutionService:
             id=run_id,
             investigation_id=plan.investigation_id,
             plan_id=plan.id,
+            approval_id=plan.approval_id,
+            cancel_requested_at=utcnow() if result.status == "cancelled" else None,
+            cleanup_json={"steps": list(result.cleanup_results)},
             authorization_id=plan.authorization_id,
             target_sha256=plan.target_sha256,
             hypothesis_ids=list(plan.hypothesis_ids),
             status=result.status,
-            exit_status="success" if result.status == "passed" else "failure",
+            exit_status={"passed": "success", "failed": "failure", "cancelled": "cancelled", "timed_out": "timed_out"}[result.status],
             input_sha256=input_sha,
             output_sha256=output_sha,
             input_json=input_json,
