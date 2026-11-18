@@ -178,7 +178,7 @@ class JadxAdapter:
                 else:
                     with input_path.open("xb") as stream:
                         stream.write(artifact)
-                    input_path.chmod(0o400)
+                    input_path.chmod(0o444)
 
                 output_path = workspace / output_dir_name
                 if output_path.exists() or output_path.is_symlink():
