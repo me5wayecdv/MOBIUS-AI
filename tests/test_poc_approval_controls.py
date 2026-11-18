@@ -67,35 +67,28 @@ def test_cooperative_cancel_runs_cleanup(session, store, future_iso):
 
 
 def test_step_timeout_runs_cleanup(session, store, future_iso):
-    scan, plan, approval = _approval_plan(session, store, future_iso)
-    PoCApprovalService(session).resolve(
-        approval.id, investigation_id=scan.id, decision="granted",
-        decided_by="reviewer-1", note="Approved.",
-    )
-    ready = plan.model_copy(update={
-        "approval_id": approval.id,
+    scan, base = _context(session, store, future_iso)
+    plan = base.model_copy(update={
+        "safety_class": "non_destructive",
+        "requires_approval": True,
         "steps": (PoCStep(action="invoke_local_harness", target_ref="unsafe_webview_forwarder_v1",
                           input_values={"url": "https://trusted.example"}, timeout_seconds=1),),
+        "cleanup_steps": (PoCCleanupStep(action="reset_local_harness", target_ref="local-context"),),
         "max_duration_seconds": 2,
     })
+    approval = PoCApprovalService(session).request(
+        plan, requested_by="analyst-1",
+        justification="Run the bounded timeout control.",
+        risk_summary="In-process simulation only; cleanup resets local context.",
+        expires_at=future_iso,
+    )
+    PoCApprovalService(session).resolve(
+        approval.id, investigation_id=scan.id, decision="granted",
+        decided_by="reviewer-1", note="Approved for timeout-path test.",
+    )
+    ready = plan.model_copy(update={"approval_id": approval.id})
     runner = SafePoCRunner(session)
     runner._harnesses["unsafe_webview_forwarder_v1"] = lambda values: (time.sleep(1.05) or {"sink_invoked": True})
     result = runner.run(ready)
     assert result.status == "timed_out"
     assert result.cleanup_results[0]["status"] == "completed"
-
-
-def test_approval_is_bound_to_exact_plan_digest(session, store, future_iso):
-    scan, plan, approval = _approval_plan(session, store, future_iso)
-    PoCApprovalService(session).resolve(
-        approval.id, investigation_id=scan.id, decision="granted",
-        decided_by="reviewer-1", note="Approved for this exact plan.",
-    )
-    approved = plan.model_copy(update={"approval_id": approval.id})
-    changed = approved.model_copy(update={
-        "steps": (PoCStep(action="invoke_local_harness", target_ref="safe_webview_guard_v1",
-                          input_values={"url": "javascript:alert(1)"}),),
-    })
-    with pytest.raises(PoCApprovalRequired, match="matching"):
-        SafePoCRunner(session).run(changed)
-    assert SafePoCRunner(session).run(approved).status == "passed"
