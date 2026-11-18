@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import sessionmaker
 
 from mobius.adapters.events import SqlEventStore
-from mobius.adapters.models import EventRow
+from mobius.adapters.models import EventRow, InvestigationRow
 from mobius.core.enums import InvestigationState
 from mobius.services.intake import IntakeService
+
+PG_URL = os.environ.get("MOBIUS_TEST_PG_URL")
 
 
 @pytest.fixture()
@@ -118,3 +123,100 @@ def test_start_emits_started_then_transition(session, store, future_iso):
     types = [e.type for e in SqlEventStore(session).read_after(inv.id, 0)]
     assert types == ["investigation_started", "investigation_updated"]
     assert intake.get_investigation(inv.id).state is InvestigationState.RECON
+
+
+def test_stale_identity_map_cannot_reuse_sequence(session, scan):
+    """Another session's committed increment must not be re-allocated by this one.
+
+    Regression test: the counter was read through this session's identity map, so after
+    a second session emitted and committed, this session's next emit re-used the stale
+    ``event_seq`` and collided on UNIQUE(investigation_id, seq). The allocation is now
+    one atomic UPDATE...RETURNING in the database.
+    """
+    store = SqlEventStore(session)
+    assert store.emit(scan, "before", {}) == 1
+    # Prime the identity map with the counter value this session has seen.
+    primed = session.get(InvestigationRow, scan)
+    assert primed.event_seq == 1
+
+    factory = sessionmaker(bind=session.get_bind(), expire_on_commit=False, future=True)
+    other = factory()
+    try:
+        assert SqlEventStore(other).emit(scan, "other_session", {}) == 2
+        other.commit()
+    finally:
+        other.close()
+
+    # Old behavior allocated 2 again here and raised IntegrityError on flush.
+    assert store.emit(scan, "after", {}) == 3
+    session.flush()
+    assert store.current_seq(scan) == 3
+    assert [e.seq for e in store.read_after(scan, after_seq=0)] == [1, 2, 3]
+
+
+@pytest.mark.postgres
+@pytest.mark.skipif(not PG_URL, reason="set MOBIUS_TEST_PG_URL to run PostgreSQL event concurrency tests")
+def test_postgres_concurrent_emits_allocate_unique_monotonic_sequences(tmp_path, future_iso):
+    """Two sessions racing on one investigation get a gap-free, unique sequence."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from conftest import make_apk
+    from mobius.adapters.db import make_engine, make_session_factory
+    from mobius.adapters.models import Base
+    from mobius.services.artifacts import ArtifactStore
+
+    engine = make_engine(PG_URL)
+    Base.metadata.create_all(engine)
+    factory = make_session_factory(engine)
+    artifact_store = ArtifactStore(tmp_path / "pg-event-artifacts")
+    setup = factory()
+    try:
+        intake = IntakeService(setup, artifact_store)
+        app, _ = intake.create_application(make_apk(), "pg-events.apk", uploaded_by="events-pg-test")
+        auth = intake.create_authorization(
+            apk_sha256=app.sha256,
+            target_package="com.example",
+            scope_text="PostgreSQL concurrency test for atomic event sequence allocation.",
+            statement="I own this fixture APK",
+            max_intensity=0,
+            granted_by="events-pg-test",
+            expires_at=future_iso,
+        )
+        inv = intake.create_investigation(
+            application_id=app.id,
+            authorization_id=auth.id,
+            objective="Prove concurrent event emits allocate unique monotonic sequences",
+            intensity=0,
+            created_by="events-pg-test",
+        )
+        scan_id = inv.id
+        setup.commit()
+    finally:
+        setup.close()
+
+    def emit_batch(_index):
+        racing = factory()
+        try:
+            racing_store = SqlEventStore(racing)
+            seqs = [racing_store.emit(scan_id, "race", {}) for _ in range(10)]
+            racing.commit()
+            return seqs
+        finally:
+            racing.close()
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(emit_batch, range(2)))
+
+    allocated = sorted(seq for batch in results for seq in batch)
+    assert allocated == list(range(1, 21))
+
+    verify = factory()
+    try:
+        row = verify.get(InvestigationRow, scan_id)
+        assert row.event_seq == 20
+        verify_store = SqlEventStore(verify)
+        assert verify_store.current_seq(scan_id) == 20
+        assert verify_store.count(scan_id) == 20
+    finally:
+        verify.close()
+        engine.dispose()

@@ -4,14 +4,18 @@ Every state change appends exactly one event, in the same transaction. That is t
 mechanism behind "the frontend must not fabricate activity" (docs/EVENT_ARCHITECTURE.md 1):
 if a mutation produced no event, the UI would have to guess.
 
-Sequence numbers are allocated by incrementing ``investigations.event_seq`` under the row
-lock, then inserted. Two consequences worth stating:
+Sequence numbers are allocated with one atomic
+``UPDATE ... SET event_seq = event_seq + 1 ... RETURNING event_seq`` and then inserted.
+Two consequences worth stating:
 
 * ``UNIQUE(investigation_id, seq)`` is the real guarantee. If two writers raced, the
   constraint would reject the loser rather than silently duplicate a sequence number.
-* On SQLite the row lock is a database-level write lock, so this is serialised anyway.
-  On Postgres the ``SELECT ... FOR UPDATE`` on the counter row is what makes it correct
-  with concurrent workers.
+* The increment is atomic in the database itself, so a stale ORM snapshot of the
+  investigation row in this session's identity map can never resurrect an old counter
+  value. The previous ``SELECT ... FOR UPDATE`` + ORM attribute increment read through
+  the identity map: if another session had already loaded or bumped the row, this
+  session kept its stale ``event_seq`` and collided on the unique constraint instead of
+  allocating the next sequence.
 """
 
 from __future__ import annotations
@@ -20,7 +24,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Sequence
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from .models import EventRow, InvestigationRow
@@ -55,18 +59,23 @@ class SqlEventStore:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def _lock_counter(self, investigation_id: str) -> InvestigationRow:
-        # with_for_update() is a no-op on SQLite and a row lock on Postgres. Either way
-        # the UNIQUE constraint is the backstop.
+    def _next_seq(self, investigation_id: str) -> int:
+        # One atomic UPDATE is the allocator: the database increments and returns the
+        # counter in a single statement, so concurrent sessions serialize on the row
+        # write lock and no session can allocate from a stale identity-map snapshot.
+        # synchronize_session="fetch" expires any locally cached investigation row so a
+        # later flush cannot write the pre-increment value back over the new counter.
         stmt = (
-            select(InvestigationRow)
+            update(InvestigationRow)
             .where(InvestigationRow.id == investigation_id)
-            .with_for_update()
+            .values(event_seq=func.coalesce(InvestigationRow.event_seq, 0) + 1)
+            .returning(InvestigationRow.event_seq)
+            .execution_options(synchronize_session="fetch")
         )
-        row = self._session.execute(stmt).scalar_one_or_none()
-        if row is None:
+        seq = self._session.execute(stmt).scalar_one_or_none()
+        if seq is None:
             raise EventStoreError(f"unknown investigation {investigation_id}")
-        return row
+        return int(seq)
 
     def emit(
         self,
@@ -82,13 +91,11 @@ class SqlEventStore:
         if not event_type:
             raise EventStoreError("event_type must not be empty")
 
-        row = self._lock_counter(investigation_id)
-        row.event_seq = int(row.event_seq or 0) + 1
-        self._session.flush()
+        seq = self._next_seq(investigation_id)
 
         ev = EventRow(
             investigation_id=investigation_id,
-            seq=row.event_seq,
+            seq=seq,
             type=event_type,
             payload=payload or {},
             actor=actor,
