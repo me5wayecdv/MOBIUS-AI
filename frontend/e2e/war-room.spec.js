@@ -90,7 +90,8 @@ test("D-056: upload → investigation → evidence → graph → PoC → report;
   expect(report.markdown).toContain("Evidence");
   await page.reload();
   await expect(page.locator("#report-viewer")).toContainText("Outcome");
-  await expect(page.locator("#report-viewer h2, #report-viewer h3")).toHaveCount(9,{timeout:15000});
+  await expect(page.locator("#report-viewer")).toContainText("Code coverage and limitations manifest");
+  await expect(page.locator("#report-viewer h2, #report-viewer h3")).toHaveCount(10,{timeout:15000});
   await expect(page.locator("#report-viewer table").first()).toBeVisible();
   await page.screenshot({ path: shots + "/d056-05-report.png", fullPage: true });
 
