@@ -134,7 +134,7 @@ class CoverageManifestBuilder:
             "reachability": reachability,
             "analysis_budgets": {
                 "dex_max_methods_default": MAX_METHODS,
-                "dex_payload_max_entries": 64,
+                "dex_manifest_max_entries": _MAX_INVENTORY_ENTRIES,
                 "apk_inventory_max_entries": _MAX_INVENTORY_ENTRIES,
                 "archive_name_samples_per_category": _SAMPLE_LIMIT,
                 "jadx_source_file_sample": _JADX_SAMPLE_LIMIT,
@@ -175,11 +175,12 @@ class CoverageManifestBuilder:
                     "archive_entry_count": len(all_infos),
                     "processed_entry_count": len(infos),
                     "truncated": truncated,
+                    "dex_entry_count": len(dex_infos),
                     "dex_entries": [
                         {"entry": item.filename, "size_bytes": item.file_size}
-                        for item in dex_infos[:64]
+                        for item in dex_infos
                     ],
-                    "dex_entries_truncated": len(dex_infos) > 64,
+                    "dex_entries_truncated": truncated,
                     "native_libraries": {
                         "count": len(native_infos),
                         "sample": [item.filename for item in native_infos[:_SAMPLE_LIMIT]],
