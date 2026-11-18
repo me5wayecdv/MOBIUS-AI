@@ -56,6 +56,7 @@ def upgrade() -> None:
             name="fk_graph_edge_target_same_investigation",
         ),
         sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint("investigation_id", "id", name="uq_graph_edge_investigation_id"),
         sa.UniqueConstraint(
             "investigation_id", "source_id", "target_id", "relation",
             name="uq_graph_edge_identity",

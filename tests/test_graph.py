@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import pytest
 from pydantic import ValidationError
+from sqlalchemy.exc import IntegrityError
 
-from mobius.adapters.models import ObservationRow
+from mobius.adapters.models import GraphEdgeRow, ObservationRow
 from mobius.core.enums import AssertionLevel, EvidenceKind, Fidelity, ObservationKind
 from mobius.core.ids import IdPrefix, new_id
 from mobius.core.schemas import GraphEdge, GraphNode
@@ -165,6 +166,34 @@ def test_graph_service_rejects_edge_endpoint_from_another_investigation(
             investigation_id=first, source_id=local.id, target_id=foreign.id,
             relation="calls", assertion=AssertionLevel.OBSERVED,
         ))
+
+
+def test_database_composite_foreign_key_blocks_cross_investigation_edge(session, store, future_iso):
+    first = _investigation(session, store, future_iso)
+    second = _investigation(session, store, future_iso)
+    service = GraphPersistenceService(session)
+    local = service.add_node(GraphNode(
+        investigation_id=first, node_type="component", label="Local",
+        ref="local-db", assertion=AssertionLevel.OBSERVED,
+    ))
+    foreign = service.add_node(GraphNode(
+        investigation_id=second, node_type="component", label="Foreign",
+        ref="foreign-db", assertion=AssertionLevel.OBSERVED,
+    ))
+    invalid = GraphEdgeRow(
+        id=new_id(IdPrefix.GRAPH_EDGE),
+        investigation_id=first,
+        source_id=local.id,
+        target_id=foreign.id,
+        relation="calls",
+        assertion=AssertionLevel.OBSERVED.value,
+        rationale=None,
+        created_at="2026-11-18T00:00:00Z",
+    )
+    session.add(invalid)
+    with pytest.raises(IntegrityError):
+        session.flush()
+    session.rollback()
 
 
 def test_graph_is_empty_for_investigation_without_persisted_source_rows(

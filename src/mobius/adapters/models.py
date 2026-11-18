@@ -412,6 +412,7 @@ class GraphNodeRow(Base):
 class GraphEdgeRow(Base):
     __tablename__ = "graph_edges"
     __table_args__ = (
+        UniqueConstraint("investigation_id", "id", name="uq_graph_edge_investigation_id"),
         UniqueConstraint(
             "investigation_id", "source_id", "target_id", "relation",
             name="uq_graph_edge_identity",
