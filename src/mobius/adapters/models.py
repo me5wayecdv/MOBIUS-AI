@@ -24,6 +24,7 @@ from sqlalchemy import (
     CheckConstraint,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
@@ -142,7 +143,10 @@ class EventRow(Base):
 
 class EvidenceRow(Base):
     __tablename__ = "evidence"
-    __table_args__ = (UniqueConstraint("investigation_id", "sha256", name="uq_evidence_sha"),)
+    __table_args__ = (
+        UniqueConstraint("investigation_id", "sha256", name="uq_evidence_sha"),
+        UniqueConstraint("investigation_id", "id", name="uq_evidence_investigation_id"),
+    )
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     investigation_id: Mapped[str] = mapped_column(
         String(40), ForeignKey("investigations.id"), nullable=False
@@ -386,6 +390,99 @@ class WorkerJobRow(Base):
     applied_at: Mapped[str | None] = mapped_column(String(40))
 
 
+class GraphNodeRow(Base):
+    __tablename__ = "graph_nodes"
+    __table_args__ = (
+        UniqueConstraint("investigation_id", "id", name="uq_graph_node_investigation_id"),
+        UniqueConstraint("investigation_id", "node_type", "ref", name="uq_graph_node_identity"),
+        Index("ix_graph_nodes_investigation_type", "investigation_id", "node_type"),
+    )
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    investigation_id: Mapped[str] = mapped_column(
+        String(40), ForeignKey("investigations.id"), nullable=False
+    )
+    node_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    label: Mapped[str] = mapped_column(Text, nullable=False)
+    ref: Mapped[str | None] = mapped_column(String(1000))
+    assertion: Mapped[str] = mapped_column(String(20), nullable=False)
+    attributes: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+
+
+class GraphEdgeRow(Base):
+    __tablename__ = "graph_edges"
+    __table_args__ = (
+        UniqueConstraint(
+            "investigation_id", "source_id", "target_id", "relation",
+            name="uq_graph_edge_identity",
+        ),
+        ForeignKeyConstraint(
+            ["investigation_id", "source_id"],
+            ["graph_nodes.investigation_id", "graph_nodes.id"],
+            name="fk_graph_edge_source_same_investigation",
+        ),
+        ForeignKeyConstraint(
+            ["investigation_id", "target_id"],
+            ["graph_nodes.investigation_id", "graph_nodes.id"],
+            name="fk_graph_edge_target_same_investigation",
+        ),
+        Index("ix_graph_edges_investigation_source", "investigation_id", "source_id"),
+        Index("ix_graph_edges_investigation_target", "investigation_id", "target_id"),
+        CheckConstraint(
+            "assertion <> 'hypothesis' OR (rationale IS NOT NULL AND length(rationale) > 0)",
+            name="graph_hypothesis_states_why",
+        ),
+    )
+    id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    investigation_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    source_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    target_id: Mapped[str] = mapped_column(String(40), nullable=False)
+    relation: Mapped[str] = mapped_column(String(60), nullable=False)
+    assertion: Mapped[str] = mapped_column(String(20), nullable=False)
+    rationale: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[str] = mapped_column(String(40), nullable=False)
+
+
+class GraphNodeEvidenceRow(Base):
+    __tablename__ = "graph_node_evidence"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["investigation_id", "node_id"],
+            ["graph_nodes.investigation_id", "graph_nodes.id"],
+            name="fk_graph_node_evidence_node_same_investigation",
+        ),
+        ForeignKeyConstraint(
+            ["investigation_id", "evidence_id"],
+            ["evidence.investigation_id", "evidence.id"],
+            name="fk_graph_node_evidence_evidence_same_investigation",
+        ),
+    )
+    investigation_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    node_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    evidence_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+
+
+class GraphEdgeEvidenceRow(Base):
+    __tablename__ = "graph_edge_evidence"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["investigation_id", "edge_id"],
+            ["graph_edges.investigation_id", "graph_edges.id"],
+            name="fk_graph_edge_evidence_edge_same_investigation",
+        ),
+        ForeignKeyConstraint(
+            ["investigation_id", "evidence_id"],
+            ["evidence.investigation_id", "evidence.id"],
+            name="fk_graph_edge_evidence_evidence_same_investigation",
+        ),
+    )
+    investigation_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    edge_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+    evidence_id: Mapped[str] = mapped_column(String(40), primary_key=True)
+
+
+
+
 ALL_TABLES = (
     UserRow,
     AuthorizationRow,
@@ -402,4 +499,8 @@ ALL_TABLES = (
     ApprovalRow,
     ReportRow,
     WorkerJobRow,
+    GraphNodeRow,
+    GraphEdgeRow,
+    GraphNodeEvidenceRow,
+    GraphEdgeEvidenceRow,
 )

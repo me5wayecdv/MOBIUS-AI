@@ -3,13 +3,13 @@
 > A **vertical slice of the backend is implemented and tested**. GitHub Actions CI on main runs the full pytest suite on Python 3.11 and 3.12 with PostgreSQL 16 integration tests, plus a SQLite Alembic migration smoke test (PR #11).
 > RECON decodes real binary manifests, SPECTRE reads real dex and proves or fails to prove sink
 > reachability from an exported entry point, and NEXUS drives that work from the frontier to a
-> closed investigation. NEXUS can generate bounded hypotheses through the local model gateway when explicit per-investigation consent is present; deterministic fallback remains the default. D-026 adds an opt-in, advisory VERITAS review service on PR #39, not yet wired into scan orchestration. SPECTRE decides by deterministic graph
+> closed investigation. NEXUS can generate bounded hypotheses through the local model gateway when explicit per-investigation consent is present; deterministic fallback remains the default. D-026 adds an opt-in, advisory VERITAS review service (PR #39 merged), not yet wired into scan orchestration. SPECTRE decides by deterministic graph
 > search (ADR-022) and NEXUS is a dispatcher, not a planner (ADR-023). No frontend exists. No
 > confirmed true positive on real code has been produced yet. This file exists to prevent
 > exactly the failure mode the project forbids: describing a proposal as if it were a working system
 > (master prompt §23). Every row states its evidence; a row without a test is not `DONE`.
 
-**Last updated:** 2026-11-16 · **Status baseline:** main includes PR #38; D-025 decision provenance is partial; D-026 VERITAS review is in progress on PR #39.
+**Last updated:** 2026-11-18 · **Status baseline:** main includes PR #39 (merge commit 8f78071e); D-026 VERITAS advisory review is implemented but not yet wired into scan orchestration. D-030 is in progress on a feature branch.
 
 ---
 
@@ -49,7 +49,7 @@
 | VECTOR / mitmproxy | `NOT STARTED` | §4 | Blocked: no egress from sandbox |
 | VERITAS + gates | `PARTIAL` | `AGENT_DESIGN.md §6` | Gate evaluation, verdict persistence and `ValidatorMustDiffer` implemented and tested. PR #39 adds an opt-in independent reviewer for persisted findings. It requires a different requested and provider-resolved model from the producer, explicit investigation consent, evidence IDs confined to the finding, and stores a provenance-bearing advisory DecisionRow/event. It cannot change findings or verdicts; deterministic gates remain authoritative. Not yet wired into scan orchestration/UI; real Ollama/model-quality validation remains outstanding. `test_recon.py::test_recon_candidates_can_never_confirm` pins the honest outcome |
 | Authorisation enforcement (trigger) | `PARTIAL` | `DATABASE_SCHEMA.md §3.2` | SQL in `adapters/sql/scope_guard.sql`, installed by migration on PostgreSQL; PostgreSQL 16 trigger integration tests now execute in CI (PR #11). Deployment enforcement and production auth remain unverified. |
-| Attack graph (data model) | `DESIGNED` | `DATABASE_SCHEMA.md §3.8` | Tables `graph_nodes`/`graph_edges` **not created**; only `GraphNode`/`GraphEdge` domain models exist |
+| Attack graph persistence (D-030) | `PARTIAL` | `DATABASE_SCHEMA.md §3.8` | PR in progress: graph nodes/edges and normalized node/edge evidence links with composite same-investigation FKs; additive idempotent projection only. No correlation or chain reasoning in D-030. |
 | Attack graph (UI) | `NOT STARTED` | ADR-014 | The War Room lists findings and surface; the reachability *graph* view is not built |
 | ARCHIVIST (report) | `PARTIAL` | `REQUIREMENTS.md §1.9` | `services/archivist.py`: eight sections generated from stored rows, written as evidence, `POST/GET /scans/{id}/report`. **Markdown only** |
 | Evidence package builder (D-021) | `PARTIAL` | `TASK_BOARD.md`, `EVIDENCE_PACKAGE.md` | Bounded component-scoped packages include persisted observations, finding gate evidence, method/caller path identifiers, sink/guard references, evidence IDs/hashes and explicit truncation/coverage limits. Current SPECTRE evidence does not contain decompiled source text; D-012/JADX integration remains required before claiming source snippets are included. |

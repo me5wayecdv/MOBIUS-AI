@@ -456,7 +456,7 @@ class GraphNode(_Model):
 
 
 class GraphEdge(_Model):
-    id: str = Field(default_factory=lambda: new_id(IdPrefix.GRAPH_NODE), pattern=rf"^gph_{_ULID}$")
+    id: str = Field(default_factory=lambda: new_id(IdPrefix.GRAPH_EDGE), pattern=rf"^ged_{_ULID}$")
     investigation_id: str
     source_id: str
     target_id: str
