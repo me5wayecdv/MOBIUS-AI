@@ -1,12 +1,12 @@
 # Isolated DEX indexing worker
 
-**Status on this branch:** generic queue dispatch, DEX OCI tool registration, worker result schema, digest binding, and API apply endpoints are implemented with tests. The image still needs to be published and its immutable digest smoke-tested before shared SPECTRE execution is re-enabled.
+**Status:** generic queue dispatch, DEX OCI tool registration, worker result schema, digest binding, and API apply endpoints are implemented. A DEX image was published and smoke-tested in earlier work; dedicated worker-host deployment remains pending. The publication workflow is now manual-only and owner-gated.
 
 ## Job lifecycle
 
 1. An analyst-owned investigation must be in `SURFACE_READY` and have a live authorization bound to the uploaded APK SHA-256.
 2. `POST /api/v1/scans/{scan_id}/spectre/jobs` creates a `dex_index` row in the existing durable `worker_jobs` queue.
-3. The separately deployed worker claims only registered kinds: `recon_manifest` or `dex_index`. It reads the APK from the content-addressed, read-only artifact volume.
+3. The separately deployed worker claims only registered kinds: `recon_manifest`, `dex_index`, or `jadx_decompile`. It reads the APK from the content-addressed, read-only artifact volume.
 4. The worker stages the APK in its per-investigation workspace and invokes `mobius-dex-index` in a digest-pinned OCI image.
 5. The container runs without network, with read-only root, dropped capabilities, no-new-privileges, non-root UID, a bounded no-exec `/tmp` tmpfs, PID/memory/CPU/file-size/output/time limits, and only its investigation workspace mounted.
 6. Androguard enumerates each root-level `classes*.dex` entry, applies the existing method budget, and emits a versioned JSON call graph with DEX coverage, class/method provenance, boundary calls, and string constants.
@@ -46,7 +46,7 @@ The worker must use a dedicated DB role with SELECT/UPDATE only on `worker_jobs`
 
 ## Publication
 
-`.github/workflows/dex-worker-image.yml` builds and publishes `ghcr.io/<owner>/mobius-dex`, then runs the published image against the repository's real Apache-2.0-licensed DEX fixture with network disabled. The exact immutable image reference is emitted in the Actions summary. Do not set `MOBIUS_DEX_IMAGE` to a mutable tag.
+`.github/workflows/dex-worker-image.yml` is now `workflow_dispatch`-only and requires `owner_approval=APPROVED`; it has no automatic push trigger. Do not run it or publish a replacement image until the project owner explicitly approves. The existing digest below is a historical publication from earlier work, not authorization for a new push. Do not set `MOBIUS_DEX_IMAGE` to a mutable tag.
 
 Latest successful image build and real-DEX smoke test:
 
@@ -56,7 +56,7 @@ ghcr.io/me5wayecdv/mobius-dex@sha256:b0c1bd54df1e7b7c3e96066a3c3eb63f4d13ec19a88
 
 Set this exact value as `MOBIUS_DEX_IMAGE` on the dedicated worker host. The successful smoke test ran the published image with network disabled, read-only root, dropped capabilities, no-new-privileges, UID 65532, and a bounded no-exec `/tmp` tmpfs.
 
-Until that workflow succeeds and a worker deployment smoke test is completed, do not claim DEX parsing is operationally isolated in a deployed environment. The API's legacy synchronous SPECTRE and NEXUS paths remain disabled outside test/local development. The queued SPECTRE apply path is the intended route once the image digest and worker deployment are configured.
+Until a dedicated worker deployment smoke test is completed, do not claim DEX parsing is operationally isolated in a deployed environment. The API's legacy synchronous SPECTRE and NEXUS paths remain disabled outside test/local development. The queued SPECTRE apply path is the intended route once the image digest and worker deployment are configured.
 
 
 ## Image smoke-test correction
