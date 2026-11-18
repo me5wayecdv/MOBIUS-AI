@@ -11,12 +11,13 @@ import pytest
 
 from conftest import make_apk
 from mobius.adapters.dex import CodeIndex, DexCoverage
-from mobius.adapters.models import EvidenceRow, FrontierEntryRow
+from mobius.adapters.models import ApplicationRow, EvidenceRow, FrontierEntryRow
 from mobius.core.enums import EvidenceKind
 from mobius.core.ids import IdPrefix, new_id
 from mobius.core.reachability import CallGraph, CallTarget, MethodRef
 from mobius.services import errors
 from mobius.services.archivist import ArchivistService
+from mobius.services.coverage_manifest import CoverageManifestBuilder
 from mobius.services.intake import IntakeService
 from mobius.services.nexus import NexusService
 from mobius.services.recon import ReconService
@@ -341,3 +342,114 @@ def test_the_report_describes_a_closed_investigation_not_a_running_one(session, 
     assert "| Final state | `CLOSED` |" in text
     assert "| Stop reason | `completed` |" in text
     assert "`REPORTING`" not in text
+
+
+def _coverage_scan(session, store, future_iso) -> tuple[str, str]:
+    apk = make_apk(
+        manifest=MANIFEST,
+        extra={
+            "classes2.dex": b"secondary-dex-fixture",
+            "lib/arm64-v8a/libsample.so": b"native-fixture",
+            "assets/payload.json": b'{"fixture":true}',
+        },
+    )
+    intake = IntakeService(session, store)
+    app, _ = intake.create_application(apk, "coverage.apk", uploaded_by="analyst-1")
+    auth = intake.create_authorization(
+        apk_sha256=app.sha256,
+        target_package="com.example.demo",
+        scope_text="Static inventory and code coverage reporting only.",
+        statement="s",
+        max_intensity=2,
+        granted_by="analyst-1",
+        expires_at=future_iso,
+    )
+    investigation = intake.create_investigation(
+        application_id=app.id,
+        authorization_id=auth.id,
+        objective="Exercise the D-016 coverage manifest.",
+        intensity=0,
+        created_by="analyst-1",
+    )
+    intake.start(investigation.id)
+    ReconService(session, store).run(investigation.id)
+
+    root = MethodRef(CLS, "onCreate")
+    index = CodeIndex(
+        graph=CallGraph(edges={root: ()}),
+        boundary={root: (FO,)},
+        classes=(CLS,),
+        methods=1,
+        truncated=True,
+        dex_coverage=(
+            DexCoverage("classes.dex", "indexed", 42, classes=1, methods=1),
+            DexCoverage("classes2.dex", "failed", 21, error="fixture parse failure"),
+        ),
+    )
+    SpectreService(session, store, indexer=lambda _apk: index).analyse(investigation.id)
+    return investigation.id, app.id
+
+
+def test_coverage_manifest_reports_per_dex_native_assets_and_unsupported_capabilities(
+    session, store, future_iso
+):
+    scan_id, application_id = _coverage_scan(session, store, future_iso)
+    application = session.get(ApplicationRow, application_id)
+    manifest = CoverageManifestBuilder(session, store).build(scan_id)
+
+    assert manifest["schema_version"] == 1
+    assert manifest["overall_status"] == "partial"
+    assert manifest["artifact"]["apk_sha256"] == application.sha256
+    assert manifest["apk_inventory"]["status"] == "complete"
+    assert manifest["apk_inventory"]["native_libraries"]["count"] == 1
+    assert manifest["apk_inventory"]["native_libraries"]["analysis"] == "inventory_only"
+    assert manifest["apk_inventory"]["assets"]["count"] == 1
+
+    entries = {item["entry"]: item for item in manifest["dex_analysis"]["entries"]}
+    assert entries["classes.dex"]["status"] == "indexed"
+    assert entries["classes2.dex"]["status"] == "failed"
+    assert manifest["dex_analysis"]["failed_entries"] == 1
+    assert manifest["dex_analysis"]["truncated"] is True
+    assert manifest["reachability"]["truncated"] is True
+
+    limits = {item["capability"]: item["status"] for item in manifest["limitations"]}
+    assert limits["reflection"] == "unsupported"
+    assert limits["native_code"] == "inventory_only"
+    assert limits["obfuscation"] == "not_deobfuscated"
+    assert limits["data_flow"] == "not_implemented"
+
+
+def test_archivist_report_embeds_machine_readable_coverage_manifest(
+    session, store, future_iso
+):
+    scan_id, _ = _coverage_scan(session, store, future_iso)
+    report = ArchivistService(session, store).build(
+        scan_id, generated_at="2026-11-18T00:00:00Z"
+    ).markdown
+
+    assert "## 9. Code coverage and limitations manifest" in report
+    assert '"overall_status": "partial"' in report
+    assert '"status": "failed"' in report
+    assert "Native code and resources are inventory-only" in report
+    assert "Obfuscation is not reversed" in report
+    assert "No data-flow analysis" in report
+    assert "No control-flow analysis" in report
+
+
+def test_coverage_manifest_api_is_owner_scoped_and_returns_the_same_contract(
+    client, ctx, future_iso
+):
+    with ctx.session() as session:
+        scan_id, _ = _coverage_scan(session, ctx.store, future_iso)
+        session.commit()
+
+    response = client.get(f"/api/v1/scans/{scan_id}/coverage-manifest")
+    assert response.status_code == 200, response.text
+    assert response.json()["schema_version"] == 1
+    assert response.json()["artifact"]["package_name"] == "com.example.demo"
+
+    denied = client.get(
+        f"/api/v1/scans/{scan_id}/coverage-manifest",
+        headers={"X-Analyst-ID": "another-analyst"},
+    )
+    assert denied.status_code == 404
