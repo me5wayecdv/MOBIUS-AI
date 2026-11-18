@@ -15,6 +15,11 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # Composite evidence foreign keys require a declared unique target key.
+    with op.batch_alter_table("evidence") as batch_op:
+        batch_op.create_unique_constraint(
+            "uq_evidence_investigation_id", ["investigation_id", "id"]
+        )
     # Additive schema only. CI applies this migration to disposable SQLite/PostgreSQL
     # databases; never point this migration at a valuable or production database.
     op.create_table(
@@ -127,3 +132,6 @@ def downgrade() -> None:
     op.drop_table("graph_edges")
     op.drop_index("ix_graph_nodes_investigation_type", table_name="graph_nodes")
     op.drop_table("graph_nodes")
+    # Remove only the uniqueness constraint; evidence rows are never deleted.
+    with op.batch_alter_table("evidence") as batch_op:
+        batch_op.drop_constraint("uq_evidence_investigation_id", type_="unique")

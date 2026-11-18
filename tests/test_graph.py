@@ -91,7 +91,7 @@ def test_rebuild_persists_provenance_and_is_idempotent(session, store, future_is
         investigation_id=scan_id,
         agent="RECON",
         kind=ObservationKind.FACT.value,
-        fidelity=Fidelity.MANIFEST.value,
+        fidelity=Fidelity.BINARY_XML.value,
         subject_type="component",
         subject_ref="com.example.Entry",
         statement="Component is exported",
