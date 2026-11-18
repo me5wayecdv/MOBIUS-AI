@@ -413,6 +413,63 @@ def get_evidence_package(
     ).as_dict()
 
 
+
+
+# ------------------------------------------------------------------------------------
+# Attack graph (D-033)
+# ------------------------------------------------------------------------------------
+
+
+@router.post("/scans/{scan_id}/graph/rebuild", tags=["graph"])
+def rebuild_attack_graph(scan_id: str, session=Depends(_session), who: str = Depends(analyst_id)):
+    """Rebuild the persisted evidence graph and candidate paths for one owned investigation."""
+    _require_scan_owner(session, scan_id, who)
+    from ..services.graph import GraphPersistenceService
+    from ..services.graph_correlation import GraphCorrelationService
+    from ..services.attack_paths import CandidateAttackPathService
+
+    GraphPersistenceService(session).rebuild(scan_id)
+    correlation = GraphCorrelationService(session).correlate(scan_id)
+    paths = CandidateAttackPathService(session).build(scan_id)
+    graph = GraphPersistenceService(session).get_graph(scan_id)
+    SqlEventStore(session).emit(
+        scan_id, "attack_graph_rebuilt",
+        {"nodes": len(graph.nodes), "edges": len(graph.edges),
+         "candidate_paths": len(paths.candidates),
+         "data_source_observations": correlation.data_source_observations},
+        actor="GRAPH",
+    )
+    return {"investigation_id": scan_id, "nodes": len(graph.nodes),
+            "edges": len(graph.edges), "candidate_paths": len(paths.candidates),
+            "limitations": list(paths.limitations)}
+
+
+@router.get("/scans/{scan_id}/graph", tags=["graph"])
+def get_attack_graph(scan_id: str, session=Depends(_session), who: str = Depends(analyst_id)):
+    """Read persisted graph nodes/edges in a React Flow-compatible shape."""
+    _require_scan_owner(session, scan_id, who)
+    from ..services.graph import GraphPersistenceService
+
+    graph = GraphPersistenceService(session).get_graph(scan_id)
+    nodes = [{
+        "id": node.id, "type": "default", "position": {"x": 0, "y": 0},
+        "data": {"label": node.label, "node_type": node.node_type, "ref": node.ref,
+                 "assertion": node.assertion.value, "attributes": node.attributes,
+                 "evidence_refs": list(node.evidence_refs)},
+    } for node in graph.nodes]
+    edges = [{
+        "id": edge.id, "source": edge.source_id, "target": edge.target_id,
+        "label": edge.relation, "type": "smoothstep",
+        "data": {"relation": edge.relation, "assertion": edge.assertion.value,
+                 "rationale": edge.rationale, "evidence_refs": list(edge.evidence_refs)},
+    } for edge in graph.edges]
+    candidate_paths = [{
+        "id": node.id, "label": node.label, "ref": node.ref,
+        **(node.attributes or {}), "evidence_refs": list(node.evidence_refs),
+    } for node in graph.nodes if node.node_type == "candidate_path"]
+    return {"investigation_id": graph.investigation_id, "nodes": nodes,
+            "edges": edges, "candidate_paths": candidate_paths}
+
 @router.post("/scans/{scan_id}/evidence", status_code=201, tags=["scans"])
 def post_evidence(
     scan_id: str,

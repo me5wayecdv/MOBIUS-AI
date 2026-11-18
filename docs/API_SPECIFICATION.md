@@ -492,3 +492,11 @@ contract test).
 | Q1 | Multi-user: is a shared scan visible to all `analyst` roles, or owner-only with explicit sharing? |
 | Q2 | Should `POST /scans` accept a *saved objective template* (MASVS category subset) to make the product usable by non-experts? |
 | Q3 | Export formats: PDF generation adds a dependency (WeasyPrint/ReportLab) — is Markdown + print-to-PDF sufficient for submission? |
+
+
+## Attack graph API and UI (D-033)
+
+- `POST /api/v1/scans/{scan_id}/graph/rebuild` runs the D-030 projection, D-031 direct correlation, and D-032 candidate-path builder. It appends an `attack_graph_rebuilt` event.
+- `GET /api/v1/scans/{scan_id}/graph` returns React Flow-compatible nodes and edges with assertion levels, rationale, evidence references, and candidate-path prerequisites/missing proof.
+- Both routes enforce investigation ownership. Graph presentation never changes findings or verdicts.
+- The React Flow client is served at `/ui/graph`; build with `npm install && npm run build` in `frontend/`.
