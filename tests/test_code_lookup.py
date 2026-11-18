@@ -113,7 +113,7 @@ def test_decompile_endpoint_fails_closed_without_verified_isolation(client):
     _app, scan = _upload_authorized_scan(client)
     response = client.post(f"/api/v1/scans/{scan['id']}/code/decompile")
     assert response.status_code == 503
-    assert response.json()["detail"]["code"] == "JADX_BACKEND_UNAVAILABLE"
+    assert response.json()["detail"]["code"] == "JADX_WORKER_IMAGE_UNAVAILABLE"
 
 
 def test_code_lookup_enforces_scan_owner_and_source_bounds(client, ctx):
@@ -152,7 +152,13 @@ def test_code_lookup_rejects_tampered_source_cache(client, ctx):
 
 
 def test_jadx_decompile_is_queued_and_owner_scoped(client, ctx):
+    from dataclasses import replace
+
     _app, scan = _upload_authorized_scan(client)
+    ctx.settings = replace(
+        ctx.settings,
+        jadx_image="ghcr.io/example/mobius-jadx@sha256:" + "a" * 64,
+    )
     with ctx.session() as session:
         row = session.get(InvestigationRow, scan["id"])
         row.state = "SURFACE_READY"
