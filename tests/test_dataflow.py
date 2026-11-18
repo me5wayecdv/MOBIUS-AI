@@ -139,3 +139,28 @@ def test_unresolved_cfg_edge_is_incomplete():
     result = analyse_method(flow)
     assert result.status == "incomplete"
     assert result.complete is False
+
+
+
+def test_tracks_intent_uri_through_to_string_to_webview_sink():
+    flow = MethodFlow(M(), (
+        FlowBlock(0, (
+            FlowInstruction(
+                0, "invoke-virtual", registers=(0,),
+                invoke_class=INTENT, invoke_method="getData",
+            ),
+            FlowInstruction(4, "move-result-object", registers=(2,), dest=2),
+            FlowInstruction(
+                6, "invoke-virtual", registers=(2,),
+                invoke_class="Landroid/net/Uri;", invoke_method="toString",
+            ),
+            FlowInstruction(10, "move-result-object", registers=(4,), dest=4),
+            sink(12, 4),
+        ), ()),
+    ), 0)
+
+    result = analyse_method(flow)
+
+    assert result.status == "flow-found"
+    assert result.findings[0].source_id == "intent-data"
+    assert result.findings[0].sink_id == "webview-load"
