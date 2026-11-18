@@ -60,13 +60,13 @@ jobs:
           with zipfile.ZipFile(os.path.join(os.environ["RUNNER_TEMP"], "input.apk"), "w") as apk:
               apk.writestr("classes.dex", open("tests/fixtures/dex/AnalysisTest.dex", "rb").read())
           PY
-          docker run --rm --network none --read-only --cap-drop ALL \\
-            --security-opt no-new-privileges --user 65532:65532 \\
-            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=128m,mode=1777 \\
-            --env HOME=/tmp --env TMPDIR=/tmp \\
-            --mount "type=bind,src=$RUNNER_TEMP,dst=/work,readonly" \\
-            "$IMAGE_REPOSITORY@$IMAGE_DIGEST" \\
-            /usr/local/bin/mobius-dex-index --input /work/input.apk \\
+          docker run --rm --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges --user 65532:65532 \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=128m,mode=1777 \
+            --env HOME=/tmp --env TMPDIR=/tmp \
+            --mount "type=bind,src=$RUNNER_TEMP,dst=/work,readonly" \
+            "$IMAGE_REPOSITORY@$IMAGE_DIGEST" \
+            /usr/local/bin/mobius-dex-index --input /work/input.apk \
             > "$RUNNER_TEMP/dex-index.json"
           python - <<'PY'
           import json, os
@@ -87,4 +87,4 @@ jobs:
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "Configure the worker with this immutable reference:" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
-          printf '`%s@%s`\\n' "$IMAGE_REPOSITORY" "$IMAGE_DIGEST" >> "$GITHUB_STEP_SUMMARY"
+          printf '`%s@%s`\n' "$IMAGE_REPOSITORY" "$IMAGE_DIGEST" >> "$GITHUB_STEP_SUMMARY"
