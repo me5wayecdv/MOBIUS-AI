@@ -206,3 +206,29 @@ def test_exception_edge_coverage_gap_cannot_be_reported_as_no_flow():
     assert result.status == "incomplete"
     assert result.complete is False
     assert any("exception edges" in item for item in result.limitations)
+
+
+
+def test_string_builder_receiver_taint_survives_subsequent_clean_append():
+    flow = MethodFlow(M(), (
+        FlowBlock(0, (
+            source(),
+            move_result(),
+            FlowInstruction(6, "invoke-virtual", registers=(3, 2),
+                            invoke_class="Ljava/lang/StringBuilder;", invoke_method="append"),
+            FlowInstruction(10, "move-result-object", registers=(4,), dest=4),
+            FlowInstruction(12, "const-string", registers=(5,), dest=5),
+            FlowInstruction(14, "invoke-virtual", registers=(4, 5),
+                            invoke_class="Ljava/lang/StringBuilder;", invoke_method="append"),
+            FlowInstruction(18, "move-result-object", registers=(6,), dest=6),
+            FlowInstruction(20, "invoke-virtual", registers=(6,),
+                            invoke_class="Ljava/lang/StringBuilder;", invoke_method="toString"),
+            FlowInstruction(24, "move-result-object", registers=(7,), dest=7),
+            sink(26, 7),
+        ), ()),
+    ), 0)
+
+    result = analyse_method(flow)
+
+    assert result.status == "flow-found"
+    assert result.findings[0].sink_offset == 26
