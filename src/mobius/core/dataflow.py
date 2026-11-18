@@ -89,17 +89,17 @@ class DataFlowResult:
 
 _SOURCES = (
     SourceSpec("intent-string-extra", "Landroid/content/Intent;", "getStringExtra",
-               "String value read from an incoming Intent extra"),
+               "Intent extra value; external caller control is not established"),
     SourceSpec("intent-charsequence-extra", "Landroid/content/Intent;", "getCharSequenceExtra",
-               "Character data read from an incoming Intent extra"),
+               "Intent character data; external caller control is not established"),
     SourceSpec("intent-data", "Landroid/content/Intent;", "getData",
-               "URI supplied through an incoming Intent"),
+               "URI value obtained from an Intent; caller provenance is not established"),
     SourceSpec("intent-data-string", "Landroid/content/Intent;", "getDataString",
-               "URI string supplied through an incoming Intent"),
+               "URI string obtained from an Intent; caller provenance is not established"),
     SourceSpec("uri-query-parameter", "Landroid/net/Uri;", "getQueryParameter",
-               "Query parameter read from a URI"),
+               "URI query parameter; external provenance is not established"),
     SourceSpec("uri-last-path-segment", "Landroid/net/Uri;", "getLastPathSegment",
-               "Path segment read from a URI"),
+               "URI path segment; external provenance is not established"),
 )
 SOURCE_CATALOGUE = {(item.class_descriptor, item.method): item for item in _SOURCES}
 
