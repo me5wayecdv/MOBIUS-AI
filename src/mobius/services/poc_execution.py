@@ -43,8 +43,7 @@ class PoCExecutionService:
         output_json = asdict(result)
         input_bytes = json.dumps(input_json, sort_keys=True, separators=(",", ":")).encode()
         output_bytes = json.dumps(output_json, sort_keys=True, separators=(",", ":"), default=str).encode()
-        log_text = "
-".join(
+        log_text = "\n".join(
             f"[{step.index}] {step.action} {step.target_ref}: {step.status} "
             f"tool={step.tool_name}/{step.tool_version} duration_ms={step.duration_ms}"
             for step in result.steps
