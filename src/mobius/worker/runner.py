@@ -1,4 +1,4 @@
-"""Queue consumer for isolated manifest and DEX analysis workers.
+"""Queue consumer for isolated manifest, DEX and JADX analysis workers.
 
 The worker reads content-addressed APK objects and updates worker_jobs only. It never
 queries investigations, users, authorizations, findings, evidence, or event tables.
@@ -109,31 +109,60 @@ def run_once() -> bool:
         input_path.write_bytes(payload)
         input_path.chmod(0o444)
 
-        binary, image, spec = _tool_for(kind, runtime)
-        backend = OciBackend(runtime=runtime, binary_images={binary: image})
-        runner = ToolRunner(workspace_root=workspace_root, backend=backend, tools=(spec,))
-        result = runner.invoke(investigation_id=scan_id, tool=spec.name, args={})
-        if result.status != "ok" or result.exit_code != 0 or result.truncated:
-            raise RuntimeError(
-                f"isolated {kind} failed: {result.status}; output_truncated={result.truncated}; "
-                f"{result.stderr_tail}"
-            )
+        if kind == "jadx_decompile":
+            import hashlib
+            from ..adapters.jadx import JadxAdapter, build_jadx_tool_spec
 
-        if kind == "recon_manifest":
+            binary = "/opt/jadx/bin/jadx"
+            image = _required("MOBIUS_JADX_IMAGE")
+            spec = build_jadx_tool_spec(binary=binary, version="1.5.6")
+            backend = OciBackend(runtime=runtime, binary_images={binary: image})
+            runner = ToolRunner(workspace_root=workspace_root, backend=backend, tools=(spec,))
+            cache_root = Path(
+                os.environ.get("MOBIUS_JADX_CACHE_ROOT", str(artifact_root / "jadx-cache"))
+            ).resolve()
+            adapter = JadxAdapter(runner=runner, cache_root=cache_root, tool_version="1.5.6")
+            decompiled = adapter.decompile(
+                investigation_id=scan_id,
+                artifact=payload,
+                expected_sha256=hashlib.sha256(payload).hexdigest(),
+                artifact_name="input.apk",
+            )
+            output = {
+                "apk_sha256": decompiled.apk_sha256,
+                "tool_version": decompiled.tool_version,
+                "source_file_count": len(decompiled.source_files),
+                "source_files": list(decompiled.source_files[:5000]),
+                "cache_entry": str(decompiled.cache_dir.parent),
+                "cached": decompiled.cached,
+                "fidelity": decompiled.fidelity,
+            }
+        else:
+            binary, image, spec = _tool_for(kind, runtime)
+            backend = OciBackend(runtime=runtime, binary_images={binary: image})
+            runner = ToolRunner(workspace_root=workspace_root, backend=backend, tools=(spec,))
+            result = runner.invoke(investigation_id=scan_id, tool=spec.name, args={})
+            if result.status != "ok" or result.exit_code != 0 or result.truncated:
+                raise RuntimeError(
+                    f"isolated {kind} failed: {result.status}; output_truncated={result.truncated}; "
+                    f"{result.stderr_tail}"
+                )
+
+            if kind == "recon_manifest":
             value = result.stdout.decode("utf-8", errors="strict")
             if not value.startswith("<?xml") and "<manifest" not in value[:2048]:
                 raise RuntimeError("isolated RECON returned no recognizable XML manifest")
             output = {"manifest_xml": value}
-        elif kind == "dex_index":
-            # Validate JSON syntax and size here; the API performs the full schema and
-            # artifact-digest validation before accepting or applying the result.
-            import json
-            value = json.loads(result.stdout.decode("utf-8", errors="strict"))
-            if not isinstance(value, dict) or value.get("schema_version") != 1:
-                raise RuntimeError("isolated DEX worker returned an unsupported result schema")
-            output = value
-        else:  # defensive: _tool_for is the closed registry
-            raise RuntimeError(f"unsupported worker job kind: {kind}")
+            elif kind == "dex_index":
+                # Validate JSON syntax and size here; the API performs the full schema and
+                # artifact-digest validation before accepting or applying the result.
+                import json
+                value = json.loads(result.stdout.decode("utf-8", errors="strict"))
+                if not isinstance(value, dict) or value.get("schema_version") != 1:
+                    raise RuntimeError("isolated DEX worker returned an unsupported result schema")
+                output = value
+            else:  # defensive: _tool_for is the closed registry
+                raise RuntimeError(f"unsupported worker job kind: {kind}")
 
         session = factory()
         try:
