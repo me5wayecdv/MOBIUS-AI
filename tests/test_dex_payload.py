@@ -154,3 +154,15 @@ def test_legacy_worker_payload_without_d015_fields_defaults_to_incomplete():
     assert restored.data_flows == ()
     assert restored.data_flow_methods == 0
     assert restored.data_flow_complete is False
+
+
+
+def test_data_flow_payload_rejects_complete_coverage_with_limitations():
+    apk = _apk()
+    digest = hashlib.sha256(apk).hexdigest()
+    payload = code_index_payload(index_apk(apk), digest)
+    payload["data_flow_complete"] = True
+    payload["data_flow_limitations"] = ["exception edges are not modelled"]
+    import json
+    with pytest.raises(ValueError, match="complete coverage with limitations"):
+        validate_dex_index_payload(json.dumps(payload).encode(), digest)
