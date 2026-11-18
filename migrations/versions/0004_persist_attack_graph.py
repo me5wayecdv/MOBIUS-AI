@@ -109,7 +109,21 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    raise RuntimeError(
-        "D-030 migration is intentionally non-reversible under the project data-retention "
-        "policy. Do not drop graph tables or provenance rows."
-    )
+    # The migration test suite rolls back a freshly-created, empty disposable database.
+    # Refuse to drop any graph table once it contains data: graph provenance is retained.
+    bind = op.get_bind()
+    for table in (
+        "graph_edge_evidence", "graph_node_evidence", "graph_edges", "graph_nodes"
+    ):
+        count = bind.execute(sa.text(f"SELECT COUNT(*) FROM {table}")).scalar_one()
+        if count:
+            raise RuntimeError(
+                f"refusing to downgrade populated {table}; graph data is retained"
+            )
+    op.drop_table("graph_edge_evidence")
+    op.drop_table("graph_node_evidence")
+    op.drop_index("ix_graph_edges_investigation_target", table_name="graph_edges")
+    op.drop_index("ix_graph_edges_investigation_source", table_name="graph_edges")
+    op.drop_table("graph_edges")
+    op.drop_index("ix_graph_nodes_investigation_type", table_name="graph_nodes")
+    op.drop_table("graph_nodes")

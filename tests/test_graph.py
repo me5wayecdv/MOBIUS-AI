@@ -4,7 +4,7 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 
-from mobius.adapters.models import GraphEdgeRow, ObservationRow
+from mobius.adapters.models import (\n    GraphEdgeEvidenceRow, GraphEdgeRow, GraphNodeEvidenceRow, ObservationRow,\n)
 from mobius.core.enums import AssertionLevel, EvidenceKind, Fidelity, ObservationKind
 from mobius.core.ids import IdPrefix, new_id
 from mobius.core.schemas import GraphEdge, GraphNode
@@ -192,6 +192,52 @@ def test_database_composite_foreign_key_blocks_cross_investigation_edge(session,
     )
     session.add(invalid)
     with pytest.raises(IntegrityError):
+        session.flush()
+    session.rollback()
+
+
+def test_database_composite_foreign_keys_block_cross_investigation_evidence_links(
+    session, store, future_iso
+):
+    first = _investigation(session, store, future_iso)
+    second = _investigation(session, store, future_iso)
+    foreign = EvidenceService(session, store).record(
+        investigation_id=second,
+        kind=EvidenceKind.MANIFEST,
+        content=b"foreign-association-evidence",
+        summary="Foreign evidence",
+        produced_by="RECON",
+    )
+    service = GraphPersistenceService(session)
+    node = service.add_node(GraphNode(
+        investigation_id=first, node_type="component", label="Local",
+        ref="node-local", assertion=AssertionLevel.OBSERVED,
+    ))
+    with pytest.raises(IntegrityError):
+        session.add(GraphNodeEvidenceRow(
+            investigation_id=first, node_id=node.id, evidence_id=foreign.id
+        ))
+        session.flush()
+    session.rollback()
+
+    # Recreate the graph node after rollback and exercise the edge-evidence composite FK.
+    service = GraphPersistenceService(session)
+    node_a = service.add_node(GraphNode(
+        investigation_id=first, node_type="component", label="A",
+        ref="edge-a", assertion=AssertionLevel.OBSERVED,
+    ))
+    node_b = service.add_node(GraphNode(
+        investigation_id=first, node_type="component", label="B",
+        ref="edge-b", assertion=AssertionLevel.OBSERVED,
+    ))
+    edge = service.add_edge(GraphEdge(
+        investigation_id=first, source_id=node_a.id, target_id=node_b.id,
+        relation="calls", assertion=AssertionLevel.OBSERVED,
+    ))
+    with pytest.raises(IntegrityError):
+        session.add(GraphEdgeEvidenceRow(
+            investigation_id=first, edge_id=edge.id, evidence_id=foreign.id
+        ))
         session.flush()
     session.rollback()
 

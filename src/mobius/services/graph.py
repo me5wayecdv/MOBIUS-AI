@@ -265,7 +265,9 @@ class GraphPersistenceService:
                 )
             node = self._upsert_projection_node(
                 investigation_id, "finding", row.id, row.title[:500],
-                AssertionLevel.CONFIRMED if row.status == "confirmed" else AssertionLevel.HYPOTHESIS,
+                AssertionLevel.CONFIRMED if row.status == "confirmed" else (
+                    AssertionLevel.REJECTED if row.status == "rejected" else AssertionLevel.HYPOTHESIS
+                ),
                 {"category": row.category, "status": row.status, "severity": row.severity,
                  "confidence": row.confidence, "component_ref": row.component_ref},
                 refs,
