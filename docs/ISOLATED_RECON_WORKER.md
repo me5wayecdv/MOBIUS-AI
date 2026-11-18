@@ -86,7 +86,7 @@ The API role retains INSERT/SELECT/UPDATE access required to create and apply jo
 
 ## Recovery and limitations
 
-- Claims use a five-minute lease. An expired job may be reclaimed up to three attempts; an exhausted lease is marked failed.
+- RECON/DEX claims use a five-minute lease; JADX claims use ten minutes to exceed the bounded 300-second decompiler timeout. An expired job may be reclaimed up to three attempts; an exhausted lease is marked failed.
 - A worker crash does not leave a job permanently locked, though recovery waits for lease expiry.
 - The worker writes only queue results; API applies results to investigation state and evidence.
 - Result XML is bounded to 10 MiB and stored in the job JSON field. A later object-store result channel may be preferable at larger scale.
