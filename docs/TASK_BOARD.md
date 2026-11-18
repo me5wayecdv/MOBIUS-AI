@@ -63,7 +63,7 @@
 | D-041 | Implement allowlisted non-destructive test adapters | M3 | [x] | PR #45 merged. Persisted-manifest assertions and two deterministic local-only WebView harnesses; no shell, subprocess, network, emulator, or state-changing action. Python 3.11/3.12 + PostgreSQL 16 CI green (457 tests each). | Only prepared lab APK/emulator/local harness targets |
 | D-042 | Capture reproducible PoC evidence | M1 + M3 | [~] | PR in progress: persist plan/input hash, output hash/JSON, execution log, tool versions, timestamps, duration, exit status and same-investigation evidence links. | Tool version, inputs, outputs, logs, timestamps and exit status persisted |
 | D-043 | Add approval, timeout, cancel and cleanup paths | M1 + M3 | [~] | PR in progress: persisted approval requests/resolution/revocation, expiry checks, cooperative cancellation between bounded steps, per-step/total budgets, and finally cleanup. State-changing adapters remain disabled. | Out-of-scope or state-changing tests blocked without approval |
-| D-044 | Positive and negative PoC integration tests | M3 + M5 | [ ] | Positive reproduces; negative control does not confirm |
+| D-044 | Positive and negative PoC integration tests | M3 + M5 | [~] | PR in progress: positive and negative local-harness controls persist run/result/log evidence; asserts simulation-only results never auto-create a finding or verdict. |
 
 ## Priority 5 — War Room (real backend activity only)
 
