@@ -1,241 +1,175 @@
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MOBIUS — War Room</title>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#080d14"><title>MOBIUS — War Room</title>
 <style>
-  :root { color-scheme: dark; --bg:#0e1116; --panel:#161b22; --line:#232b36; --ink:#d7dee8;
-          --dim:#8b98a9; --ok:#2ea043; --warn:#d29922; --bad:#da3633; --accent:#388bfd; }
-  * { box-sizing: border-box; }
-  body { margin:0; font:14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
-         background:var(--bg); color:var(--ink); }
-  header { display:flex; gap:16px; align-items:baseline; padding:14px 20px;
-           border-bottom:1px solid var(--line); background:var(--panel); }
-  header h1 { font-size:15px; margin:0; letter-spacing:.08em; }
-  header .meta { color:var(--dim); font-size:12px; }
-  main { display:grid; grid-template-columns: 300px 1fr; height: calc(100vh - 53px); }
-  aside { border-right:1px solid var(--line); overflow:auto; }
-  section { padding:16px 20px; }
-  h2 { font-size:12px; letter-spacing:.12em; color:var(--dim); margin:18px 0 8px; }
-  .scan { display:block; width:100%; text-align:left; background:none; border:0;
-          border-bottom:1px solid var(--line); color:inherit; font:inherit; padding:10px 14px;
-          cursor:pointer; }
-  .scan:hover { background:#1b2230; }
-  .scan[aria-current="true"] { background:#1f2937; border-left:2px solid var(--accent); }
-  .id { color:var(--dim); font-size:11px; }
-  .row { display:flex; justify-content:space-between; gap:12px; padding:3px 0; }
-  .row span:last-child { color:#fff; }
-  .pill { display:inline-block; padding:1px 8px; border-radius:10px; font-size:11px;
-          border:1px solid var(--line); }
-  .confirmed { color:var(--ok); border-color:var(--ok); }
-  .rejected { color:var(--dim); }
-  .manual { color:var(--warn); border-color:var(--warn); }
-  table { width:100%; border-collapse:collapse; font-size:13px; }
-  th, td { text-align:left; padding:6px 8px; border-bottom:1px solid var(--line);
-           vertical-align:top; }
-  th { color:var(--dim); font-weight:normal; font-size:11px; letter-spacing:.08em; }
-  .empty { color:var(--dim); font-style:italic; }
-  .events { max-height:38vh; overflow:auto; border:1px solid var(--line); background:#0b0f14; }
-  .event { padding:3px 10px; border-bottom:1px solid #131922; font-size:12px; }
-  .event b { color:var(--accent); font-weight:normal; }
-  .tools { display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }
-  button.act { background:#1f6feb22; border:1px solid #1f6feb66; color:#9ecbff;
-               padding:6px 12px; border-radius:6px; font:inherit; cursor:pointer; }
-  button.act:disabled { opacity:.45; cursor:not-allowed; }
-  a { color:var(--accent); }
-  .banner { padding:8px 20px; background:#2d1d00; color:#e6c07b; font-size:12px;
-            border-bottom:1px solid #4a3410; }
+:root{color-scheme:dark;--bg:#080d14;--surface:#101923;--surface2:#131f2c;--line:#253548;--ink:#e7eef7;--muted:#8da2b9;--blue:#79b8ff;--green:#59c79a;--amber:#e2b36c;--red:#e17c86;--mono:ui-monospace,SFMono-Regular,Menlo,monospace;--sans:Inter,ui-sans-serif,system-ui,sans-serif}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(ellipse at 40% -20%,#17283b 0%,var(--bg) 55%);color:var(--ink);font:13px/1.5 var(--sans)}
+button,input{font:inherit}button{cursor:pointer}a{color:var(--blue);text-decoration:none}
+header{position:sticky;top:0;z-index:5;display:flex;align-items:center;gap:18px;min-height:64px;padding:10px 22px;background:#0b121beF;border-bottom:1px solid var(--line);backdrop-filter:blur(12px)}
+.brand{font:700 12px var(--mono);letter-spacing:.16em;color:#b8cce2}.brand span{color:var(--blue)}
+.header-meta{margin-left:auto;color:var(--muted);font:11px var(--mono)}.top-link{font-size:12px}
+main{max-width:1600px;margin:auto;padding:18px 22px 50px}
+.mission{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:18px;padding:20px 22px;border:1px solid #31455c;border-radius:12px;background:linear-gradient(120deg,#142335,#0e1824 70%);box-shadow:0 18px 60px #0005}
+.kicker,.eyebrow{font:10px var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--muted)}
+h1{margin:5px 0 8px;font-size:23px;letter-spacing:-.025em}.mission-sub{color:#a8bbd0;max-width:900px}.mission-state{align-self:start;text-align:right}.state-pill{display:inline-block;padding:5px 10px;border:1px solid #45627e;border-radius:20px;color:#c7e1ff;font:11px var(--mono)}
+.mission-meta{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:16px;color:#b7c8d9;font:11px var(--mono)}.mission-meta b{color:#f1f6fb;font-weight:600}
+.toolbar{display:flex;gap:8px;align-items:center;margin:16px 0}.toolbar select,.toolbar input{min-width:0;padding:9px 11px;border:1px solid var(--line);border-radius:7px;background:#0d1722;color:var(--ink)}.toolbar select{flex:1;max-width:600px}
+.btn{border:1px solid #3d5e7d;border-radius:7px;padding:8px 12px;background:#152a40;color:#c9e2fb;font-size:11px}.btn:disabled{opacity:.5;cursor:wait}.btn.secondary{background:#101a25;border-color:var(--line);color:#a9bbcf}
+.grid{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:14px}.panel{min-width:0;border:1px solid var(--line);border-radius:10px;background:linear-gradient(180deg,#111c28,#0e1721);overflow:hidden;box-shadow:0 8px 28px #0002}
+.panel-head{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:13px 15px;border-bottom:1px solid var(--line);background:#121f2c}.panel-head h2{margin:0;font:600 11px var(--mono);letter-spacing:.12em;color:#c4d5e7}.panel-head small{color:var(--muted);font:10px var(--mono)}
+.panel-body{padding:15px}.d050{grid-column:span 12}.d051{grid-column:span 4}.d052{grid-column:span 8}.d053{grid-column:span 5}.d054{grid-column:span 7}.d055{grid-column:span 12}
+.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.metric{padding:11px;border:1px solid #26394d;border-radius:8px;background:#0c1621}.metric .value{display:block;margin-top:5px;font:600 17px var(--mono);color:#eff6ff;overflow-wrap:anywhere}.metric .label{font:9px var(--mono);letter-spacing:.12em;color:var(--muted);text-transform:uppercase}
+.coverage{display:flex;flex-wrap:wrap;gap:7px;margin-top:12px}.tag{display:inline-block;padding:4px 7px;border:1px solid #2b4055;border-radius:5px;color:#a9c0d7;background:#101d2a;font:10px var(--mono)}.tag.warn{border-color:#66502d;color:#e7c18a}.tag.ok{border-color:#285a4b;color:#81d5b1}
+.agent-list{display:grid;gap:8px}.agent{padding:10px;border:1px solid #293c50;border-radius:7px;background:#0d1722}.agent-top{display:flex;justify-content:space-between;gap:8px}.agent-name{font:600 11px var(--mono);color:#d9e9f8}.agent-state{font:10px var(--mono);color:var(--green)}.agent-task{margin-top:5px;color:#9fb1c5;font-size:11px}
+.timeline{max-height:460px;overflow:auto}.event{display:grid;grid-template-columns:54px minmax(90px,145px) minmax(0,1fr);gap:10px;padding:8px 2px;border-bottom:1px solid #1e2d3d;font-size:11px}.event:last-child{border:0}.seq{font:10px var(--mono);color:#66829e}.event-type{font:10px var(--mono);color:var(--blue);overflow-wrap:anywhere}.event-detail{color:#b4c4d4;overflow-wrap:anywhere}.empty{padding:14px;border:1px dashed #31465b;border-radius:7px;color:#8095ab;font-size:11px;line-height:1.6}
+.code-layout{display:grid;grid-template-columns:1fr;gap:10px}.code-ref{padding:10px;border:1px solid #2a3d51;border-radius:7px;background:#0b1520}.code-ref strong{display:block;color:#d9e9f8;font:11px var(--mono);overflow-wrap:anywhere}.code-ref p{margin:5px 0;color:#9db1c6;font-size:11px}.code-ref small{color:#6f8aa5;font:10px var(--mono);overflow-wrap:anywhere}.graph-frame{width:100%;height:520px;border:0;background:#0b1018;border-radius:6px}.graph-tools{display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:10px}.poc-table{width:100%;border-collapse:collapse;font-size:11px}.poc-table th,.poc-table td{padding:8px;border-bottom:1px solid #26394c;text-align:left;vertical-align:top}.poc-table th{color:var(--muted);font:10px var(--mono);letter-spacing:.1em}.status{font:10px var(--mono);color:var(--green)}.report{white-space:pre-wrap;overflow:auto;max-height:420px;padding:14px;border:1px solid #26394c;border-radius:7px;background:#09121b;color:#b9cadb;font:11px/1.6 var(--mono)}
+@media(max-width:900px){main{padding:12px}.d051,.d052,.d053,.d054{grid-column:span 12}.mission{grid-template-columns:1fr}.mission-state{text-align:left}.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.graph-frame{height:420px}}
+@media(max-width:520px){#intake-panel label{grid-column:1/-1!important}header{padding:10px 12px;min-height:54px}.header-meta{display:none}.top-link{margin-left:auto}main{padding:10px}.mission{padding:15px}.mission h1{font-size:19px}.toolbar{flex-wrap:wrap}.toolbar select{max-width:none;flex-basis:100%}.metrics{gap:7px}.metric{padding:9px}.metric .value{font-size:14px}.panel-head{padding:11px}.panel-body{padding:11px}.event{grid-template-columns:38px minmax(80px,105px) minmax(0,1fr);gap:6px;font-size:10px}.graph-frame{height:350px}.poc-table{font-size:10px}.poc-table th,.poc-table td{padding:6px 4px}}
 </style>
 </head>
 <body>
-<header>
-  <h1>MOBIUS · WAR ROOM</h1>
-  <a href="/ui/graph" style="margin-left:auto">Attack graph</a>
-  <span class="meta" id="health">connecting…</span>
-  <span class="meta" id="live"></span>
-</header>
-<div class="banner">
-  Every value on this page is read from the API. There is no demo data, no placeholder
-  finding and no simulated event — an empty panel means the scan genuinely has nothing there.
-</div>
+<header><div class="brand">MOBIUS <span>/</span> WAR ROOM</div><a class="top-link" href="/ui/graph" id="graph-link">Attack graph ↗</a><div class="header-meta" id="api-status">CONNECTING API</div></header>
 <main>
-  <aside>
-    <section>
-      <h2>INVESTIGATIONS</h2>
-      <div id="scans"><p class="empty">no scans yet</p></div>
-    </section>
-  </aside>
-  <div style="overflow:auto">
-    <section>
-      <h2>SELECTED SCAN</h2>
-      <div id="scan"><p class="empty">select an investigation</p></div>
-      <div class="tools" id="actions"></div>
-    </section>
-    <section>
-      <h2>SURFACE — WHAT RECON SAW IN THE MANIFEST</h2>
-      <div id="surface"><p class="empty">no analysis yet</p></div>
-    </section>
-    <section>
-      <h2>FINDINGS AND VERDICTS</h2>
-      <div id="findings"><p class="empty">no findings</p></div>
-    </section>
-    <section>
-      <h2>LIVE EVENTS — REPLAYED FROM THE EVENT STORE</h2>
-      <div class="events" id="events"><p class="events"><span class="empty">no events</span></p></div>
-    </section>
-  </div>
+<section class="mission" data-testid="d050-mission" id="d050">
+ <div><div class="kicker">Investigation command / evidence-first</div><h1 id="mission-title">Select an investigation</h1><div class="mission-sub" id="mission-objective">All visible state is read from persisted investigation data and events.</div>
+ <div class="mission-meta" id="mission-meta"><span>INVESTIGATION <b>—</b></span></div></div>
+ <div class="mission-state"><span class="state-pill" id="mission-state">NO INVESTIGATION SELECTED</span><div class="coverage" id="mission-limits"></div></div>
+ <div style="grid-column:1/-1"><div class="eyebrow">Coverage and capability boundaries</div><div class="metrics" id="coverage-metrics"></div><div class="coverage" id="coverage-tags"></div></div>
+</section>
+<section class="panel" data-testid="intake-panel" id="intake-panel" style="margin:14px 0">
+ <div class="panel-head"><h2>00 / APK INTAKE</h2><small>EXACT APK DIGEST · EXPLICIT AUTHORIZATION</small></div>
+ <div class="panel-body" style="display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:9px">
+  <label style="grid-column:span 4">APK FILE<input id="apk-file" data-testid="apk-file" type="file" accept=".apk" style="display:block;width:100%;margin-top:5px;color:var(--muted)"></label>
+  <label style="grid-column:span 3">TARGET PACKAGE<input id="target-package" value="com.example.lab" style="display:block;width:100%;margin-top:5px;padding:8px;background:#0d1722;color:var(--ink);border:1px solid var(--line);border-radius:6px"></label>
+  <label style="grid-column:span 5">OBJECTIVE<input id="target-objective" value="Inspect the authorized lab APK for evidence-backed security weaknesses." style="display:block;width:100%;margin-top:5px;padding:8px;background:#0d1722;color:var(--ink);border:1px solid var(--line);border-radius:6px"></label>
+  <div style="grid-column:1/-1;display:flex;align-items:center;gap:10px;flex-wrap:wrap"><button class="btn" id="intake-submit">Upload & create investigation</button><span id="intake-status" class="tag">No upload started.</span></div>
+ </div>
+</section>
+<div class="toolbar"><select id="scan-select" aria-label="Select investigation"><option value="">Loading investigations…</option></select><button class="btn" id="refresh">Refresh persisted state</button><button class="btn secondary" id="report-action" disabled>Generate report</button></div>
+<div class="grid">
+<section class="panel d051" data-testid="d051-agent-network" id="d051"><div class="panel-head"><h2>01 / AGENT NETWORK</h2><small>EVENT-DERIVED LIFECYCLE</small></div><div class="panel-body"><div id="agent-list" class="agent-list"><div class="empty">Select an investigation. Agent cards appear only after persisted lifecycle events exist.</div></div></div></section>
+<section class="panel d052" data-testid="d052-timeline" id="d052"><div class="panel-head"><h2>02 / INVESTIGATION TIMELINE</h2><small id="timeline-cursor">REPLAY FROM SEQ 0</small></div><div class="panel-body"><div id="timeline" class="timeline"><div class="empty">No persisted events loaded.</div></div></div></section>
+<section class="panel d053" data-testid="d053-code-studio" id="d053"><div class="panel-head"><h2>03 / CODE INVESTIGATION STUDIO</h2><small>OBSERVED REFERENCES ONLY</small></div><div class="panel-body"><div id="code-studio" class="code-layout"><div class="empty">No indexed code references loaded.</div></div></div></section>
+<section class="panel d054" data-testid="d054-attack-graph" id="d054"><div class="panel-head"><h2>04 / ATTACK GRAPH & HYPOTHESES</h2><small>ASSERTION + PROVENANCE</small></div><div class="panel-body"><div class="graph-tools"><span id="graph-summary" class="tag">NO GRAPH DATA</span><a id="open-graph" href="/ui/graph">Open full graph ↗</a></div><iframe class="graph-frame" id="graph-frame" title="Persisted attack graph" loading="lazy"></iframe><div id="hypothesis-list" class="coverage"></div></div></section>
+<section class="panel d055" data-testid="d055-poc-report" id="d055"><div class="panel-head"><h2>05 / POC LAB & REPORT</h2><small>PERSISTED RUNS / IMMUTABLE REPORT EVIDENCE</small></div><div class="panel-body"><div class="eyebrow">PoC execution records</div><div id="poc-runs"><div class="empty">No PoC execution records.</div></div><div class="eyebrow" style="margin-top:20px">Investigation report</div><div id="report-viewer" class="report">No report has been written.</div></div></section>
+</div>
 </main>
 <script>
-const API = "/api/v1";
-let current = null;
-let stream = null;
-
-const el = (id) => document.getElementById(id);
-const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) =>
-  ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-const empty = (t) => `<p class="empty">${esc(t)}</p>`;
-
-async function get(path) {
-  const r = await fetch(API + path, {headers: {"Accept": "application/json"}});
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
-  return r.json();
+const API="/api/v1";let currentId="";let refreshTimer=null;let lastSeq=0;
+const $=id=>document.getElementById(id);
+const esc=v=>String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+async function get(path){const r=await fetch(API+path,{headers:{Accept:"application/json"}});if(!r.ok)throw new Error(await r.text());return r.json()}
+async function post(path,body){const r=await fetch(API+path,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body||{})});if(!r.ok)throw new Error(await r.text());return r.json()}
+function empty(text){return '<div class="empty">'+esc(text)+'</div>'}
+function metric(label,value){return '<div class="metric"><span class="label">'+esc(label)+'</span><span class="value">'+esc(value??"—")+'</span></div>'}
+function fmtTime(value){if(!value)return "—";try{return new Date(value).toLocaleTimeString()}catch{return value}}
+async function loadList(){
+ const data=await get("/scans");const items=data.items||[];const select=$("scan-select");
+ select.innerHTML='<option value="">Select investigation…</option>'+items.map(s=>'<option value="'+esc(s.id)+'">'+esc(s.id)+' · '+esc(s.state)+'</option>').join("");
+ const query=new URLSearchParams(location.search).get("scan_id");if(query&&items.some(s=>s.id===query))select.value=query;
+ if(select.value)await loadInvestigation(select.value);
 }
-
-async function act(path, method = "POST") {
-  const r = await fetch(API + path, {method});
-  if (!r.ok) {
-    const body = await r.text();
-    el("events").insertAdjacentHTML("afterbegin",
-      `<div class="event"><b>request failed</b> ${esc(method)} ${esc(path)} — ${esc(body)}</div>`);
-    return null;
-  }
-  return r.json();
+async function loadInvestigation(id){
+ if(!id)return;currentId=id;history.replaceState(null,"","/ui?scan_id="+encodeURIComponent(id));
+ $("graph-link").href="/ui/graph?scan_id="+encodeURIComponent(id);
+ $("open-graph").href=$("graph-link").href;$("graph-frame").src=$("graph-link").href;
+ $("report-action").disabled=false;
+ const [scan,surface,events,evidence,findings,graph,hypotheses,runs,health]=await Promise.all([
+  get("/scans/"+encodeURIComponent(id)),get("/scans/"+encodeURIComponent(id)+"/surface"),
+  get("/scans/"+encodeURIComponent(id)+"/events?after=0&limit=1000"),
+  get("/scans/"+encodeURIComponent(id)+"/evidence"),get("/scans/"+encodeURIComponent(id)+"/findings"),
+  get("/scans/"+encodeURIComponent(id)+"/graph"),get("/scans/"+encodeURIComponent(id)+"/hypotheses"),get("/scans/"+encodeURIComponent(id)+"/poc/runs").catch(()=>({items:[]})),
+  get("/health").catch(()=>({tools:{}}))
+ ]);
+ lastSeq=events.current_seq||0;
+ renderMission(scan,surface,health,evidence.items||[]);renderAgents(events.items||[]);renderTimeline(events.items||[]);
+ renderCode(surface,graph,evidence.items||[]);renderGraph(graph,findings.items||[],hypotheses.items||[]);
+ renderPoc(runs.items||[]);await loadReport();
+ $("api-status").textContent="API CONNECTED · "+(health.env||"unknown")+" · DB READ";
+ if(refreshTimer)clearInterval(refreshTimer);
+ refreshTimer=setInterval(()=>refreshEvents(),3000);
 }
-
-async function boot() {
-  try {
-    const h = await get("/health");
-    const tools = Object.entries(h.tools || {})
-      .map(([k, v]) => `${k}:${v ? "yes" : "no"}`).join(" · ");
-    el("health").textContent = `env ${h.env} · auth ${h.auth} · ${tools}`;
-  } catch (e) { el("health").textContent = "API unreachable"; }
-
-  try {
-    const scans = await get("/scans");
-    const items = scans.items || [];
-    if (!items.length) return;
-    el("scans").innerHTML = items.map((s) => `
-      <button class="scan" data-id="${esc(s.id)}" aria-current="false">
-        <div>${esc(s.state)} <span class="id">${esc(s.id.slice(-6))}</span></div>
-        <div class="id">${esc(s.objective || "").slice(0, 44)}</div>
-      </button>`).join("");
-    document.querySelectorAll(".scan").forEach((b) =>
-      b.addEventListener("click", () => select(b.dataset.id)));
-    select(items[0].id);
-  } catch (e) { el("scans").innerHTML = empty("could not list scans: " + e.message); }
+function renderMission(scan,surface,health,evidence){
+ $("mission-title").textContent=surface.package_name||scan.authorization?.target_package||"APK "+String(scan.application_id||"").slice(0,14);
+ $("mission-objective").textContent=scan.objective||"No investigation objective stored.";
+ $("mission-state").textContent=scan.state||"UNKNOWN";
+ const app=scan.application||{},auth=scan.authorization||{};
+ $("mission-meta").innerHTML=[
+  ["INVESTIGATION",scan.id],["APK SHA-256",app.sha256],["PACKAGE SCOPE",auth.target_package],["VERSION",surface.version_name||"not extracted"],
+  ["APPLICATION",scan.application_id],["LAST EVENT",scan.last_event_seq]
+ ].map(x=>'<span>'+esc(x[0])+' <b>'+esc(x[1]||"—")+'</b></span>').join("");
+ const observations=surface.observations||[],frontier=surface.frontier||[];
+ $("coverage-metrics").innerHTML=metric("Manifest observations",observations.length)+metric("Queued analysis actions",frontier.length)+metric("Evidence records",(evidence||[]).length)+metric("Available host tools",Object.values(health.tools||{}).filter(Boolean).length+" / "+Object.keys(health.tools||{}).length);
+ const unavailable=Object.entries(health.tools||{}).filter(x=>!x[1]).map(x=>x[0]+" unavailable");
+ $("coverage-tags").innerHTML=(unavailable.map(x=>'<span class="tag warn">'+esc(x)+'</span>')).concat([
+  '<span class="tag">'+(surface.package_name?"PACKAGE IDENTIFIED":"PACKAGE NOT EXTRACTED")+'</span>',
+  '<span class="tag">'+observations.length+' PERSISTED OBSERVATIONS</span>',
+  '<span class="tag">NO COVERAGE PERCENTAGE INFERRED</span>'
+ ]).join("");
 }
-
-async function select(id) {
-  current = id;
-  document.querySelectorAll(".scan").forEach((b) =>
-    b.setAttribute("aria-current", String(b.dataset.id === id)));
-  await render();
-  openStream(id);
+function renderAgents(events){
+ const types=new Set(["agent_queued","agent_started","agent_waiting","agent_completed","agent_failed","tool_started","tool_completed"]);
+ const latest=new Map();
+ for(const e of events){if(!types.has(e.type))continue;const actor=e.actor||e.payload?.agent||"UNKNOWN";latest.set(actor,e)}
+ const items=[...latest.entries()];
+ $("agent-list").innerHTML=items.length?items.map(([name,e])=>'<div class="agent"><div class="agent-top"><span class="agent-name">'+esc(name)+'</span><span class="agent-state">'+esc(e.type.replaceAll("_"," ").toUpperCase())+'</span></div><div class="agent-task">'+esc(e.payload?.task||e.payload?.action||e.payload?.tool||"No task detail in event payload")+'</div><small class="tag">SEQ '+esc(e.seq)+' · '+esc(fmtTime(e.at))+'</small></div>').join(""):empty("No agent/tool lifecycle events have been persisted for this investigation. No idle agents are fabricated.");
 }
-
-async function render() {
-  if (!current) return;
-  try {
-    const s = await get(`/scans/${current}`);
-    el("scan").innerHTML = `
-      <div class="row"><span>id</span><span>${esc(s.id)}</span></div>
-      <div class="row"><span>state</span><span>${esc(s.state)}</span></div>
-      <div class="row"><span>objective</span><span>${esc(s.objective)}</span></div>
-      <div class="row"><span>intensity</span><span>${esc(s.intensity)}</span></div>
-      <div class="row"><span>stop reason</span><span>${esc(s.stop_reason ?? "—")}</span></div>`;
-    el("actions").innerHTML = `
-      <button class="act" data-act="recon">run RECON</button>
-      <button class="act" data-act="nexus">run NEXUS</button>
-      <button class="act" data-act="report">write report</button>
-      <a href="${API}/scans/${encodeURIComponent(current)}/report" target="_blank"
-         rel="noreferrer">open report (markdown)</a>`;
-    document.querySelectorAll("button.act").forEach((b) =>
-      b.addEventListener("click", async () => {
-        b.disabled = true;
-        await act(`/scans/${current}/${b.dataset.act}`);
-        b.disabled = false;
-        await render();
-      }));
-  } catch (e) { el("scan").innerHTML = empty("could not read scan: " + e.message); }
-
-  try {
-    const surface = await get(`/scans/${current}/surface`);
-    const obs = surface.observations || [];
-    el("surface").innerHTML = obs.length ? `<table><thead><tr>
-      <th>SUBJECT</th><th>KIND</th><th>EXPORTED</th><th>PERMISSION</th><th>STATEMENT</th>
-      </tr></thead><tbody>${obs.map((o) => `<tr>
-      <td>${esc(o.subject_ref)}</td><td>${esc(o.attributes?.kind ?? o.subject_type)}</td>
-      <td>${esc(o.attributes?.exported)}</td><td>${esc(o.attributes?.permission ?? "none")}</td>
-      <td>${esc(o.statement)}</td></tr>`).join("")}</tbody></table>`
-      : empty("RECON has not run for this scan");
-  } catch (e) {
-    el("surface").innerHTML = empty(e.message.includes("409")
-      ? "RECON has not run for this scan" : "could not read surface: " + e.message);
-  }
-
-  try {
-    const findings = (await get(`/scans/${current}/findings`)).items || [];
-    el("findings").innerHTML = findings.length ? `<table><thead><tr>
-      <th>STATUS</th><th>FINDING</th><th>CONFIDENCE</th><th>GATE EVIDENCE</th>
-      </tr></thead><tbody>${findings.map((f) => `<tr>
-      <td><span class="pill ${esc(f.status === "manual_review_required" ? "manual" : f.status)}">
-      ${esc(f.status)}</span></td>
-      <td>${esc(f.title)}<div class="id">${esc(f.severity)} · ${esc(f.maswe.join(", "))}</div></td>
-      <td>${esc(f.confidence)}</td>
-      <td class="id">${Object.entries(f.gate_evidence || {})
-        .map(([k, v]) => `${esc(k)}=${v === null ? "∅" : esc(v)}`).join(" ")}</td>
-      </tr>`).join("")}</tbody></table>`
-      : empty("no finding has been produced for this scan");
-  } catch (e) { el("findings").innerHTML = empty("could not read findings: " + e.message); }
+function renderTimeline(events){
+ $("timeline-cursor").textContent="REPLAYED "+events.length+" EVENTS · CURSOR "+lastSeq;
+ $("timeline").innerHTML=events.length?[...events].reverse().map(e=>'<div class="event"><span class="seq">#'+esc(e.seq)+'</span><span class="event-type">'+esc(e.type)+'</span><span class="event-detail">'+esc(JSON.stringify(e.payload||{}))+'<br><small>'+esc(e.actor||"system")+' · '+esc(fmtTime(e.at))+'</small></span></div>').join(""):empty("No events stored for this investigation.");
 }
-
-async function loadEvents(id) {
-  // Rendered from the store, not from a hardcoded list of listeners: an event type this
-  // page has never heard of still appears, because dropping it would be the UI deciding
-  // what happened.
-  try {
-    const body = await get(`/scans/${id}/events?limit=200`);
-    const items = body.items || [];
-    el("events").innerHTML = items.length
-      ? items.map((e) => `<div class="event"><span class="id">#${esc(e.seq)}</span>
-          <b>${esc(e.type)}</b> ${esc(JSON.stringify(e.payload))}</div>`).join("")
-      : empty("this scan has emitted no events");
-    return body.current_seq || 0;
-  } catch (e) {
-    el("events").innerHTML = empty("could not read the event log: " + e.message);
-    return 0;
-  }
+function renderCode(surface,graph,evidence){
+ const obs=surface.observations||[];const nodes=(graph.nodes||[]).filter(n=>["method","class","source_file","observation"].includes(n.data?.node_type));
+ const refs=nodes.length?nodes.map(n=>'<div class="code-ref"><strong>'+esc(n.data.label)+'</strong><p>'+esc(n.data.ref||"No source reference")+'</p><small>'+esc(n.data.assertion)+' · '+esc((n.data.evidence_refs||[]).join(", "))+'</small></div>').join(""):
+  obs.length?obs.map(o=>'<div class="code-ref"><strong>'+esc(o.subject_type||"observation")+': '+esc(o.subject_ref||"unreferenced")+'</strong><p>'+esc(o.statement)+'</p><small>'+esc(o.fidelity)+' · evidence '+esc((o.evidence_refs||[]).join(", "))+'</small></div>').join(""):empty("No persisted source, DEX or manifest observations are available yet.");
+ $("code-studio").innerHTML=refs+(nodes.length?"":'<div class="tag warn">SOURCE-LEVEL INDEX NOT AVAILABLE — MANIFEST / OBSERVATION REFERENCES ONLY</div>');
 }
-
-async function openStream(id) {
-  if (stream) stream.close();
-  el("events").innerHTML = "";
-  await loadEvents(id);
-  stream = new EventSource(`${API}/scans/${id}/stream?after=0`);
-  const types = ["investigation_started", "investigation_updated", "evidence_collected",
-    "surface_ready", "nexus_started", "frontier_dispatched", "frontier_dropped",
-    "validation_started", "finding_created", "finding_confirmed", "finding_rejected",
-    "code_analysis_complete", "nexus_complete", "report_written", "report_failed",
-    "stream_end"];
-  types.forEach((t) => stream.addEventListener(t, (ev) => {
-    el("events").insertAdjacentHTML("afterbegin",
-      `<div class="event"><b>${esc(ev.type)}</b> ${esc(ev.data)}</div>`);
-  }));
-  stream.onerror = () => { el("live").textContent = "stream closed"; };
+function renderGraph(graph,findings,hypotheses){
+ const nodes=graph.nodes||[],edges=graph.edges||[],paths=graph.candidate_paths||[];
+ $("graph-summary").textContent=nodes.length+" NODES · "+edges.length+" EDGES · "+paths.length+" CANDIDATE PATHS";
+ const hypothesisTags=hypotheses.map(h=>'<span class="tag warn">'+esc(h.status)+' · '+esc(h.claim)+' · proof '+esc((h.satisfied_evidence||[]).length)+'/'+esc((h.required_evidence||[]).length)+'</span>');
+ const pathTags=paths.map(p=>'<span class="tag warn">'+esc(p.label)+' · '+esc((p.missing_proof||[]).length)+' proof gaps</span>');
+ const findingTags=findings.map(f=>'<span class="tag">'+esc(f.status)+' · '+esc(f.title)+'</span>');
+ $("hypothesis-list").innerHTML=hypothesisTags.concat(pathTags,findingTags).join("")||'<span class="tag">NO PERSISTED HYPOTHESES / FINDINGS</span>';
 }
-
-boot();
+function renderPoc(runs){
+ $("poc-runs").innerHTML=runs.length?'<table class="poc-table"><thead><tr><th>RUN</th><th>STATUS</th><th>TOOL VERSION</th><th>DURATION</th><th>OUTPUT SHA-256</th></tr></thead><tbody>'+runs.map(r=>'<tr><td>'+esc(r.id)+'</td><td class="status">'+esc(r.status)+'</td><td>'+esc((r.tool_versions||[]).join(", "))+'</td><td>'+esc(r.duration_ms)+' ms</td><td>'+esc(r.output_sha256)+'</td></tr>').join("")+'</tbody></table>':empty("No persisted PoC runs. This panel never displays simulated run status.");
+}
+async function loadReport(){
+ try{const r=await fetch(API+"/scans/"+encodeURIComponent(currentId)+"/report");if(!r.ok)throw Error("no report");$("report-viewer").textContent=await r.text()}
+ catch{$("report-viewer").textContent="No persisted report has been written for this investigation."}
+}
+async function refreshEvents(){
+ if(!currentId)return;
+ try{const data=await get("/scans/"+encodeURIComponent(currentId)+"/events?after=0&limit=1000");lastSeq=data.current_seq||0;renderTimeline(data.items||[]);renderAgents(data.items||[])}
+ catch(e){$("api-status").textContent="EVENT REPLAY ERROR · "+e.message}
+}
+async function refreshAll(){if(currentId)await loadInvestigation(currentId);else await loadList()}
+$("scan-select").addEventListener("change",e=>loadInvestigation(e.target.value).catch(err=>alert(err.message)));
+$("intake-submit").addEventListener("click",async()=>{
+ const file=$("apk-file").files[0],pkg=$("target-package").value.trim(),objective=$("target-objective").value.trim();
+ if(!file||!pkg||objective.length<10){$("intake-status").textContent="Select an APK and provide package/objective.";return;}
+ const button=$("intake-submit");button.disabled=true;
+ try{
+  const form=new FormData();form.append("file",file,file.name);
+  const uploaded=await fetch(API+"/applications",{method:"POST",body:form});if(!uploaded.ok)throw Error(await uploaded.text());
+  const app=await uploaded.json();$("intake-status").textContent="UPLOADED · "+app.sha256;
+  const authorization=await post("/authorizations",{
+   apk_sha256:app.sha256,target_package:pkg,
+   scope_text:"Authorized static analysis of this exact uploaded APK only. No live service interaction.",
+   statement:"I am authorized to analyze this lab APK.",
+   max_intensity:0,expires_at:new Date(Date.now()+7*86400000).toISOString()
+  });
+  const scan=await post("/scans",{application_id:app.id,authorization_id:authorization.id,objective,intensity:0});
+  $("intake-status").textContent="INVESTIGATION CREATED · "+scan.id;
+  await loadList();$("scan-select").value=scan.id;await loadInvestigation(scan.id);
+ }catch(e){$("intake-status").textContent="INTAKE FAILED · "+e.message}
+ finally{button.disabled=false}
+});
+$("refresh").addEventListener("click",()=>refreshAll().catch(err=>{$("api-status").textContent=err.message}));
+$("report-action").addEventListener("click",async()=>{if(!currentId)return;try{await post("/scans/"+encodeURIComponent(currentId)+"/report");await loadReport();await refreshEvents()}catch(e){alert(e.message)}});
+loadList().catch(e=>{$("api-status").textContent="API ERROR · "+e.message});
 </script>
-</body>
-</html>
+</body></html>

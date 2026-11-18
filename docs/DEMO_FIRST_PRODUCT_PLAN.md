@@ -183,3 +183,10 @@ The project is ready for defence when the team can demonstrate, on a pinned and 
 7. A report that another reviewer can reproduce and audit.
 8. A War Room whose activity is entirely grounded in real backend events.
 9. A benchmark and limitations statement that does not overclaim recall or completeness.
+
+
+## 10. Visual and browser acceptance gates
+
+- D-033 and every War Room panel D-050–D-055 require real screenshots from a seeded investigation at 1280px desktop and 390px mobile. The screenshots are uploaded as a CI artifact; a human project-owner review is mandatory. A green build is not visual acceptance.
+- D-056 is a Playwright browser-level run on one deterministic fixture: upload → investigation → evidence → graph → PoC → report. The test captures a screenshot after each stage and verifies the complete persisted event sequence is identical after reload.
+- The CI fixture's PoC harness is explicitly synthetic. It proves UI/API/persistence integration, not APK runtime exploitability or real-device execution.

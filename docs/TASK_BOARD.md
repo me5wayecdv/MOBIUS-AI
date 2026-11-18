@@ -53,7 +53,7 @@
 | D-030 | Persist graph nodes and edges | M1 | [x] | PR #40 merged. Four normalized graph/evidence tables, composite same-investigation FKs, dedicated `ged_` edge IDs, and additive idempotent projection from persisted observations/findings/evidence. Python 3.11/3.12 + PostgreSQL 16 CI green (439 tests each). |
 | D-031 | Correlate component, caller, data source, sink and permission evidence | M1 + M2 | [x] | PR #41 merged. Direct component/method/permission/source/sink/guard relations carry evidence refs and assertion levels; no source nodes are invented without persisted source observations. Python 3.11/3.12 + PostgreSQL 16 CI green (441 tests each). | Relations carry provenance and edge type |
 | D-032 | Build candidate attack-chain reasoning | M1 + M5 | [x] | PR #42 merged. Bounded candidates persist as hypothesis graph nodes with ordered steps, prerequisites and missing proof. Taint propagation and runtime reproduction remain explicitly unproven. Python 3.11/3.12 + PostgreSQL 16 CI green (444 tests each). | Candidate path has explicit prerequisites and missing proof |
-| D-033 | Attack graph API and React Flow view | M6 | [~] | PR in progress: owner-scoped graph read/rebuild APIs, React Flow UI, assertion/provenance inspector and candidate proof gaps. | Observed/inferred/validated edges visually distinct |
+| D-033 | Attack graph API and React Flow view | M6 | [~] | PR #43 merged; React Flow graph is implemented. Visual acceptance remains blocked until the seeded-investigation desktop 1280px and mobile 390px CI screenshots are reviewed. CI green is not visual acceptance. | Observed/inferred/validated edges visually distinct; screenshots reviewed |
 
 ## Priority 4 — Safe PoC lab
 
@@ -61,21 +61,21 @@
 |---|---|---|---|---|
 | D-040 | Define typed PoC/TestPlan schema | M1 + M3 | [x] | PR #44 merged. Typed target/authorization/hypothesis binding, closed action registry, budgets, safety class, approval and cleanup constraints. Python 3.11/3.12 + PostgreSQL 16 CI green (452 tests each). | Target digest, scope, hypothesis, steps, expected outcome, budgets and cleanup |
 | D-041 | Implement allowlisted non-destructive test adapters | M3 | [x] | PR #45 merged. Persisted-manifest assertions and two deterministic local-only WebView harnesses; no shell, subprocess, network, emulator, or state-changing action. Python 3.11/3.12 + PostgreSQL 16 CI green (457 tests each). | Only prepared lab APK/emulator/local harness targets |
-| D-042 | Capture reproducible PoC evidence | M1 + M3 | [~] | PR in progress: persist plan/input hash, output hash/JSON, execution log, tool versions, timestamps, duration, exit status and same-investigation evidence links. | Tool version, inputs, outputs, logs, timestamps and exit status persisted |
-| D-043 | Add approval, timeout, cancel and cleanup paths | M1 + M3 | [~] | PR in progress: persisted approval requests/resolution/revocation, expiry checks, cooperative cancellation between bounded steps, per-step/total budgets, and finally cleanup. State-changing adapters remain disabled. | Out-of-scope or state-changing tests blocked without approval |
-| D-044 | Positive and negative PoC integration tests | M3 + M5 | [~] | PR in progress: positive and negative local-harness controls persist run/result/log evidence; asserts simulation-only results never auto-create a finding or verdict. |
+| D-042 | Capture reproducible PoC evidence | M1 + M3 | [x] | PR #46 merged. Plan/result/log evidence, hashes, tool versions, timestamps, duration, exit status and same-investigation links persisted. Python 3.11/3.12 + PostgreSQL 16 CI green (459 passed each). | Tool version, inputs, outputs, logs, timestamps and exit status persisted |
+| D-043 | Add approval, timeout, cancel and cleanup paths | M1 + M3 | [x] | PR #47 merged. Persisted approval lifecycle, expiry, cooperative cancellation between bounded steps, per-step/total budgets and finally cleanup; state-changing adapters remain disabled. Python 3.11/3.12 + PostgreSQL 16 CI green (463 passed each). | Out-of-scope or state-changing tests blocked without approval |
+| D-044 | Positive and negative PoC integration tests | M3 + M5 | [x] | PR #48 merged. Positive and negative harness controls persist reproducible run/result/log evidence; neither simulation is promoted to a finding/verdict. Python 3.11/3.12 + PostgreSQL 16 CI green (464 passed each). | Positive reproduces; negative control does not confirm |
 
 ## Priority 5 — War Room (real backend activity only)
 
 | # | Task | Owner | State | Acceptance |
 |---|---|---|---|---|
-| D-050 | Mission header and investigation coverage panel | M6 | [ ] | APK identity, scan state, tool/coverage limitations shown |
-| D-051 | Agent network with real lifecycle states | M6 + M1 | [ ] | Every state comes from persisted backend events |
-| D-052 | Investigation timeline with replay/reconnect | M6 + M1 | [ ] | Refresh does not lose events; no simulated activity |
-| D-053 | Code Investigation Studio | M6 | [ ] | Real source/DEX references, selected method and evidence |
-| D-054 | Attack graph and hypothesis inspector | M6 | [ ] | Edge semantics and proof state visible |
-| D-055 | PoC Lab panel and report viewer | M6 + M1 | [ ] | Real execution records and report |
-| D-056 | Browser-level E2E for the complete demo | M6 + All | [ ] | Upload → investigation → evidence → PoC → report works |
+| D-050 | Mission header and investigation coverage panel | M6 | [~] | War Room implementation in progress: authorized APK identity, SHA-256, state, tool availability and honest coverage limits. Desktop/mobile screenshots pending CI artifact review. | APK identity, scan state, tool/coverage limitations shown |
+| D-051 | Agent network with real lifecycle states | M6 + M1 | [~] | War Room implementation in progress: cards are derived only from persisted agent/tool lifecycle events; empty state explicitly says no activity is stored. Screenshots pending review. | Every state comes from persisted backend events |
+| D-052 | Investigation timeline with replay/reconnect | M6 + M1 | [~] | War Room implementation in progress: replay from the durable events API and periodic cursor refresh. Browser E2E compares full sequence IDs before/after refresh; screenshots pending CI. | Refresh does not lose events; no simulated activity |
+| D-053 | Code Investigation Studio | M6 | [~] | War Room implementation in progress: displays persisted observation/evidence references and explicitly labels absent source/DEX indexing. Real source/method navigation remains blocked by APK/index capability; screenshots pending review. | Real source/DEX references, selected method and evidence |
+| D-054 | Attack graph and hypothesis inspector | M6 | [~] | War Room implementation in progress: embeds React Flow and reads persisted hypotheses/findings. Visual acceptance requires desktop/mobile screenshots and human review. | Edge semantics and proof state visible |
+| D-055 | PoC Lab panel and report viewer | M6 + M1 | [~] | War Room implementation in progress: reads persisted PoC run records and stored Markdown report. Visual acceptance requires desktop/mobile screenshots and human review. | Real execution records and report |
+| D-056 | Browser-level E2E for the complete demo | M6 + All | [~] | Playwright browser E2E implemented; CI run and screenshot artifact pending. One fixture covers upload → investigation → evidence → graph → PoC → report, and verifies event sequence IDs survive refresh. | Upload → investigation → evidence → PoC → report works |
 
 ## Priority 6 — Optional capabilities
 

@@ -439,11 +439,13 @@ def test_the_war_room_is_served_and_reads_only_real_endpoints(client):
     html = resp.text
     # It must talk to the API rather than to baked-in data.
     assert "/api/v1" in html
-    assert "EventSource" in html
-    # The event panel is replayed from the store, so an unknown event type still shows.
-    assert "/events?limit=200" in html
-    # And it must say where its numbers come from.
-    assert "Every value on this page is read from the API" in html
+    # Timeline replay and reconnect are driven by polling the durable event cursor.
+    assert "/events?after=0&limit=1000" in html
+    assert "setInterval(()=>refreshEvents(),3000)" in html
+    assert "All visible state is read from persisted investigation data and events." in html
+    assert "/hypotheses" in html
+    assert "poc/runs" in html
+    assert "d050-mission" in html and "d055-poc-report" in html
     assert client.get("/", follow_redirects=False).status_code in (302, 307)
 
 
