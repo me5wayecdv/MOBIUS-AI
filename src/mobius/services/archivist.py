@@ -20,6 +20,7 @@ that was produced - content-addressed, not regenerated from a later database sta
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -47,16 +48,8 @@ AGENT = "ARCHIVIST"
 
 #: What this build's analysis structurally cannot establish. Printed in every report, because
 #: a reader who only sees the positives will over-read them.
-_LIMITATIONS = """\
-- **Static only.** Nothing was executed. No finding was confirmed by observing the target at
-  runtime, and no dynamic-analysis capability exists in this build.
-- **No data-flow analysis.** Reachability means a call path exists in the bytecode from an
-  entry point to a security-relevant operation. It does **not** establish that
-  attacker-controlled data reaches that operation.
-- **No control-flow analysis.** A guard anywhere in the same method suppresses the
-  "no caller check" clause, whatever order it executes in. This biases toward *not* confirming.
-- **Incomplete graphs are reported as such.** A truncated index can neither confirm nor refute
-  absence; those candidates are listed under "Not determined", not as clean.
+_LIMITATIONS = """\\
+- **Static only.** Nothing was executed and no runtime exploitability was observed.
 - **No data-flow analysis.** Call-graph reachability does not establish that attacker-controlled data reaches a sensitive operation.
 - **No control-flow analysis.** Guard order and effectiveness are not proven by this baseline.
 - **Reflection and dynamic loading are unresolved.** Reflective dispatch and code loaded at runtime may be missed.
@@ -64,8 +57,7 @@ _LIMITATIONS = """\
 - **Obfuscation is not reversed.** Names remain as exposed by DEX/JADX; no deobfuscation is claimed.
 - **Multi-DEX coverage is per-entry.** The coverage manifest lists indexed, failed, skipped and truncated DEX entries; a partial entry set cannot support a clean bill of health.
 - **Framework calls are boundaries.** Calls into framework code are recorded but not followed into platform implementation.
-- **Absence of a finding is not evidence of absence.** An empty findings list means this
-  pipeline found nothing by these methods, not that the application is safe.
+- **Absence of a finding is not evidence of absence.** An empty findings list means this pipeline found nothing by these methods, not that the application is safe.
 """
 
 
@@ -488,7 +480,7 @@ class ArchivistService:
             f"| `{item['capability']}` | `{item['status']}` | {item['detail']} |"
             for item in manifest["limitations"]
         ]
-        return "\\n".join([
+        return "\n".join([
             "## 9. Code coverage and limitations manifest",
             "",
             f"**Overall coverage status:** `{manifest['overall_status'].upper()}`"
