@@ -8,6 +8,7 @@ emulator adapter and host capability are supplied.
 from __future__ import annotations
 
 import json
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import time
@@ -91,6 +92,10 @@ class SafePoCRunner:
             approval = self.session.get(ApprovalRow, plan.approval_id) if plan.approval_id else None
             if (approval is None or approval.investigation_id != plan.investigation_id
                 or approval.requested_action != "poc.execute" or approval.state != "granted"
+                or approval.plan_sha256 != hashlib.sha256(json.dumps(
+                    plan.model_dump(mode="json", exclude={"approval_id"}),
+                    sort_keys=True, separators=(",", ":"),
+                ).encode("utf-8")).hexdigest()
                 or datetime.fromisoformat(approval.expires_at.replace("Z", "+00:00")) <= datetime.now(timezone.utc)):
                 raise PoCApprovalRequired("a matching, unexpired granted PoC approval is required")
         elif plan.safety_class != "read_only":

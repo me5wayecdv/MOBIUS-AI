@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
+import json
 from sqlalchemy.orm import Session
 
 from ..adapters.events import SqlEventStore, utcnow
@@ -25,9 +27,14 @@ class PoCApprovalService:
         expiry = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
         if expiry <= datetime.now(timezone.utc):
             raise PoCApprovalError("approval expiry must be in the future")
+        plan_sha256 = hashlib.sha256(json.dumps(
+            plan.model_dump(mode="json", exclude={"approval_id"}),
+            sort_keys=True, separators=(",", ":"),
+        ).encode("utf-8")).hexdigest()
         row = ApprovalRow(
             id=new_id(IdPrefix.APPROVAL), investigation_id=plan.investigation_id,
-            requested_action="poc.execute", intensity_required=1, intensity_granted=None,
+            requested_action="poc.execute", plan_sha256=plan_sha256,
+            intensity_required=1, intensity_granted=None,
             justification=justification, risk_summary=risk_summary, state="pending",
             requested_by=requested_by, decided_by=None, decided_at=None, decision_note=None,
             expires_at=expires_at, created_at=utcnow(),
@@ -50,7 +57,12 @@ class PoCApprovalService:
             raise PoCApprovalError(f"approval is already {row.state}")
         if datetime.fromisoformat(row.expires_at.replace("Z", "+00:00")) <= datetime.now(timezone.utc):
             row.state = "expired"
-            raise PoCApprovalError("approval request has expired")
+            row.decided_at = utcnow()
+            row.decision_note = "Approval request expired before decision"
+            SqlEventStore(self.session).emit(investigation_id, "approval_resolved", {
+                "approval_id": row.id, "decision": "expired",
+            }, actor=decided_by)
+            return row
         if decision not in {"granted", "rejected"}:
             raise PoCApprovalError("decision must be granted or rejected")
         row.state = decision
