@@ -35,6 +35,7 @@ class IdPrefix:
     EVENT = "evt"
     GRAPH_NODE = "gph"
     GRAPH_EDGE = "ged"
+    POC_PLAN = "poc"
     FRONTIER = "fro"
     AUTHORIZATION = "ath"
 

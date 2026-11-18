@@ -53,6 +53,70 @@ class _Model(BaseModel):
 
 
 # --------------------------------------------------------------------------------------
+# Safe PoC / TestPlan (D-040)
+# --------------------------------------------------------------------------------------
+
+
+class PoCStep(_Model):
+    """One closed-registry action; plans cannot provide shell commands or arbitrary URLs."""
+
+    action: Literal[
+        "assert_manifest_component",
+        "assert_manifest_permission",
+        "invoke_local_harness",
+        "assert_local_harness_result",
+    ]
+    target_ref: str = Field(min_length=1, max_length=500)
+    expected_value: str | bool | int | None = None
+    timeout_seconds: int = Field(default=15, ge=1, le=60)
+
+
+class PoCCleanupStep(_Model):
+    action: Literal["remove_temporary_workspace", "reset_local_harness"]
+    target_ref: str = Field(min_length=1, max_length=300)
+    timeout_seconds: int = Field(default=15, ge=1, le=60)
+
+
+class PoCTestPlan(_Model):
+    """Typed, scoped, budgeted plan for a non-destructive lab proof."""
+
+    id: str = Field(
+        default_factory=lambda: new_id(IdPrefix.POC_PLAN),
+        pattern=rf"^poc_{_ULID}$",
+    )
+    investigation_id: str = Field(min_length=1)
+    authorization_id: str = Field(min_length=1)
+    target_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    target_package: str = Field(min_length=1, max_length=255)
+    target_kind: Literal["lab_apk", "local_harness", "emulator"]
+    hypothesis_ids: tuple[str, ...] = Field(min_length=1, max_length=20)
+    prerequisites: tuple[str, ...] = Field(default=(), max_length=30)
+    steps: tuple[PoCStep, ...] = Field(min_length=1, max_length=20)
+    expected_outcome: str = Field(min_length=1, max_length=2000)
+    safety_class: Literal["read_only", "non_destructive", "state_changing"] = "read_only"
+    max_duration_seconds: int = Field(default=60, ge=1, le=300)
+    max_output_bytes: int = Field(default=65536, ge=1, le=1_048_576)
+    cleanup_steps: tuple[PoCCleanupStep, ...] = Field(default=(), max_length=10)
+    requires_approval: bool = False
+
+    @model_validator(mode="after")
+    def _bounded_and_approved(self) -> PoCTestPlan:
+        total_timeout = sum(step.timeout_seconds for step in self.steps)
+        if total_timeout > self.max_duration_seconds:
+            raise ValueError("sum of step timeouts exceeds max_duration_seconds")
+        if self.safety_class == "state_changing" and not self.requires_approval:
+            raise ValueError("state-changing PoC plans require explicit approval")
+        if self.safety_class != "read_only" and not self.cleanup_steps:
+            raise ValueError("non-read-only PoC plans must define cleanup_steps")
+        if self.target_kind == "local_harness" and any(
+            step.action in {"assert_manifest_component", "assert_manifest_permission"}
+            for step in self.steps
+        ):
+            raise ValueError("manifest assertions require a lab_apk or emulator target")
+        return self
+
+
+# --------------------------------------------------------------------------------------
 # Evidence
 # --------------------------------------------------------------------------------------
 
