@@ -122,7 +122,7 @@ def _build_method_flow(vm, encoded_method: object) -> MethodFlow | None:
         for instruction in raw_block.get_instructions():
             opcode = instruction.get_name()
             try:
-                operands = instruction.get_operands(offset)
+                operands = instruction.get_operands()
                 registers = tuple(
                     int(item[1]) for item in operands
                     if item and item[0] == Operand.REGISTER
@@ -131,7 +131,7 @@ def _build_method_flow(vm, encoded_method: object) -> MethodFlow | None:
                 registers = ()
                 extraction_complete = False
             dest, uses, unsupported = _instruction_effect(opcode, registers)
-            target = _parse_reference(instruction.get_output(offset)) if opcode.startswith("invoke-") else None
+            target = _parse_reference(instruction.get_output()) if opcode.startswith("invoke-") else None
             if opcode.startswith("invoke-") and target is None:
                 unsupported = True
                 extraction_complete = False
