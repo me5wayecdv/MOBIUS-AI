@@ -10,6 +10,7 @@ All routes are scoped to an owned investigation and its authorized APK digest.
 - `GET /api/v1/scans/{scan_id}/code/classes?prefix=com.example&limit=200` — list classes represented in the verified cache.
 - `GET /api/v1/scans/{scan_id}/code/methods?class_name=com.example.Entry&limit=200` — list parsed method declarations for one class.
 - `GET /api/v1/scans/{scan_id}/code/source?path=com/example/Entry.java&start_line=1&end_line=40` — retrieve a bounded source excerpt.
+- `POST /api/v1/scans/{scan_id}/code/source/evidence?class_name=com.example.Entry&method_name=onCreate` — persist one unambiguous method excerpt (up to 40 lines) as immutable, content-addressed evidence for D-021.
 
 ## Cache and provenance
 
@@ -30,6 +31,8 @@ compiler-generated constructs may not be represented. The original source is not
 - Invalid/corrupt cache: 409 `JADX_CACHE_INVALID`.
 - Missing class/source or invalid range: explicit 404/422 response.
 - Ownership failures remain indistinguishable from missing investigations (404).
+
+D-021 source-evidence capture reads only this verified cache, stores the bounded excerpt with APK digest, JADX version, path, line range, fidelity and method reference, and emits a persisted evidence event. The evidence package includes only same-investigation captures and re-verifies their content hashes before returning source text.
 
 The API process never starts JADX or invokes the OCI runtime. It queues an authorized
 `jadx_decompile` job only when `MOBIUS_JADX_IMAGE` is configured as an immutable digest reference.

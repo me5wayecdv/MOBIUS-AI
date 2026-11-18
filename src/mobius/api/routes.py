@@ -415,6 +415,7 @@ def generate_nexus_hypotheses(
         session,
         gateway=ctx.model_gateway,
         session_factory=ctx.session_factory,
+        store=ctx.store,
     ).generate(scan_id, component=component)
 
 
@@ -450,7 +451,7 @@ def _jadx_http_error(exc):
         raise HTTPException(status_code=422, detail={"code": "JADX_EXECUTION_FAILED", "detail": exc.detail})
     if isinstance(exc, JadxError):
         code = exc.status.upper().replace("-", "_")
-        status = 404 if exc.status in {"source_unavailable", "class_not_found", "source_not_found"} else 422
+        status = 404 if exc.status in {"source_unavailable", "class_not_found", "source_not_found", "method_not_found"} else (409 if exc.status == "method_ambiguous" else 422)
         raise HTTPException(status_code=status, detail={"code": f"JADX_{code}", "detail": exc.detail})
     raise exc
 
@@ -598,6 +599,32 @@ def get_coverage_manifest(
     return CoverageManifestBuilder(session, ctx.store).build(scan_id)
 
 
+@router.post("/scans/{scan_id}/code/source/evidence", status_code=201, tags=["code"])
+def persist_code_source_evidence(
+    scan_id: str,
+    class_name: str = Query(min_length=1, max_length=500),
+    method_name: str = Query(min_length=1, max_length=200),
+    session=Depends(_session),
+    who: str = Depends(analyst_id),
+):
+    """Persist one bounded method excerpt from the verified JADX cache as immutable evidence."""
+    _require_scan_owner(session, scan_id, who)
+    try:
+        from ..services.source_evidence import capture_method_source
+
+        ctx = get_context()
+        return capture_method_source(
+            session=session,
+            store=ctx.store,
+            lookup=_jadx_lookup(session),
+            investigation_id=scan_id,
+            class_name=class_name,
+            method_name=method_name,
+        )
+    except Exception as exc:
+        _jadx_http_error(exc)
+
+
 @router.get("/scans/{scan_id}/evidence-package", tags=["scans"])
 def get_evidence_package(
     scan_id: str,
@@ -609,7 +636,8 @@ def get_evidence_package(
     _require_scan_owner(session, scan_id, who)
     from ..services.evidence_package import EvidencePackageBuilder
 
-    return EvidencePackageBuilder(session).build(
+    ctx = get_context()
+    return EvidencePackageBuilder(session, store=ctx.store).build(
         scan_id, component=component
     ).as_dict()
 
