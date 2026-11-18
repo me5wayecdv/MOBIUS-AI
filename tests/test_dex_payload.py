@@ -133,3 +133,24 @@ def test_data_flow_payload_rejects_confirmed_or_guard_verified_claims():
     import json
     with pytest.raises(ValueError, match="unsupported assertion"):
         validate_dex_index_payload(json.dumps(payload).encode(), digest)
+
+
+
+def test_legacy_worker_payload_without_d015_fields_defaults_to_incomplete():
+    apk = _apk()
+    digest = hashlib.sha256(apk).hexdigest()
+    payload = code_index_payload(index_apk(apk), digest)
+    for key in (
+        "data_flows",
+        "data_flow_methods",
+        "data_flow_truncated_methods",
+        "data_flow_complete",
+        "data_flow_limitations",
+    ):
+        payload.pop(key, None)
+    import json
+    restored = validate_dex_index_payload(json.dumps(payload).encode(), digest)
+
+    assert restored.data_flows == ()
+    assert restored.data_flow_methods == 0
+    assert restored.data_flow_complete is False
