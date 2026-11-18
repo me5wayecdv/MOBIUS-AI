@@ -415,6 +415,7 @@ def generate_nexus_hypotheses(
         session,
         gateway=ctx.model_gateway,
         session_factory=ctx.session_factory,
+        store=ctx.store,
     ).generate(scan_id, component=component)
 
 
