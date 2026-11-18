@@ -41,8 +41,8 @@ sources:
     descriptor: (Ljava/lang/String;)Ljava/lang/String;
     family: ipc
     trust_boundary: caller-dependent
-    maswe: [MASWE-0032, MASWE-0050]
-    masvs: [MASVS-PLATFORM-1, MASVS-CODE-4]
+    maswe: [MASWE-0050]
+    masvs: [MASVS-CODE-4]
     confidence: low
     description: Reads a string from a Bundle; origin must be established from its producer
     references: [MASTG-KNOW-0025]
@@ -168,7 +168,7 @@ sinks:
     masvs: [MASVS-CODE-4]
     confidence: low
     impact: confidentiality
-    description: Opens a file descriptor; URI provenance and path containment must be established
+    description: Opens a file descriptor for a file; path provenance and containment must be established
     references: [MASTG-KNOW-0117]
   - id: raw-sql
     class_descriptor: Landroid/database/sqlite/SQLiteDatabase;
