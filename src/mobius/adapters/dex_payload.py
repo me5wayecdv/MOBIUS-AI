@@ -85,7 +85,7 @@ class DexIndexDTO(StrictModel):
     data_flows: list[DataFlowDTO] = Field(default_factory=list, max_length=1000)
     data_flow_methods: int = Field(default=0, ge=0, le=50000)
     data_flow_truncated_methods: int = Field(default=0, ge=0, le=50000)
-    data_flow_complete: bool = True
+    data_flow_complete: bool = False
     data_flow_limitations: list[str] = Field(default_factory=list, max_length=100)
 
     def to_code_index(self) -> CodeIndex:
