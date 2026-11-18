@@ -115,14 +115,17 @@ class PoCTestPlan(_Model):
     max_output_bytes: int = Field(default=65536, ge=1, le=1_048_576)
     cleanup_steps: tuple[PoCCleanupStep, ...] = Field(default=(), max_length=10)
     requires_approval: bool = False
+    approval_id: str | None = Field(default=None, min_length=1, max_length=40)
 
     @model_validator(mode="after")
     def _bounded_and_approved(self) -> PoCTestPlan:
         total_timeout = sum(step.timeout_seconds for step in self.steps)
         if total_timeout > self.max_duration_seconds:
             raise ValueError("sum of step timeouts exceeds max_duration_seconds")
-        if self.safety_class == "state_changing" and not self.requires_approval:
-            raise ValueError("state-changing PoC plans require explicit approval")
+        if self.safety_class != "read_only" and not self.requires_approval:
+            raise ValueError("non-read-only PoC plans require explicit approval")
+        if self.requires_approval and self.approval_id is not None and not self.approval_id.startswith("apr_"):
+            raise ValueError("approval_id must be an approval record ID")
         if self.safety_class != "read_only" and not self.cleanup_steps:
             raise ValueError("non-read-only PoC plans must define cleanup_steps")
         if self.target_kind == "local_harness" and any(
