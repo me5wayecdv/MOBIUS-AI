@@ -133,7 +133,7 @@ def run_once() -> bool:
                 "tool_version": decompiled.tool_version,
                 "source_file_count": len(decompiled.source_files),
                 "source_files": list(decompiled.source_files[:5000]),
-                "cache_entry": str(decompiled.cache_dir.parent),
+                "cache_entry": f"{decompiled.apk_sha256}/{decompiled.tool_version}",
                 "cached": decompiled.cached,
                 "fidelity": decompiled.fidelity,
             }
