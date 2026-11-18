@@ -62,12 +62,17 @@ def test_negative_non_security_relevant_value_reads_are_not_sinks():
 def test_invalid_catalogue_mapping_fails_closed(tmp_path: Path):
     bad = tmp_path / "bad.yaml"
     bad.write_text(
-        "version: 1\ncatalogue_id: bad\nplatform: android\n"
-        "sources: []\nsinks: []\nguards: []\n",
+        "version: 1\\ncatalogue_id: bad\\nplatform: android\\n"
+        "sources:\\n"
+        "  - {id: external-input, class_descriptor: 'Lx/Input;', method: read, "
+        "descriptor: '()Ljava/lang/String;', family: ipc, trust_boundary: external, "
+        "maswe: [MASWE-9999], masvs: [MASVS-CODE-4], confidence: high, "
+        "description: invalid mapping}\\n"
+        "sinks: []\\nguards: []\\n",
         encoding="utf-8",
     )
-    loaded = load_catalogue(bad)
-    assert loaded.sources == () and loaded.sinks == () and loaded.guards == ()
+    with pytest.raises(ValueError, match="invalid identifier"):
+        load_catalogue(bad)
 
 
 def test_duplicate_api_key_is_rejected(tmp_path: Path):
