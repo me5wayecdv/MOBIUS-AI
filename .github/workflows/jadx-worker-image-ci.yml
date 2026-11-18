@@ -1,0 +1,98 @@
+name: JADX worker image CI (local build and smoke only)
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "workers/jadx-image/**"
+      - "src/mobius/adapters/jadx.py"
+      - "src/mobius/services/tool_runner.py"
+      - "scripts/smoke_jadx_image.py"
+      - "tests/fixtures/dex/AnalysisTest.dex"
+      - ".github/workflows/jadx-worker-image-ci.yml"
+  push:
+    branches: [main]
+    paths:
+      - "workers/jadx-image/**"
+      - "src/mobius/adapters/jadx.py"
+      - "src/mobius/services/tool_runner.py"
+      - "scripts/smoke_jadx_image.py"
+      - "tests/fixtures/dex/AnalysisTest.dex"
+      - ".github/workflows/jadx-worker-image-ci.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mobius-jadx-local-image-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-load-smoke:
+    name: Build locally, load and run real JADX cache smoke
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and load image into local Docker daemon (no push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: workers/jadx-image/Dockerfile
+          push: false
+          load: true
+          tags: mobius-jadx:ci
+          build-args: |
+            JADX_VERSION=1.5.6
+
+      - name: Verify image is local
+        run: |
+          set -euo pipefail
+          docker image inspect mobius-jadx:ci --format '{{.Id}}'
+          if docker image inspect mobius-jadx:ci --format '{{json .RepoDigests}}' | grep -q 'ghcr.io'; then
+            echo "Unexpected registry digest in local-only CI build" >&2
+            exit 1
+          fi
+
+      - name: Run real JADX fixture smoke in hardened local container
+        run: |
+          set -euo pipefail
+          smoke_root="$RUNNER_TEMP/jadx-image-smoke"
+          mkdir -p "$smoke_root"
+          chown 65532:65532 "$smoke_root"
+          docker run --rm --network none --read-only --cap-drop ALL \
+            --security-opt no-new-privileges --user 65532:65532 \
+            --pids-limit 128 --memory 4096m --cpus 2 \
+            --tmpfs /tmp:rw,noexec,nosuid,nodev,size=128m \
+            --mount "type=bind,src=$smoke_root,dst=/work,rw" \
+            mobius-jadx:ci \
+            python /opt/mobius/scripts/smoke_jadx_image.py \
+              --fixture /opt/mobius/tests/fixtures/dex/AnalysisTest.dex \
+              --workspace-root /work/workspaces \
+              --cache-root /work/cache \
+              --result /work/smoke-result.json
+          python - <<'PY'
+          import json, os
+          from pathlib import Path
+          result = json.loads((Path(os.environ["RUNNER_TEMP"]) / "jadx-image-smoke" / "smoke-result.json").read_text())
+          assert result["status"] == "passed"
+          assert result["jadx_version"] == "1.5.6"
+          assert result["first_run_cached"] is False
+          assert result["second_run_cached"] is True
+          assert result["source_file_count"] > 0
+          assert result["dex_sha256"]
+          print("Verified local JADX image smoke:", result["source_file_count"], "source files")
+          PY
+
+      - name: Upload local smoke evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mobius-jadx-local-image-smoke-${{ github.run_id }}
+          path: ${{ runner.temp }}/jadx-image-smoke/smoke-result.json
+          if-no-files-found: error
+          retention-days: 14
