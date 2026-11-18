@@ -174,9 +174,8 @@ class JadxCodeLookup:
 
     @staticmethod
     def _read_text(result: JadxResult, path: str) -> str:
-        snippet = JadxAdapter.resolve_source(
-            result, relative_path=path, start_line=1, end_line=1
-        )
+        # resolve_source validates manifest membership, containment and file integrity.
+        JadxAdapter.resolve_source(result, relative_path=path, start_line=1, end_line=1)
         source_path = result.cache_dir / path
         # resolve_source already validates manifest membership and file integrity.
         data = source_path.read_bytes()
@@ -187,7 +186,6 @@ class JadxCodeLookup:
 
     @staticmethod
     def _parse_methods(class_name: str, path: str, source: str) -> list[CodeMethod]:
-        lines = source.splitlines()
         found: list[CodeMethod] = []
         if path.endswith(".smali"):
             for match in _SMALI_METHOD.finditer(source):
