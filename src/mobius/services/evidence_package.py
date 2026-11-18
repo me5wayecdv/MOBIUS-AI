@@ -202,6 +202,14 @@ class EvidencePackageBuilder:
             )
             .order_by(EvidenceRow.created_at.asc(), EvidenceRow.id.asc())
         ).scalars())
+        source_evidence_ids = {row.id for row, _ in source_rows}
+        all_evidence.sort(
+            key=lambda row: (
+                row.id not in source_evidence_ids,
+                row.created_at,
+                row.id,
+            )
+        )
         if len(all_evidence) > self.max_evidence:
             truncated = True
         evidence_rows = all_evidence[: self.max_evidence]
