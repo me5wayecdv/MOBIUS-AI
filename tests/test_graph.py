@@ -4,7 +4,9 @@ import pytest
 from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 
-from mobius.adapters.models import (\n    GraphEdgeEvidenceRow, GraphEdgeRow, GraphNodeEvidenceRow, ObservationRow,\n)
+from mobius.adapters.models import (
+    GraphEdgeEvidenceRow, GraphEdgeRow, GraphNodeEvidenceRow, ObservationRow,
+)
 from mobius.core.enums import AssertionLevel, EvidenceKind, Fidelity, ObservationKind
 from mobius.core.ids import IdPrefix, new_id
 from mobius.core.schemas import GraphEdge, GraphNode
