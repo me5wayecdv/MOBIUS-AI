@@ -190,3 +190,10 @@ def test_method_reference_parser_keeps_names_containing_s():
         "getString",
         "()Ljava/lang/String;",
     )
+
+
+
+def test_dex_fixture_reports_selected_data_flow_scope_without_inventing_flows(index):
+    assert index.data_flows == ()
+    assert index.data_flow_methods == 0
+    assert index.data_flow_complete is True
