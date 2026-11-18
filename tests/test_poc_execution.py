@@ -18,7 +18,7 @@ def _context(session, store, future_iso):
     package = app.package_name or "com.example"
     auth = intake.create_authorization(
         apk_sha256=app.sha256, target_package=package,
-        scope_text="Local harness only", statement="I own this APK",
+        scope_text="Local harness execution only", statement="I own this APK",
         max_intensity=0, granted_by="analyst-1", expires_at=future_iso,
     )
     scan = intake.create_investigation(
