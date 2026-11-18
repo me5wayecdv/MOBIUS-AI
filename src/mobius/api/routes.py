@@ -432,7 +432,7 @@ def _jadx_lookup(session):
     return JadxCodeLookup(
         session=session,
         store=ctx.store,
-        cache_root=ctx.settings.artifact_root / "jadx-cache",
+        cache_root=ctx.settings.jadx_cache_root or (ctx.settings.artifact_root / "jadx-cache"),
         runner=runner,
     )
 
@@ -475,6 +475,60 @@ def decompile_scan_code(
         return _jadx_lookup(session).decompile(scan_id)
     except Exception as exc:
         _jadx_http_error(exc)
+
+
+@router.post("/scans/{scan_id}/code/decompile/jobs", status_code=202, tags=["code"])
+def enqueue_jadx_decompile(
+    scan_id: str,
+    session=Depends(_session),
+    who: str = Depends(analyst_id),
+):
+    """Queue JADX in the isolated worker; the API process never runs the decompiler."""
+    scan = _require_scan_owner(session, scan_id, who)
+    application = session.get(ApplicationRow, scan.application_id)
+    if application is None:
+        from ..services.errors import NotFound
+        raise NotFound(f"application {scan.application_id} not found")
+    job = WorkerQueue(session).enqueue_jadx_decompile(scan_id, application.artifact_key)
+    SqlEventStore(session).emit(
+        scan_id, "worker_job_queued",
+        {"job_id": job.id, "kind": job.kind, "status": job.status},
+        actor="M2",
+    )
+    return {
+        "job_id": job.id,
+        "investigation_id": scan_id,
+        "kind": job.kind,
+        "status": job.status,
+        "created_at": job.created_at,
+    }
+
+
+@router.get("/scans/{scan_id}/code/decompile/jobs/{job_id}", tags=["code"])
+def get_jadx_decompile_job(
+    scan_id: str,
+    job_id: str,
+    session=Depends(_session),
+    who: str = Depends(analyst_id),
+):
+    _require_scan_owner(session, scan_id, who)
+    job = WorkerQueue(session).get(job_id)
+    if job.investigation_id != scan_id or job.kind != "jadx_decompile":
+        from ..services.errors import NotFound
+        raise NotFound(f"JADX worker job {job_id} not found")
+    return {
+        "job_id": job.id,
+        "kind": job.kind,
+        "status": job.status,
+        "attempts": job.attempts,
+        "worker_id": job.worker_id,
+        "error_code": job.error_code,
+        "error_detail": job.error_detail,
+        "result": job.result_json if job.status == "succeeded" else None,
+        "created_at": job.created_at,
+        "started_at": job.started_at,
+        "finished_at": job.finished_at,
+    }
 
 
 @router.get("/scans/{scan_id}/code/classes", tags=["code"])
