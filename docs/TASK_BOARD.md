@@ -11,7 +11,7 @@
 - Existing War Room is a basic HTML page reading API data. It is not the intended final investigation cockpit.
 - A local Ollama/structured-output provider boundary and deterministic mock implement the core ModelGateway port (PR #33). NEXUS hypothesis generation (PR #35) and D-026 VERITAS review (PR #39) use the investigation-bound gateway only with explicit per-investigation consent; deterministic fallback remains the default.
 - No full decompilation workflow, CFG/taint analysis, model-driven adaptive NEXUS, PoC runner, persisted attack graph, PHANTOM, or VECTOR. D-026 VERITAS independent review is being implemented on PR #39; it is advisory and not yet wired into the scan pipeline. The DEX OCI worker image smoke test passed; dedicated worker deployment remains pending.
-- Latest documented audit and status files must be reconciled to current main before using them as live status.
+- PR #50 merged to main as `0cf634338bb14c47bd98928aa10824431d42121b`; owner visual acceptance is complete for D-033 and D-050–D-056. D-012 is now the active engineering task.
 
 ## Priority 0 — Establish reproducible demo target
 
@@ -28,7 +28,7 @@
 |---|---|---|---|---|
 | D-010 | Verify APK multi-DEX enumeration and add per-entry coverage/provenance | M2 | [~] | Implemented parser coverage; isolated `dex_index` queue/image/worker path added on PR branch. Validate against a real multidex APK and deployed worker before marking done |
 | D-011 | Harden multi-DEX aggregation and provenance | M2 | [~] | Parser tests cover provenance, duplicate classes, malformed secondary DEX, and budget truncation; worker payload round-trip and APK digest binding added. CI and published-image smoke tests passed (PR #32); dedicated worker deployment smoke test remains |
-| D-012 | Add JADX adapter and cache by APK digest/tool version | M2 | [ ] | Source/decompiled references resolve; failures explicit |
+| D-012 | Add JADX adapter and cache by APK digest/tool version | M2 | [~] | Adapter delegates to the fail-closed ToolRunner; cache identity is APK SHA-256 + JADX version; source references are integrity-checked and bounded. Real fixture smoke runs on CI with pinned JADX 1.5.6. API/class/method lookup remains D-013 |
 | D-013 | Build class/method/source lookup APIs | M1 + M2 | [ ] | War Room can navigate to actual code locations |
 | D-014 | Add Android sensitive source/sink catalogue | M2 + M5 | [ ] | Catalogue has MASWE/MASVS mapping and positive/negative tests |
 | D-015 | Add bounded CFG/data-flow for selected source/sink families | M1 + M2 | [ ] | Tainted/untrusted input tracked to selected sensitive sinks; guard order considered |
@@ -53,7 +53,7 @@
 | D-030 | Persist graph nodes and edges | M1 | [x] | PR #40 merged. Four normalized graph/evidence tables, composite same-investigation FKs, dedicated `ged_` edge IDs, and additive idempotent projection from persisted observations/findings/evidence. Python 3.11/3.12 + PostgreSQL 16 CI green (439 tests each). |
 | D-031 | Correlate component, caller, data source, sink and permission evidence | M1 + M2 | [x] | PR #41 merged. Direct component/method/permission/source/sink/guard relations carry evidence refs and assertion levels; no source nodes are invented without persisted source observations. Python 3.11/3.12 + PostgreSQL 16 CI green (441 tests each). | Relations carry provenance and edge type |
 | D-032 | Build candidate attack-chain reasoning | M1 + M5 | [x] | PR #42 merged. Bounded candidates persist as hypothesis graph nodes with ordered steps, prerequisites and missing proof. Taint propagation and runtime reproduction remain explicitly unproven. Python 3.11/3.12 + PostgreSQL 16 CI green (444 tests each). | Candidate path has explicit prerequisites and missing proof |
-| D-033 | Attack graph API and React Flow view | M6 | [~] | PR #43 merged; React Flow graph is implemented. Visual acceptance remains blocked until the seeded-investigation desktop 1280px and mobile 390px CI screenshots are reviewed. CI green is not visual acceptance. | Observed/inferred/validated edges visually distinct; screenshots reviewed |
+| D-033 | Attack graph API and React Flow view | M6 | [x] | PR #43 implementation plus PR #50 screenshot coverage. Project owner reviewed the 1280px desktop and 390px mobile screenshots; graph nodes and embed view accepted. |
 
 ## Priority 4 — Safe PoC lab
 
@@ -69,13 +69,13 @@
 
 | # | Task | Owner | State | Acceptance |
 |---|---|---|---|---|
-| D-050 | Mission header and investigation coverage panel | M6 | [~] | War Room implementation in progress: authorized APK identity, SHA-256, state, tool availability and honest coverage limits. Desktop/mobile screenshots pending CI artifact review. | APK identity, scan state, tool/coverage limitations shown |
-| D-051 | Agent network with real lifecycle states | M6 + M1 | [~] | War Room implementation in progress: cards are derived only from persisted agent/tool lifecycle events; empty state explicitly says no activity is stored. Screenshots pending review. | Every state comes from persisted backend events |
-| D-052 | Investigation timeline with replay/reconnect | M6 + M1 | [~] | War Room implementation in progress: replay from the durable events API and periodic cursor refresh. Browser E2E compares full sequence IDs before/after refresh; screenshots pending CI. | Refresh does not lose events; no simulated activity |
-| D-053 | Code Investigation Studio | M6 | [~] | War Room implementation in progress: displays persisted observation/evidence references and explicitly labels absent source/DEX indexing. Real source/method navigation remains blocked by APK/index capability; screenshots pending review. | Real source/DEX references, selected method and evidence |
-| D-054 | Attack graph and hypothesis inspector | M6 | [~] | War Room implementation in progress: embeds React Flow and reads persisted hypotheses/findings. Visual acceptance requires desktop/mobile screenshots and human review. | Edge semantics and proof state visible |
-| D-055 | PoC Lab panel and report viewer | M6 + M1 | [~] | War Room implementation in progress: reads persisted PoC run records and stored Markdown report. Visual acceptance requires desktop/mobile screenshots and human review. | Real execution records and report |
-| D-056 | Browser-level E2E for the complete demo | M6 + All | [~] | Playwright browser E2E implemented; CI run and screenshot artifact pending. One fixture covers upload → investigation → evidence → graph → PoC → report, and verifies event sequence IDs survive refresh. | Upload → investigation → evidence → PoC → report works |
+| D-050 | Mission header and investigation coverage panel | M6 | [x] | PR #50 merged; owner accepted desktop 1280px and mobile 390px screenshots. |
+| D-051 | Agent network with real lifecycle states | M6 + M1 | [x] | PR #50 merged; persisted lifecycle-only states and intentional empty state visually accepted at 1280px/390px. |
+| D-052 | Investigation timeline with replay/reconnect | M6 + M1 | [x] | PR #50 merged; browser E2E verifies persisted event sequence survives refresh; desktop/mobile screenshots accepted. |
+| D-053 | Code Investigation Studio | M6 | [x] | PR #50 merged; honest missing-source/DEX-indexing state visually accepted. Real decompiled source navigation remains D-012/D-013 scope. |
+| D-054 | Attack graph and hypothesis inspector | M6 | [x] | PR #50 merged; graph semantics, readable nodes and proof state accepted on desktop/mobile screenshots. |
+| D-055 | PoC Lab panel and report viewer | M6 + M1 | [x] | PR #50 merged; persisted PoC records and semantic HTML report visually accepted on desktop/mobile screenshots. |
+| D-056 | Browser-level E2E for the complete demo | M6 + All | [x] | PR #50 merged; CI run 44239527536 passed the PostgreSQL 16 browser flow and uploaded the 22-screenshot artifact. |
 
 ## Priority 6 — Optional capabilities
 
