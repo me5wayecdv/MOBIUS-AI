@@ -46,6 +46,11 @@ they count samples *flagged* (confirmed > 0). What moved is where bounded-search
 | `a2dp-volume` | 1 | 2 | the same |
 | all others | 0 | 0 | no candidate |
 
+**Recall is 25 % (1 of 4 vulnerable samples; 95 % CI 4.6 %-69.9 %), and that is the headline
+number for what this build can find.** Precision of 100 % rests on a single flagged sample. The
+guard-call policy change moves no corpus sample (no guarded path occurs in it), so its effect is
+demonstrated only by the unit regressions and the Allsafe journey, not by this benchmark.
+
 Read-across: the earlier "correct rejection" wording for the benign samples was never a
 measured correctness claim and is withdrawn; those samples simply had no candidate that
 confirmed. A benign sample is "not flagged", not "proven benign". Specificity and recall remain
