@@ -284,6 +284,9 @@ def _index(sources: list[tuple[str, bytes]], max_methods: int) -> CodeIndex:
         data_flow_limitations.add("candidate method budget exceeded (2000)")
         flow_candidates = flow_candidates[:2000]
     for vm, encoded_method in flow_candidates:
+        if len(data_flows) >= 1000:
+            data_flow_limitations.add("global data-flow evidence budget exceeded (1000)")
+            break
         flow = _build_method_flow(vm, encoded_method)
         if flow is None:
             data_flow_limitations.add("one or more candidate methods had no usable CFG")
@@ -299,7 +302,7 @@ def _index(sources: list[tuple[str, bytes]], max_methods: int) -> CodeIndex:
     data_flows = sorted(
         set(data_flows),
         key=lambda item: (item.method, item.source_offset, item.sink_offset, item.source_id, item.sink_id),
-    )[:5000]
+    )[:1000]
     return CodeIndex(
         graph=CallGraph(edges=edges, strings=strings), boundary=boundary,
         classes=tuple(sorted(defined)), methods=method_count,
