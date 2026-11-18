@@ -89,6 +89,8 @@ def _strings(value: object, field: str, pattern: re.Pattern[str]) -> tuple[str, 
     values = tuple(value)
     if any(not isinstance(item, str) or not pattern.fullmatch(item) for item in values):
         raise ValueError(f"{field} contains an invalid identifier")
+    if pattern is _MASWE and any(not 1 <= int(item[-4:]) <= 78 for item in values):
+        raise ValueError(f"{field} contains an unknown MASWE v1.0.0 identifier")
     if len(values) != len(set(values)):
         raise ValueError(f"{field} contains duplicate identifiers")
     return values
