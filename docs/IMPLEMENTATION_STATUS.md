@@ -176,3 +176,12 @@ Implemented a durable `worker_jobs` queue, API enqueue/status/apply endpoints, l
 ## Critical path and external blockers
 
 See `docs/DEMO_BLOCKERS.md` for the ordered path from APK selection through the defence-ready demo, the one-time owner decisions (D-001/D-002/D-003/D-004), and the actual Ollama/runtime requirements. The synthetic CI fixture must not be represented as the final APK or a runtime vulnerability reproduction.
+
+
+## 2026-11-18 — D-012 implementation started
+
+- PR branch `feat/d-012-jadx-cache` adds a JADX 1.5.6 adapter behind the existing fail-closed `ToolRunner` contract.
+- Decompilation cache key: artifact SHA-256 + JADX version; cache manifest records and verifies each Java/smali source hash and size.
+- Source references are traversal-safe and limited to 40-line snippets. Tool absence, isolation absence, non-zero exit, invalid output and corrupt cache are explicit failures.
+- CI installs the pinned JADX release with JDK 17 on the Python 3.12 lane and runs the checked-in DEX fixture through the adapter. Python 3.11/3.12 PostgreSQL 16 tests remain required.
+- No real APK, emulator, device, deployment, production migration, paid service, or new Python dependency is used. Runtime OCI image registration and D-013 lookup API remain follow-up integration.
