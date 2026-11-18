@@ -18,7 +18,6 @@ from .errors import NotFound
 
 _MAX_CLASSES = 5000
 _MAX_METHODS = 500
-_MAX_SOURCE_LINES = 40
 _JAVA_METHOD = re.compile(
     r"""(?m)^\s*(?:(?:public|protected|private|static|final|synchronized|native|abstract|default|strictfp)\s+)*"""
     r"""(?:[\w.$<>?,\[\]@]+\s+)+(?P<name>[A-Za-z_$][\w$]*)\s*\((?P<args>[^;{}]*)\)\s*(?:throws\s+[^{}]+)?\s*\{"""
@@ -99,15 +98,23 @@ class JadxCodeLookup:
         result = self.cached_result(investigation_id)
         if not 1 <= limit <= _MAX_CLASSES:
             raise JadxError("invalid_limit", "class limit must be between 1 and 5000")
-        items = []
+        by_class: dict[str, dict[str, str]] = {}
         for path in result.source_files:
-            if not path.endswith(".java"):
+            if not (path.endswith(".java") or path.endswith(".smali")):
                 continue
-            class_name = path[:-5].replace("/", ".")
+            suffix = ".java" if path.endswith(".java") else ".smali"
+            class_name = path[:-len(suffix)].replace("/", ".")
             if prefix and not class_name.startswith(prefix):
                 continue
-            items.append({"class_name": class_name, "path": path, "fidelity": "decompiled"})
-        items.sort(key=lambda item: item["class_name"])
+            item = {
+                "class_name": class_name,
+                "path": path,
+                "fidelity": "decompiled" if suffix == ".java" else "smali",
+            }
+            current = by_class.get(class_name)
+            if current is None or (current["fidelity"] == "smali" and suffix == ".java"):
+                by_class[class_name] = item
+        items = sorted(by_class.values(), key=lambda item: item["class_name"])
         return {
             "investigation_id": investigation_id,
             "apk_sha256": result.apk_sha256,
