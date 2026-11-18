@@ -199,8 +199,16 @@ def analyse_method(
     out_states: dict[int, dict[int, frozenset[tuple[str, int]]]] = {}
     queue = deque([flow.entry])
     queued = {flow.entry}
-    guard_sites: list[tuple[str, int, int]] = []
+    guard_sites: list[tuple[str, int, int]] = [
+        (_GUARD_IDS[(instruction.invoke_class, instruction.invoke_method)], instruction.offset, block.start)
+        for block in flow.blocks
+        for instruction in block.instructions
+        if instruction.invoke_class is not None
+        and instruction.invoke_method is not None
+        and (instruction.invoke_class, instruction.invoke_method) in _GUARD_IDS
+    ]
     findings: dict[tuple[object, ...], DataFlowFinding] = {}
+    finding_budget_exhausted = False
     limitations = set()
     if not flow.complete:
         limitations.add("DEX method/CFG extraction was incomplete")
@@ -229,9 +237,6 @@ def analyse_method(
             invoke_key = (instruction.invoke_class, instruction.invoke_method)
             source = source_for(*invoke_key) if all(invoke_key) else None
             guard_id = _GUARD_IDS.get(invoke_key) if all(invoke_key) else None
-
-            if guard_id:
-                guard_sites.append((guard_id, instruction.offset, block_id))
 
             if instruction.invoke_class and instruction.invoke_method:
                 sink_spec = _sink_argument(instruction.invoke_class, instruction.invoke_method)
@@ -265,6 +270,7 @@ def analyse_method(
                             key = (source_id, source_offset, sink_id, instruction.offset, sink_register)
                             findings[key] = finding
                             if len(findings) >= max_findings:
+                                finding_budget_exhausted = True
                                 limitations.add("data-flow finding budget exhausted")
                                 break
                 if source:
@@ -330,11 +336,12 @@ def analyse_method(
                     queue.append(successor)
                     queued.add(successor)
 
-    complete = flow.complete and not limitations
+    complete = flow.complete and not limitations and not finding_budget_exhausted
     ordered = tuple(sorted(findings.values(), key=lambda item: (
         item.method, item.source_offset, item.sink_offset, item.source_id, item.sink_id
     )))
     status: Literal["flow-found", "no-flow", "incomplete", "truncated"] = (
+        "truncated" if finding_budget_exhausted else
         "flow-found" if ordered else "no-flow" if complete else "incomplete"
     )
     return DataFlowResult(status, ordered, complete, len(out_states), instructions_seen,
