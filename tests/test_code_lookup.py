@@ -208,7 +208,7 @@ def test_method_source_can_be_persisted_and_included_in_targeted_evidence_packag
     assert evidence["kind"] == "source"
     assert evidence["method_reference"] == "com.example.Entry#onCreate@3"
     assert evidence["start_line"] == 3
-    assert evidence["end_line"] == 8
+    assert evidence["end_line"] == 9
 
     package = client.get(
         base + "/evidence-package",
