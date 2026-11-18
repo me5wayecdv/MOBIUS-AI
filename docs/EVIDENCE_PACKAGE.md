@@ -13,7 +13,7 @@ Both routes enforce the same investigation ownership check as other scan routes.
 
 Each captured excerpt is at most 40 lines and is stored through the existing content-addressed `EvidenceService`. Its hash binds a canonical payload containing the exact source text, APK SHA-256, JADX version, class/method reference, relative source path, line range and fidelity (`decompiled` or `smali`). The persisted evidence event records the evidence ID and provenance. Repeated identical captures are idempotent under the existing per-investigation content hash.
 
-Packages read only same-investigation source/smali evidence carrying the D-021 metadata marker. They re-check the stored payload SHA-256 and metadata agreement before including source text. Component filtering matches the captured class/component reference. Every snippet carries its evidence ID and hash.
+The API evidence-package route and NEXUS hypothesis generation read only same-investigation source/smali evidence carrying the D-021 metadata marker. NEXUS receives the same bounded package, and its persisted decision records the source evidence IDs among the considered evidence. They re-check the stored payload SHA-256 and metadata agreement before including source text. Component filtering matches the captured class/component reference. Every snippet carries its evidence ID and hash.
 
 ## Bounds
 
