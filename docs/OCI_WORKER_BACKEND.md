@@ -27,7 +27,7 @@ It is an operational preflight, not cryptographic attestation of daemon policy.
 
 ## Limitations
 
-- Not wired to API/NEXUS and not configured by default.
+- Not invoked by the API process or NEXUS directly. The existing durable queue worker uses this backend for RECON, DEX and queued JADX jobs when immutable image references are configured; no image is enabled by default.
 - No immutable JADX image digest published by this project. The CI workflow builds/loads locally and runs the real DEX fixture smoke with no push; publication is a separate owner-gated manual workflow and remains disabled pending approval.
 - JADX jobs stage the authorized APK in the per-investigation workspace and persist verified cache metadata in `worker_jobs`; source cache files require a shared writable worker/read-only API volume. ToolExecution rows and ARCHIVIST integration remain out of scope.
 - Existing manifest/DEX parsing remains in the API process. Production remains NO-GO until
