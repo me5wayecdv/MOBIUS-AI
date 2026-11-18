@@ -319,6 +319,9 @@ def _index(sources: list[tuple[str, bytes]], max_methods: int) -> CodeIndex:
         set(data_flows),
         key=lambda item: (item.method, item.source_offset, item.sink_offset, item.source_id, item.sink_id),
     )[:1000]
+    ordered_flow_limitations = sorted(data_flow_limitations)
+    if len(ordered_flow_limitations) > 100:
+        ordered_flow_limitations = ordered_flow_limitations[:99] + ["additional data-flow limitations omitted"]
     return CodeIndex(
         graph=CallGraph(edges=edges, strings=strings), boundary=boundary,
         classes=tuple(sorted(defined)), methods=method_count,
@@ -330,5 +333,5 @@ def _index(sources: list[tuple[str, bytes]], max_methods: int) -> CodeIndex:
         data_flow_methods=data_flow_methods,
         data_flow_truncated_methods=data_flow_truncated_methods,
         data_flow_complete=not data_flow_limitations,
-        data_flow_limitations=tuple(sorted(data_flow_limitations)),
+        data_flow_limitations=tuple(ordered_flow_limitations),
     )
