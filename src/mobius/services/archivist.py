@@ -394,7 +394,7 @@ class ArchivistService:
                 "## 6. Method and limitations",
                 "",
                 "Decisions in this scan were made by deterministic code: manifest decoding "
-                "(RECON), a bounded call-graph search over the dex (SPECTRE), a priority-queue "
+                "(RECON), a bounded call-graph search over indexed DEX entries (SPECTRE), a priority-queue "
                 "dispatcher (NEXUS) and a fixed gate. **No language model was called**, so this "
                 "report is reproducible from the APK bytes and the authorisation alone.",
                 "",
