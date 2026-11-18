@@ -355,7 +355,7 @@ def test_a_rejected_finding_reports_no_path_rather_than_a_zero_length_one(
     assert entry["attributes"] == {
         "exported": True,
         "permission": None,
-        "sink_reachable": False,
+        "sink_reachable": None,
         "caller_check_absent": None,
     }
 
@@ -366,8 +366,9 @@ def test_the_finding_title_matches_what_the_search_established(session, store, s
     title = session.query(FindingRow).filter_by(
         id=rejected["results"][0]["finding_id"]
     ).one().title
-    assert "no sensitive sink reachable" in title
-    assert "not established" not in title
+    assert "no catalogued sink found" in title
+    assert "not determined" in title
+    assert "no sensitive sink reachable" not in title
 
 
 def test_an_unfinished_search_says_so_in_its_title(session, store, surface_ready):

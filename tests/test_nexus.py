@@ -111,7 +111,7 @@ def test_nexus_dispatches_every_candidate_and_closes(session, store, future_iso)
     assert result["dropped"] == 0
     assert result["remaining"] == 0
     assert result["stop_reason"] == "completed"
-    assert result["findings"] == {"confirmed": 1, "rejected": 1, "manual_review": 0}
+    assert result["findings"] == {"confirmed": 1, "rejected": 0, "manual_review": 1}
     assert _row(session, scan).state == InvestigationState.CLOSED.value
     assert _row(session, scan).stop_reason == "completed"
 
@@ -277,8 +277,10 @@ def test_nexus_never_confirms_a_negative_control(session, store, future_iso):
     result = _nexus(session, store, _index(sink_in=None)).run(scan)
 
     assert result["findings"]["confirmed"] == 0
-    assert result["findings"]["rejected"] == 2
-    assert all(o["verdict"] == "rejected" for o in result["results"])
+    # No catalogued sink is a fact about the search, never a refutation.
+    assert result["findings"]["rejected"] == 0
+    assert result["findings"]["manual_review"] == 2
+    assert all(o["verdict"] != "rejected" for o in result["results"])
 
 
 def test_a_truncated_index_still_cannot_produce_a_confirmation(session, store, future_iso):

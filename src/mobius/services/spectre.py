@@ -53,7 +53,7 @@ Indexer = Callable[..., CodeIndex]
 
 # Confidence attached to a static reachability conclusion. Never 1.0: the traversal sees call
 # references, not executed paths, so "reachable" means "a call path exists in bytecode".
-_CONFIDENCE = {"reached-unguarded": 0.9, "reached-guarded": 0.8, "not-reached": 0.95, "unknown": 0.5}
+_CONFIDENCE = {"reached-unguarded": 0.9, "reached-guarded": 0.8, "unknown": 0.5}
 
 
 def _bucket(result: ReachabilityResult) -> str:
@@ -66,8 +66,6 @@ def _bucket(result: ReachabilityResult) -> str:
         return "reached-unguarded"
     if result.reached:
         return "reached-guarded"
-    if result.status == "not-reached":
-        return "not-reached"
     return "unknown"
 
 
@@ -396,7 +394,10 @@ class SpectreService:
         if result.reached:
             return f"Exported {kind} {short} reaches a sensitive sink"
         if result.status == "not-reached":
-            return f"Exported {kind} {short} — no sensitive sink reachable in the application code"
+            return (
+                f"Exported {kind} {short} — no catalogued sink found on direct calls "
+                "(bounded search, not determined)"
+            )
         return f"Exported {kind} {short} — reachability not established"
 
     def _component_facts(self, investigation_id: str, component: str) -> tuple[str, bool, str | None]:

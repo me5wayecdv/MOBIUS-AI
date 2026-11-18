@@ -400,8 +400,11 @@ finds nothing has learned nothing about what it did not look at. So `sink_reacha
 `CodeIndex.truncated` is false. Every other outcome — node budget exhausted, no entry point
 matched, class absent, dex unparseable — is `None`, which the gate treats as missing
 evidence (`Clause.absence_is_evidence`, ADR-018's gate machinery), never as a failed clause.
-A partial search therefore reports `insufficient_evidence`; only an exhaustive one may
-produce `not-reached` → `REJECTED`.
+A partial search therefore reports `insufficient_evidence`. **Amended (conservative draft):**
+a complete search that finds no catalogued sink also yields `None` / manual review. It is
+retained as a bounded-search fact (`not-reached`), not as refutation, since the sink catalogue
+is not known to be complete. Real-APK validation (Allsafe v1.6) showed lifecycle-root
+direct-call search "rejecting" 4 known-vulnerable components.
 
 **What the search deliberately cannot see.** No data flow: reachability to a *sink
 invocation* is not proof that attacker-controlled data reaches it. No CFG: a guard anywhere

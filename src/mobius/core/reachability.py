@@ -123,12 +123,12 @@ class ReachabilityResult:
         `None` is not a third truth value for convenience: it is the statement "this search
         did not establish either answer", which the gate reports as missing evidence.
         """
-        if self.status == "reached":
-            sink_reachable: bool | None = True
-        elif self.status == "not-reached" and self.exhaustive:
-            sink_reachable = False
-        else:
-            sink_reachable = None
+        # Never False. A complete search that finds no catalogued sink is a fact about the
+        # search (see `exhaustive` and `visited`), not evidence that no sink is reachable: the
+        # catalogue is not known to be complete and callbacks, inter-component flows,
+        # reflection and data flow are not modelled. Only independent refuting evidence could
+        # justify False, and none exists in this engine.
+        sink_reachable: bool | None = True if self.status == "reached" else None
 
         # "No caller check on the path" is only meaningful if there *is* a path. On a search
         # that found no sink this was reporting `True` - a claim about a call chain that does
@@ -156,7 +156,12 @@ class ReachabilityResult:
                 f"search truncated after {self.visited} method(s) without finding a sink; "
                 "absence not established"
             )
-        return f"complete traversal of {self.visited} method(s) found no sink"
+        return (
+            f"complete traversal of {self.visited} method(s) found no catalogued sink on direct "
+            "calls from the lifecycle entry points; not determined: the sink catalogue is not "
+            "known to be complete, and callbacks, inter-component flows, reflection and data flow "
+            "are not modelled, so this is not a finding that the component is secure"
+        )
 
 
 @dataclass(frozen=True, slots=True)

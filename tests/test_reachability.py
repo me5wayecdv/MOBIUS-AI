@@ -84,13 +84,14 @@ def test_guard_off_the_path_is_not_counted():
     assert result.attributes()["caller_check_absent"] is True
 
 
-def test_complete_search_without_a_sink_is_a_real_refutation():
+def test_complete_search_without_a_sink_is_a_bounded_fact_not_a_refutation():
     root, helper = M("com.x.A", "onCreate"), M("com.x.A", "go")
     graph, boundary = build(edges={root: [helper], helper: []})
     result = analyse(graph, entry_points=[root], boundary=boundary)
     assert result.status == "not-reached"
     assert result.exhaustive is True
-    assert result.attributes()["sink_reachable"] is False
+    assert result.attributes()["sink_reachable"] is None  # bounded search, not a refutation
+    assert "not determined" in result.explain()
 
 
 def test_depth_cap_truncates_instead_of_refuting():
@@ -278,7 +279,7 @@ def test_absent_path_claims_nothing_about_a_caller_check():
     result = analyse(graph, entry_points=(a,), boundary={})
 
     assert result.status == "not-reached"
-    assert result.attributes()["sink_reachable"] is False  # exhaustive, so refuted
+    assert result.attributes()["sink_reachable"] is None  # not a refutation
     assert result.attributes()["caller_check_absent"] is None
 
 

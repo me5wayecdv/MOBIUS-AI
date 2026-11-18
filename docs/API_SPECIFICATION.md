@@ -189,23 +189,25 @@ re-validate, and it will fail the state check rather than duplicate evidence.
 {
   "index": {"classes": 10, "methods": 34, "graph_nodes": 34,
             "internal_calls": 41, "truncated": false},
-  "candidates": 1, "confirmed": 0, "rejected": 1, "manual_review": 0,
+  "candidates": 1, "confirmed": 0, "rejected": 0, "manual_review": 1,
   "results": [
     { "component": "com.example.Update", "kind": "receiver",
       "reachability": "not-reached", "sink": null, "guards": [], "path_length": null,
-      "verdict": "rejected", "status": "rejected",
-      "rejection_reason": "not-reachable",
-      "explanation": "complete traversal of 6 method(s) found no sink",
+      "verdict": "insufficient_evidence", "status": "manual_review_required",
+      "rejection_reason": null,
+      "explanation": "complete traversal of 6 method(s) found no catalogued sink on direct calls ...; not determined ...",
       "attributes": {"exported": true, "permission": null,
-                     "sink_reachable": false, "caller_check_absent": false} }
+                     "sink_reachable": null, "caller_check_absent": false} }
   ]
 }
 ```
 
 `reachability` is `reached`, `not-reached`, `guarded`, or `unknown`. `sink_reachable` is `true`
-only when a path was found, and `false` **only** when the traversal completed and the index was
-not truncated; a truncated search yields `null`, which becomes `insufficient_evidence`, never
-`rejected`. `rejection_reason` is `not-reachable` or `guarded-by-caller-check` — a guard refutes
+only when a path was found. It is never `false`: a search that finds no catalogued sink (complete
+or truncated) yields `null`, which becomes `insufficient_evidence` / manual review. The bounded
+search fact stays on the finding as an observation (`reachability: not-reached`); it is not a
+refutation, because the sink catalogue, callbacks, inter-component flows, reflection and data flow
+are not modelled. Only independent refuting evidence could reject, and the engine has none. `rejection_reason` is `not-reachable` or `guarded-by-caller-check` — a guard refutes
 the "no caller check" clause, it does not prove the component safe.
 
 #### `POST /scans/{id}/nexus`
