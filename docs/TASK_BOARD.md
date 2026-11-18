@@ -60,8 +60,8 @@
 | # | Task | Owner | State | Acceptance |
 |---|---|---|---|---|
 | D-040 | Define typed PoC/TestPlan schema | M1 + M3 | [x] | PR #44 merged. Typed target/authorization/hypothesis binding, closed action registry, budgets, safety class, approval and cleanup constraints. Python 3.11/3.12 + PostgreSQL 16 CI green (452 tests each). | Target digest, scope, hypothesis, steps, expected outcome, budgets and cleanup |
-| D-041 | Implement allowlisted non-destructive test adapters | M3 | [~] | PR in progress: persisted-manifest assertions and two deterministic local-only WebView harnesses; no shell, subprocess, network, emulator, or state-changing action. | Only prepared lab APK/emulator/local harness targets |
-| D-042 | Capture reproducible PoC evidence | M1 + M3 | [ ] | Tool version, inputs, outputs, logs, timestamps and exit status persisted |
+| D-041 | Implement allowlisted non-destructive test adapters | M3 | [x] | PR #45 merged. Persisted-manifest assertions and two deterministic local-only WebView harnesses; no shell, subprocess, network, emulator, or state-changing action. Python 3.11/3.12 + PostgreSQL 16 CI green (457 tests each). | Only prepared lab APK/emulator/local harness targets |
+| D-042 | Capture reproducible PoC evidence | M1 + M3 | [~] | PR in progress: persist plan/input hash, output hash/JSON, execution log, tool versions, timestamps, duration, exit status and same-investigation evidence links. | Tool version, inputs, outputs, logs, timestamps and exit status persisted |
 | D-043 | Add approval, timeout, cancel and cleanup paths | M1 + M3 | [ ] | Out-of-scope or state-changing tests blocked without approval |
 | D-044 | Positive and negative PoC integration tests | M3 + M5 | [ ] | Positive reproduces; negative control does not confirm |
 
