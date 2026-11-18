@@ -597,3 +597,11 @@ record to `poc_runs`, and expands terminal statuses to `passed`, `failed`, `canc
 and `timed_out`. Human approval requests are stored in the existing `approvals` table
 and generate durable `approval_requested` / `approval_resolved` events. CI applies this
 migration only to disposable SQLite and PostgreSQL databases.
+
+
+### 3.13 Exact-plan approval binding (D-043 security hardening)
+
+PoC approval rows may carry `plan_sha256`, a canonical SHA-256 digest of the complete typed
+plan excluding only its `approval_id` field. The runner verifies the digest, investigation,
+action, state and expiry before allowing a non-read-only plan. An approval cannot be reused
+for a modified plan, target, hypothesis set, or step sequence. Migration 0007 is additive.

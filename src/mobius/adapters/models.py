@@ -336,6 +336,7 @@ class ApprovalRow(Base):
         String(40), ForeignKey("investigations.id"), nullable=False
     )
     requested_action: Mapped[str] = mapped_column(String(60), nullable=False)
+    plan_sha256: Mapped[str | None] = mapped_column(String(64))
     intensity_required: Mapped[int] = mapped_column(Integer, nullable=False)
     intensity_granted: Mapped[int | None] = mapped_column(Integer)
     justification: Mapped[str] = mapped_column(Text, nullable=False)
