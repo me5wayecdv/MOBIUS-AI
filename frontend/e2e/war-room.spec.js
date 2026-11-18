@@ -50,6 +50,8 @@ test("D-056: upload → investigation → evidence → graph → PoC → report;
   await expect(page.locator("#graph-summary")).toContainText("NODES");
   await expect(page.locator("#hypothesis-list")).toContainText("Fixture-only hypothesis");
   await expect(page.frameLocator("#graph-frame").locator(".flow-wrap")).toBeVisible();
+  await expect(page.frameLocator("#graph-frame").locator(".react-flow__node")).toHaveCount(3);
+  await expect(page.frameLocator("#graph-frame").locator(".react-flow__node").first()).toBeVisible();
   await page.screenshot({ path: shots + "/d056-03-graph.png", fullPage: true });
 
   const plan = {
@@ -83,6 +85,8 @@ test("D-056: upload → investigation → evidence → graph → PoC → report;
   expect(report.markdown).toContain("Evidence");
   await page.reload();
   await expect(page.locator("#report-viewer")).toContainText("Outcome");
+  await expect(page.locator("#report-viewer h2, #report-viewer h3")).toHaveCount(8,{timeout:15000});
+  await expect(page.locator("#report-viewer table")).toBeVisible();
   await page.screenshot({ path: shots + "/d056-05-report.png", fullPage: true });
 
   const before = await apiJson(request, "/scans/" + scanId + "/events?after=0&limit=1000");
@@ -112,6 +116,11 @@ test("D-056: upload → investigation → evidence → graph → PoC → report;
     }
     const graphFrame = page.locator("#graph-frame");
     await graphFrame.scrollIntoViewIfNeeded();
+    await expect(graphFrame.contentFrame().locator(".react-flow__node")).toHaveCount(3);
     await graphFrame.screenshot({ path: shots + "/d033-react-flow-" + viewport.label + ".png" });
+    await page.goto("/ui/graph?scan_id="+scanId);
+    await expect(page.locator(".react-flow__node").first()).toBeVisible();
+    await page.screenshot({ path: shots + "/d033-full-graph-" + viewport.label + ".png", fullPage:true });
+    await page.goto("/ui?scan_id="+scanId);
   }
 });
