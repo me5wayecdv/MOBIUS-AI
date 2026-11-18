@@ -89,6 +89,10 @@ class DexIndexDTO(StrictModel):
     data_flow_limitations: list[str] = Field(default_factory=list, max_length=100)
 
     def to_code_index(self) -> CodeIndex:
+        if self.data_flow_truncated_methods > self.data_flow_methods:
+            raise ValueError("DEX data-flow coverage counts are inconsistent")
+        if self.data_flow_complete and (self.data_flow_limitations or self.data_flow_truncated_methods):
+            raise ValueError("DEX data-flow payload claims complete coverage with limitations")
         refs: dict[tuple[str, str, str], MethodRef] = {}
 
         def ref(dto: MethodDTO) -> MethodRef:
