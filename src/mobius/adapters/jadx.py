@@ -68,7 +68,6 @@ def build_jadx_tool_spec(
     """Build the trusted server-side ToolSpec for the pinned JADX executable."""
     from ..services.tool_runner import ToolSpec
 
-    output_dir = "jadx-output-" + hashlib.sha256(version.encode("utf-8")).hexdigest()[:12]
     return ToolSpec(
         name=name,
         binary=binary,
@@ -296,6 +295,8 @@ class JadxAdapter:
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         except (OSError, UnicodeError, json.JSONDecodeError) as exc:
             raise JadxCacheError("corrupt_cache", "cache manifest cannot be read") from exc
+        if not isinstance(manifest, dict):
+            raise JadxCacheError("corrupt_cache", "cache manifest root must be an object")
         if (
             manifest.get("schema_version") != 1
             or manifest.get("apk_sha256") != digest
@@ -341,6 +342,8 @@ class JadxAdapter:
             raise JadxError("invalid_reference", "source reference path is unsafe")
         if start_line < 1 or end_line < start_line or end_line - start_line + 1 > _MAX_SNIPPET_LINES:
             raise JadxError("invalid_reference", "source line range must contain 1 to 40 lines")
+        if pure.as_posix() not in result.source_files:
+            raise JadxError("source_not_found", "source reference is not present in the verified cache manifest")
         source_root = result.cache_dir.resolve(strict=True)
         path = source_root.joinpath(*pure.parts)
         if path.is_symlink() or not path.is_file() or not path.resolve(strict=True).is_relative_to(source_root):
