@@ -43,6 +43,26 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Set up JDK 17 for JADX
+        if: matrix.python-version == '3.12'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install and verify JADX 1.5.6
+        if: matrix.python-version == '3.12'
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/jadx-1.5.6.zip"
+          curl -fsSL --retry 3 https://github.com/skylot/jadx/releases/download/v1.5.6/jadx-1.5.6.zip -o "$archive"
+          echo "545ea2be9c242511bc145755cf4bda2485ade42966e096f8b4d3da2a230e8974  $archive" | sha256sum --check -
+          mkdir -p "$RUNNER_TEMP/jadx"
+          unzip -q "$archive" -d "$RUNNER_TEMP/jadx"
+          test -x "$RUNNER_TEMP/jadx/bin/jadx"
+          echo "$RUNNER_TEMP/jadx/bin" >> "$GITHUB_PATH"
+          echo "MOBIUS_JADX_BIN=$RUNNER_TEMP/jadx/bin/jadx" >> "$GITHUB_ENV"
+          java -version
+          "$RUNNER_TEMP/jadx/bin/jadx" --version
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
