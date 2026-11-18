@@ -24,7 +24,7 @@ COPY scripts/smoke_jadx_image.py ./scripts/smoke_jadx_image.py
 COPY tests/fixtures/dex/AnalysisTest.dex ./tests/fixtures/dex/AnalysisTest.dex
 
 RUN pip install --no-cache-dir . \
-    && useradd --system --uid 65532 --no-create-home mobius \
+    && useradd --system --uid 65532 --home-dir /work/home --no-create-home mobius \
     && mkdir -p /work \
     && chown 65532:65532 /work
 
