@@ -402,6 +402,12 @@ class ArchivistService:
             if model_rows
             else "No language model was called according to persisted decision rows."
         )
+        reproducibility_statement = (
+            "Deterministic stages are reproducible from stored evidence; model-backed outputs "
+            "are recorded with provenance but are not promised to reproduce byte-for-byte."
+            if model_rows
+            else "The deterministic path is reproducible from the APK bytes and authorisation."
+        )
         return "\n".join(
             [
                 "## 6. Method and limitations",
@@ -410,8 +416,7 @@ class ArchivistService:
                 "(SPECTRE), the priority-queue dispatcher (NEXUS) and the fixed gate provide the "
                 "deterministic analysis and decision controls. " + model_statement,
                 "",
-                "What that buys: a reviewer can re-run the scan and get the same verdicts. "
-                "What it costs is stated below, and it is not small.",
+                reproducibility_statement + " What it costs is stated below, and it is not small.",
                 "",
                 _LIMITATIONS,
                 f"Investigation intensity was {row.intensity}; with a passive grant nothing in "
@@ -505,6 +510,7 @@ class ArchivistService:
             f"| DEX index | `{manifest['dex_analysis']['status']}` · {manifest['dex_analysis'].get('indexed_entries', 0)}/{manifest['dex_analysis'].get('dex_entry_count', 0)} indexed entries |",
             f"| JADX | `{manifest['jadx']['status']}` · {manifest['jadx'].get('source_file_count', 0)} source file(s) reported |",
             f"| SPECTRE reachability | {manifest['reachability']['observation_count']} observation(s), {manifest['reachability']['truncated_observations']} truncated |",
+            f"| Model-backed decisions | {manifest['model_usage']['model_backed_decision_count']} of {manifest['model_usage']['decision_count']} decisions |",
             f"| Native libraries | {manifest['apk_inventory'].get('native_libraries', {}).get('count', 0)} inventoried; not analyzed |",
             f"| Assets / resources | {manifest['apk_inventory'].get('assets', {}).get('count', 0)} asset(s), {manifest['apk_inventory'].get('resources', {}).get('count', 0)} resource(s); inventory only |",
             "",
