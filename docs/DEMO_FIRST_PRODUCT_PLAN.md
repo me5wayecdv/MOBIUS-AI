@@ -57,7 +57,7 @@ The analysis manifest must include:
 - Java/Kotlin decompilation coverage where JADX is available, including failed classes and fidelity.
 - Native libraries and assets discovered, and whether each is analyzed or inventory-only.
 - Class/method counts, call-graph node/edge counts, truncation flags, and analysis budgets.
-- Unsupported constructs/limitations: reflection, dynamic loading, obfuscation, native boundaries, framework gaps, unresolved dispatch, and parse failures.
+- Unsupported constructs/limitations: reflection, dynamic loading, obfuscation, native boundaries, framework gaps, unresolved dispatch, and parse failures. The D-016 manifest is exposed at `GET /api/v1/scans/{scan_id}/coverage-manifest` and embedded as JSON in ARCHIVIST; it distinguishes `inventory_only`, `unsupported`, `not_run`, `partial` and `complete` rather than implying semantic coverage from file discovery.
 
 A partial or truncated analysis is never presented as complete. "No finding" is not "safe".
 
