@@ -6,7 +6,7 @@
 
 1. An owner-scoped investigation must be in `SURFACE_READY` with a live authorization bound to the uploaded APK SHA-256.
 2. `POST /api/v1/scans/{scan_id}/code/decompile` (or the explicit `/jobs` alias) enqueues a `jadx_decompile` row in the existing durable `worker_jobs` table and emits `worker_job_queued`.
-3. The existing isolated worker claims only registered kinds: `recon_manifest`, `dex_index`, and `jadx_decompile`. Queue claiming remains leased and retry-bounded.
+3. The existing isolated worker claims only registered kinds: `recon_manifest`, `dex_index`, and `jadx_decompile`. Queue claiming uses a ten-minute lease for JADX (above the 300-second tool timeout) and remains retry-bounded.
 4. The worker reads the content-addressed APK, stages it in its per-investigation workspace, and uses the pinned `JadxAdapter` + `ToolRunner` + `OciBackend` registration.
 5. The JADX image reference must be immutable (`repository@sha256:<64 hex>`). Missing or mutable configuration fails closed.
 6. The OCI container runs with no network, read-only root, dropped capabilities, no-new-privileges, non-root UID, bounded `/tmp`, resource limits and only the investigation workspace mounted.
