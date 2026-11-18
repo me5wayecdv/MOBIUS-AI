@@ -115,7 +115,7 @@ def _build_method_flow(vm, encoded_method: object) -> MethodFlow | None:
     if not raw_blocks:
         return None
     blocks = []
-    extraction_complete = True
+    extraction_complete = code.get_tries_size() == 0
     for raw_block in raw_blocks:
         offset = raw_block.get_start()
         instructions = []
@@ -147,7 +147,11 @@ def _build_method_flow(vm, encoded_method: object) -> MethodFlow | None:
                 unsupported=unsupported,
             ))
             offset += instruction.get_length()
-        successors = tuple(sorted(item.get_start() for item in raw_block.get_next()))
+        # Androguard stores each normal CFG edge as (source_offset, target_offset, block).
+        successors = tuple(sorted(
+            edge[2].get_start() for edge in raw_block.get_next()
+            if len(edge) >= 3 and edge[2] is not None
+        ))
         blocks.append(FlowBlock(raw_block.get_start(), tuple(instructions), successors))
     method_ref = MethodRef(
         _dotted(encoded_method.get_class_name()),
