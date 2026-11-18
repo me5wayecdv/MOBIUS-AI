@@ -1,8 +1,8 @@
 """Build bounded, provenance-preserving evidence packages for targeted reasoning.
 
-The package contains persisted observations, method references, sink/guard identifiers and
-same-investigation evidence metadata. It does not invent source snippets: this build's
-SPECTRE index stores method references and graph summaries, not decompiled source text.
+Source excerpts enter only through immutable evidence captured from the verified,
+APK-digest/JADX-version cache. Packages revalidate their stored content hash and retain
+the source evidence ID and locator.
 """
 from __future__ import annotations
 
