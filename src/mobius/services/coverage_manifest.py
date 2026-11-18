@@ -53,6 +53,7 @@ class CoverageManifestBuilder:
         truncated = bool(
             inventory.get("truncated")
             or dex_analysis.get("truncated")
+            or inventory.get("dex_entries_truncated")
             or reachability.get("truncated_observations", 0)
             or jadx.get("source_files_truncated")
         )
@@ -249,7 +250,12 @@ class CoverageManifestBuilder:
         skipped = sum(item["status"] == "skipped" for item in entries)
         entry_truncated = sum(item["status"] == "truncated" for item in entries)
         truncated = bool(payload.get("truncated")) or entry_truncated > 0
-        complete = bool(payload.get("complete")) and not unexpected
+        complete = (
+            bool(payload.get("complete"))
+            and inventory.get("status") == "complete"
+            and not unexpected
+            and len(entries) == len(coverage)
+        )
         return {
             "status": "complete" if complete else "partial",
             "complete": complete,
