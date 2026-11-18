@@ -52,7 +52,6 @@ class DataFlowFinding:
     sink_id: str
     source_offset: int
     sink_offset: int
-    source_register: int
     sink_register: int
     guard_ids_before: tuple[str, ...] = ()
     guard_ids_after: tuple[str, ...] = ()
@@ -71,7 +70,6 @@ class DataFlowFinding:
             "sink_id": self.sink_id,
             "source_offset": self.source_offset,
             "sink_offset": self.sink_offset,
-            "source_register": self.source_register,
             "sink_register": self.sink_register,
             "guard_ids_before": list(self.guard_ids_before),
             "guard_ids_after": list(self.guard_ids_after),
@@ -119,9 +117,15 @@ _GUARD_IDS = {key: guard.id for key, guard in GUARDS.items()}
 def source_for(class_descriptor: str, method: str) -> SourceSpec | None:
     return SOURCE_CATALOGUE.get((class_descriptor, method))
 
+def is_source_api(class_descriptor: str, method: str) -> bool:
+    return (class_descriptor, method) in SOURCE_CATALOGUE
+
+def is_sink_api(class_descriptor: str, method: str) -> bool:
+    return (class_descriptor, method) in _SINK_ARGUMENTS
+
 def is_flow_api(class_descriptor: str, method: str) -> bool:
-    return ((class_descriptor, method) in SOURCE_CATALOGUE
-            or (class_descriptor, method) in _SINK_ARGUMENTS
+    return (is_source_api(class_descriptor, method)
+            or is_sink_api(class_descriptor, method)
             or (class_descriptor, method) in _GUARD_IDS)
 
 def _sink_argument(class_descriptor: str, method: str) -> tuple[int, str] | None:
@@ -253,7 +257,6 @@ def analyse_method(
                                 sink_id=sink_id,
                                 source_offset=source_offset,
                                 sink_offset=instruction.offset,
-                                source_register=sink_register,
                                 sink_register=sink_register,
                                 guard_ids_before=before,
                                 guard_ids_after=after,
