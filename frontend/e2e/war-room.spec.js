@@ -140,13 +140,19 @@ test("D-056: upload → investigation → evidence → graph → PoC → report;
     env: process.env,
   });
   if (seeded2.status !== 0) throw new Error("second fixture seeding failed: " + seeded2.stderr);
-  await page.route("**/api/v1/scans/" + scanId + "/decisions**", async route => {
+  const delayedContinue = async route => {
     await new Promise(r => setTimeout(r, 1500));
-    await route.continue();
-  });
+    await route.continue().catch(() => {}); // navigation may abort an in-flight delayed request
+  };
+  await page.route("**/api/v1/scans/" + scanId + "/decisions**", delayedContinue);
+  await page.route("**/api/v1/scans/" + scan2.id + "/decisions**", delayedContinue);
   await page.goto("/ui?scan_id=" + scanId);
   await expect(page.locator("#scan-select")).toHaveValue(scanId);
   await page.selectOption("#scan-select", scan2.id);
+  // Selection invalidates decision state immediately: old rows and cursor text are gone
+  // during the asynchronous base load, before any new-scan response arrives.
+  await expect(page.locator("#decision-list")).toContainText("Loading persisted decisions");
+  await expect(decisionPanel).not.toContainText(fixture.evidence_id);
   await expect(decisionPanel).toContainText("2 PERSISTED DECISIONS");
   await page.waitForTimeout(2500); // delayed scan-A response arrives now and must be discarded
   await expect(page.locator("#decision-list .event.decision")).toHaveCount(2);
@@ -155,7 +161,10 @@ test("D-056: upload → investigation → evidence → graph → PoC → report;
   await page.evaluate(() => { refreshDecisions(); refreshDecisions(); refreshDecisions(); });
   await page.waitForTimeout(500);
   await expect(page.locator("#decision-list .event.decision")).toHaveCount(2);
+  await page.evaluate(() => { clearInterval(refreshTimer); refreshTimer = null; });
+  await page.waitForTimeout(1800); // let any delayed in-flight route handler settle
   await page.unroute("**/api/v1/scans/" + scanId + "/decisions**");
+  await page.unroute("**/api/v1/scans/" + scan2.id + "/decisions**");
   await page.goto("/ui?scan_id=" + scanId);
   await expect(decisionPanel).toContainText("4 PERSISTED DECISIONS");
 

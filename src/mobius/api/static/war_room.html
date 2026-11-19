@@ -75,6 +75,11 @@ async function loadList(){
 }
 async function loadInvestigation(id){
  if(!id)return;currentId=id;history.replaceState(null,"","/ui?scan_id="+encodeURIComponent(id));
+ if(refreshTimer){clearInterval(refreshTimer);refreshTimer=null}
+ decisionGeneration++; // invalidate immediately: no old cursor/poll may act during the async base load
+ decisionItems=[];decisionCursor=null;decisionTruncated=false;decisionSeen.clear();
+ $("decisions-cursor").textContent="LOADING PERSISTED DECISIONS";
+ $("decision-list").innerHTML='<div class="empty">Loading persisted decisions…</div>';
  $("graph-link").href="/ui/graph?scan_id="+encodeURIComponent(id);
  $("open-graph").href=$("graph-link").href;$("graph-frame").src="/ui/graph?embed=1&scan_id="+encodeURIComponent(id);
  $("report-action").disabled=false;
