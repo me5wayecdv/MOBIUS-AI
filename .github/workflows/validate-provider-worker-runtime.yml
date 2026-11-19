@@ -81,10 +81,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     # Job-local, credential-less docker config (step-level env: the runner
-    # context is not valid in job-level env). The ambient runner config is
-    # never read, used, or modified by this job. Initialized empty before the
-    # first docker command; subprocesses (the validation script and the worker
-    # runner it launches) inherit it through the environment.
+    # context is not valid in job-level env). Initialized empty before the
+    # first docker command. It isolates this job's own docker CLI steps
+    # (registry start, build, push, pull, credential assertion): those steps
+    # never read, use, or modify the ambient runner config. The worker runner
+    # inherits the variable, but the OCI backend re-executes the docker CLI
+    # with a stripped environment (PATH/LANG only), so the container step
+    # resolves docker config from the default location; no registry access
+    # happens there because the image is already local by digest.
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
