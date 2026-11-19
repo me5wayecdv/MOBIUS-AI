@@ -110,10 +110,26 @@ test("D-056: upload → investigation → evidence → graph → PoC → report;
   await expect(decisionPanel).toContainText("deterministic · no model");
   await expect(decisionPanel).toContainText("VERITAS · review_finding");
   await expect(decisionPanel).toContainText("ADVISORY REVIEW");
-  await expect(decisionPanel).toContainText("no_material_challenge");
-  await expect(decisionPanel).toContainText("INDEPENDENCE UNVERIFIED");
+  await expect(decisionPanel).toContainText("challenge");
+  await expect(decisionPanel).toContainText("PRODUCER BINDING UNVERIFIED");
+  await expect(decisionPanel).toContainText("FIXTURE DATA · SEEDED · NOT A REAL REVIEW");
+  await expect(decisionPanel).toContainText("Fixture review summary");
+  await expect(decisionPanel).toContainText("caller-check absence");
   await expect(decisionPanel).toContainText("mock/fixture-reviewer");
   await expect(decisionPanel).toContainText("2 PERSISTED DECISIONS");
+  const panelOrder = await page.evaluate(() => [...document.querySelectorAll("section.panel")].map(s => s.id));
+  expect(panelOrder.indexOf("d055")).toBeLessThan(panelOrder.indexOf("d056"));
+  await decisionPanel.scrollIntoViewIfNeeded();
+  expect((await decisionPanel.boundingBox()).y).toBeGreaterThanOrEqual(60);
+
+  // Live refresh: decisions persisted after initial load must appear without a manual reload.
+  const refreshed = spawnSync("python", ["../scripts/seed_war_room_fixture.py", scanId], {
+    encoding: "utf8",
+    env: process.env,
+  });
+  if (refreshed.status !== 0) throw new Error("post-load fixture seeding failed: " + refreshed.stderr);
+  await expect(decisionPanel).toContainText("4 PERSISTED DECISIONS", { timeout: 15000 });
+  await expect(page.locator("#decision-list .event.decision")).toHaveCount(4);
 
   for (const viewport of [{ width: 1280, height: 900, label: "desktop" }, { width: 390, height: 844, label: "mobile" }]) {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
