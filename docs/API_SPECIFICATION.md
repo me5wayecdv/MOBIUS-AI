@@ -44,6 +44,7 @@ explains intent; the generated schema is normative. Any divergence is a bug.
 | `CODE_INDEX_FAILED` | 422 | The APK has no readable `classes.dex`, or androguard could not parse it |
 | `MODEL_CONSENT_REQUIRED` | 409 | A model-backed route was called without the required per-investigation consent, gateway, or a reviewer model that differs from the producer |
 | `MODEL_OUTPUT_INVALID` | 422 | Model output failed schema/integrity validation, or review input was not usable |
+| `MODEL_PROVIDER_UNAVAILABLE` | 503 | Reviewer provider call failed (unreachable, timeout, or transport error); the route fails closed |
 
 ## 2a. War Room
 

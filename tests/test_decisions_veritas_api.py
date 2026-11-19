@@ -175,3 +175,69 @@ def test_veritas_review_without_model_gateway_is_explicit_409(client, session):
     # fail closed with the stable consent code, never a 500.
     assert response.status_code == 409
     assert response.json()["code"] == "MODEL_CONSENT_REQUIRED"
+
+
+def _review_raising(exc):
+    def _raise(self, *args, **kwargs):
+        raise exc
+
+    return _raise
+
+
+def test_veritas_review_budget_exhaustion_is_409(client, session, monkeypatch):
+    from mobius.services.model_provider import ModelBudgetExceeded
+    from mobius.services.veritas import VeritasReviewService
+
+    scan_id = _make_scan(client)
+    finding_id = _add_finding(session, scan_id)
+    monkeypatch.setattr(
+        VeritasReviewService,
+        "review",
+        _review_raising(ModelBudgetExceeded("model token budget is exhausted")),
+    )
+    response = client.post(
+        f"/api/v1/scans/{scan_id}/findings/{finding_id}/veritas-review",
+        params={"producer_model_id": "qwen2.5:1.5b"},
+    )
+    assert response.status_code == 409
+    assert response.json()["code"] == "BUDGET_EXHAUSTED"
+
+
+def test_veritas_review_provider_failure_is_503(client, session, monkeypatch):
+    from mobius.services.model_provider import ModelUnavailable
+    from mobius.services.veritas import VeritasReviewService
+
+    scan_id = _make_scan(client)
+    finding_id = _add_finding(session, scan_id)
+    monkeypatch.setattr(
+        VeritasReviewService,
+        "review",
+        _review_raising(ModelUnavailable("Ollama request failed: URLError")),
+    )
+    response = client.post(
+        f"/api/v1/scans/{scan_id}/findings/{finding_id}/veritas-review",
+        params={"producer_model_id": "qwen2.5:1.5b"},
+    )
+    assert response.status_code == 503
+    assert response.json()["code"] == "MODEL_PROVIDER_UNAVAILABLE"
+
+
+def test_veritas_review_unexpected_gateway_failure_is_503_not_500(
+    client, session, monkeypatch
+):
+    from mobius.services.model_provider import ModelProviderError
+    from mobius.services.veritas import VeritasReviewService
+
+    scan_id = _make_scan(client)
+    finding_id = _add_finding(session, scan_id)
+    monkeypatch.setattr(
+        VeritasReviewService,
+        "review",
+        _review_raising(ModelProviderError("unexpected gateway failure")),
+    )
+    response = client.post(
+        f"/api/v1/scans/{scan_id}/findings/{finding_id}/veritas-review",
+        params={"producer_model_id": "qwen2.5:1.5b"},
+    )
+    assert response.status_code == 503
+    assert response.json()["code"] == "MODEL_PROVIDER_UNAVAILABLE"

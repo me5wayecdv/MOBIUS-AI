@@ -495,8 +495,19 @@ def run_veritas_review(
     only - deterministic gates remain the sole verdict authority.
     """
     _require_scan_owner(session, scan_id, who)
-    from ..services.errors import ModelConsentRequiredError, ModelOutputInvalidError, NotFound
-    from ..services.model_provider import ModelConsentRequired, ModelOutputInvalid
+    from ..services.errors import (
+        BudgetExhausted,
+        ModelConsentRequiredError,
+        ModelOutputInvalidError,
+        ModelProviderUnavailable,
+        NotFound,
+    )
+    from ..services.model_provider import (
+        ModelBudgetExceeded,
+        ModelConsentRequired,
+        ModelOutputInvalid,
+        ModelProviderError,
+    )
     from ..services.veritas import VeritasReviewService
 
     finding = session.get(FindingRow, finding_id)
@@ -513,6 +524,12 @@ def run_veritas_review(
         raise ModelConsentRequiredError(str(exc)) from exc
     except (ModelOutputInvalid, ValueError) as exc:
         raise ModelOutputInvalidError(str(exc)) from exc
+    except ModelBudgetExceeded as exc:
+        raise BudgetExhausted(str(exc)) from exc
+    except ModelProviderError as exc:
+        # Provider unreachable/timeout/transport failure (ModelUnavailable and any
+        # other gateway-level failure): explicit 503, never a bare 500.
+        raise ModelProviderUnavailable(str(exc)) from exc
 
 
 def _jadx_lookup(session):

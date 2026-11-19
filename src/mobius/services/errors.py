@@ -94,3 +94,13 @@ class ModelConsentRequiredError(DomainError):
 class ModelOutputInvalidError(DomainError):
     code = "MODEL_OUTPUT_INVALID"
     http_status = 422
+
+
+class BudgetExhausted(DomainError):
+    code = "BUDGET_EXHAUSTED"
+    http_status = 409
+
+
+class ModelProviderUnavailable(DomainError):
+    code = "MODEL_PROVIDER_UNAVAILABLE"
+    http_status = 503
