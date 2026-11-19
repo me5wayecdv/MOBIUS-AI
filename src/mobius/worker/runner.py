@@ -116,7 +116,11 @@ def run_once() -> bool:
             binary = "/opt/jadx/bin/jadx"
             image = _required("MOBIUS_JADX_IMAGE")
             spec = build_jadx_tool_spec(binary=binary, version="1.5.6")
-            backend = OciBackend(runtime=runtime, binary_images={binary: image})
+            # JADX is the one file-output tool: it alone gets the writable outputs/ bind.
+            backend = OciBackend(
+                runtime=runtime, binary_images={binary: image},
+                writable_output_binaries=frozenset({binary}),
+            )
             runner = ToolRunner(workspace_root=workspace_root, backend=backend, tools=(spec,))
             cache_root = Path(
                 os.environ.get("MOBIUS_JADX_CACHE_ROOT", str(artifact_root / "jadx-cache"))

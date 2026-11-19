@@ -22,6 +22,7 @@ class OciBackend:
     def __init__(
         self, *, runtime: str, binary_images: dict[str, str],
         pids_limit: int = 128, tmpfs_mb: int = 128,
+        writable_output_binaries: frozenset[str] | None = None,
         popen: Callable = subprocess.Popen, run: Callable = subprocess.run,
     ) -> None:
         if not Path(runtime).is_absolute():
@@ -33,8 +34,15 @@ class OciBackend:
                 raise ValueError("container binary path must be absolute")
             if not _IMAGE.fullmatch(image):
                 raise ValueError("tool images must be immutable sha256 digest references")
+        writable = frozenset(writable_output_binaries or ())
+        unknown = writable - binary_images.keys()
+        if unknown:
+            raise ValueError(f"writable-output binaries must be registered images: {sorted(unknown)}")
         self.runtime = runtime
         self.binary_images = dict(binary_images)
+        # Only these binaries get the writable outputs/ bind; every other registered tool
+        # runs with a read-only contract (tmpfs /work + read-only input bind, stdout out).
+        self.writable_output_binaries = writable
         self.pids_limit = pids_limit
         self.tmpfs_mb = tmpfs_mb
         self._popen = popen
@@ -68,7 +76,27 @@ class OciBackend:
         root = workspace.resolve(strict=True)
         if not root.is_dir():
             raise ValueError("workspace must be a directory")
+        # Mount contract: the container never sees the workspace directory itself. It gets
+        # an in-container tmpfs at /work, the staged input as a single read-only file bind,
+        # and only the per-job outputs/ directory as a writable bind. The workspace stays
+        # owner-only (0700) on the host; outputs/ is sticky world-writable (1777) because
+        # the fixed container uid 65532 must write it and a non-root worker cannot chown
+        # to that uid. Host-level confidentiality is preserved by the 0700 parent: only
+        # the worker user and the container's bind mount can reach outputs/ at all.
+        input_file = root / "input.apk"
+        if input_file.is_symlink() or not input_file.is_file():
+            raise ValueError("staged input.apk must be a regular non-symlink file")
+        writes_outputs = argv[0] in self.writable_output_binaries
+        outputs = root / "outputs"
+        if writes_outputs and (outputs.is_symlink() or not outputs.is_dir()):
+            raise ValueError("workspace outputs must be a real directory")
         image = self.binary_images[argv[0]]
+        # The only host path the container user (65532) can write, and only for tools
+        # registered as file-output tools (JADX). Stdout tools never see it mounted.
+        output_mount: tuple[str, ...] = (
+            ("--mount", f"type=bind,src={outputs},dst=/work/outputs")
+            if writes_outputs else ()
+        )
         return (
             self.runtime, "run", "--rm", "--init", "--network=none", "--read-only",
             "--cap-drop=ALL", "--security-opt=no-new-privileges",
@@ -79,9 +107,14 @@ class OciBackend:
             "--ulimit", f"fsize={limits.max_output_bytes}:{limits.max_output_bytes}",
             "--ulimit", "nofile=1024:1024", "--user=65532:65532",
             f"--tmpfs=/tmp:rw,noexec,nosuid,nodev,size={self.tmpfs_mb}m",
+            # In-container scratch root; discarded with the container. Parents-first order
+            # matters: the two binds below land inside this tmpfs.
+            f"--tmpfs=/work:rw,noexec,nosuid,nodev,size={self.tmpfs_mb}m",
             # --mount fields must be key=value; a bare `rw` is rejected by the runtime.
-            # Bind mounts are read-write by default, which is what the workspace needs.
-            "--mount", f"type=bind,src={root},dst=/work",
+            # The input is a single-file read-only bind: the runtime enforces immutability
+            # and no host directory traversal is needed to reach it.
+            "--mount", f"type=bind,src={input_file},dst=/work/input.apk,readonly",
+            *output_mount,
             "--workdir=/work", "--hostname=mobius-tool",
             "--env=HOME=/tmp", "--env=TMPDIR=/tmp", image, *argv,
         )

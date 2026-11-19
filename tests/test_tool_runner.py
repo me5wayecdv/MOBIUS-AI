@@ -92,6 +92,11 @@ def test_valid_invocation_uses_private_per_scan_workspace(tmp_path):
     workspace = backend.calls[0][1]
     assert workspace.parent == tmp_path.resolve()
     assert workspace.stat().st_mode & 0o777 == 0o700
+    outputs = workspace / "outputs"
+    assert outputs.is_dir()
+    # Sticky world-writable inside the owner-only workspace: the container's fixed uid
+    # 65532 must write it and a non-root worker cannot chown to that uid.
+    assert outputs.stat().st_mode & 0o7777 == 0o1777
 
 
 def test_unready_backend_fails_closed(tmp_path):

@@ -34,7 +34,7 @@ class FixtureBackend:
 
     def execute(self, *, argv, workspace, limits):
         self.calls.append(argv)
-        output_arg = next(part for part in argv if part.startswith("/work/jadx-output-"))
+        output_arg = next(part for part in argv if part.startswith("/work/outputs/jadx-output-"))
         output = workspace / output_arg.removeprefix("/work/")
         if self.create_source:
             source = output / "sources" / "com" / "example" / "Fixture.java"
@@ -103,7 +103,7 @@ def test_cache_is_reused_for_same_apk_digest_and_tool_version(tmp_path):
     assert first.apk_sha256 == digest
     assert first.tool_version == "1.5.6"
     assert len(backend.calls) == 1
-    assert not list((tmp_path / "workspaces" / SCAN).glob("jadx-output-*"))
+    assert not list((tmp_path / "workspaces" / SCAN / "outputs").glob("jadx-output-*"))
     assert not (tmp_path / "workspaces" / SCAN / ".jadx-home").exists()
 
 

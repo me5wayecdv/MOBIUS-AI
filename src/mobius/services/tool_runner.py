@@ -162,6 +162,17 @@ class ToolRunner:
         resolved = workspace.resolve()
         if resolved.parent != root:
             raise ToolRejected("workspace escaped the configured root")
+        # File-output tools (JADX) run their container as fixed uid 65532, which must be
+        # able to write outputs/. A non-root worker cannot chown to that uid, so outputs/
+        # is sticky world-writable (1777, the /tmp pattern) inside the owner-only
+        # workspace: host-level privacy is enforced by the 0700 parent, and the sticky bit
+        # stops cross-entry deletion. Created for every job so the backend can mount it
+        # when the tool's contract needs it; stdout-only tools never see it mounted.
+        outputs = resolved / "outputs"
+        if outputs.is_symlink():
+            raise ToolRejected("investigation outputs path must not be a symlink")
+        outputs.mkdir(parents=False, exist_ok=True)
+        outputs.chmod(0o1777)
 
         result = self.backend.execute(argv=argv, workspace=resolved, limits=spec.limits)
         if result.status not in {"ok", "error", "timeout", "killed", "unavailable"}:

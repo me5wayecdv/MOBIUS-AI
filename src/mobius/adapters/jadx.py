@@ -74,7 +74,8 @@ def build_jadx_tool_spec(
         version=version,
         args_model=_JadxArgs,
         build_argv=lambda args: (
-            binary, "--no-res", "-d", f"/work/{args.output_dir}",
+            # Only /work/outputs is writable inside the container (split-mount contract).
+            binary, "--no-res", "-d", f"/work/outputs/{args.output_dir}",
             f"/work/{args.input_file}",
         ),
         limits=ToolLimits(
@@ -180,7 +181,7 @@ class JadxAdapter:
                         stream.write(artifact)
                     input_path.chmod(0o444)
 
-                output_path = workspace / output_dir_name
+                output_path = workspace / "outputs" / output_dir_name
                 if output_path.exists() or output_path.is_symlink():
                     raise JadxExecutionFailed("workspace_conflict", "JADX output path already exists; refusing to overwrite it")
 
