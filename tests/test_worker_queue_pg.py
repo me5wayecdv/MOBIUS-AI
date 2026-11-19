@@ -5,8 +5,10 @@ indexes across concurrent transactions). Set MOBIUS_TEST_PG_DSN, e.g.:
 
     postgresql+psycopg://postgres@/mobius_racetest?host=/tmp
 
-Skipped otherwise. The database is migrated with alembic to head so the test
-exercises the deployed schema, not just create_all.
+Skipped otherwise. CI exports MOBIUS_TEST_PG_URL instead, so that name is
+accepted as a fallback (DSN wins when both are set). The database is migrated
+with alembic to head so the test exercises the deployed schema, not just
+create_all.
 """
 from __future__ import annotations
 
@@ -18,8 +20,11 @@ import pytest
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import Session
 
-DSN = os.environ.get("MOBIUS_TEST_PG_DSN")
-pytestmark = pytest.mark.skipif(not DSN, reason="MOBIUS_TEST_PG_DSN not set")
+from pg_dsn import resolve_pg_dsn
+
+DSN = resolve_pg_dsn(os.environ)
+pytestmark = pytest.mark.skipif(
+    not DSN, reason="neither MOBIUS_TEST_PG_DSN nor MOBIUS_TEST_PG_URL set")
 
 pytest.importorskip("psycopg")
 
@@ -87,6 +92,50 @@ def test_concurrent_enqueue_admits_exactly_one_job(pg_engine, future_iso):
             try:
                 barrier.wait(timeout=10)
                 WorkerQueue(session).enqueue_provider_analysis(scan_id, artifact_key)
+                session.commit()
+                outcomes.append(f"{tag}:ok")
+            except ScanStateConflict:
+                session.rollback()
+                outcomes.append(f"{tag}:conflict")
+            except Exception as exc:  # surfaced for diagnosis
+                session.rollback()
+                outcomes.append(f"{tag}:{type(exc).__name__}")
+
+    threads = [threading.Thread(target=enqueue, args=(t,)) for t in ("a", "b")]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+
+    assert sorted(outcomes) == ["a:ok", "b:conflict"] or sorted(outcomes) == [
+        "a:conflict", "b:ok"], f"exactly one enqueue must win, got {outcomes}"
+    with Session(pg_engine) as session:
+        count = session.execute(text(
+            "SELECT COUNT(*) FROM worker_jobs WHERE investigation_id = :i"
+        ), {"i": scan_id}).scalar_one()
+    assert count == 1
+
+
+def test_concurrent_secrets_enqueue_admits_exactly_one_job(pg_engine, future_iso):
+    """Same race as the provider enqueue test, for the secrets kind. The 0008
+    active-job uniqueness index is per (investigation, kind) and kind-blind,
+    so this must behave identically: exactly one winner.
+
+    NOTE: this test requires MOBIUS_TEST_PG_DSN (real Postgres) and has never
+    been executed in the authoring environment (no local PG server, no
+    docker); it exists for the CI pg-integration job."""
+    from mobius.services.worker_queue import WorkerQueue
+    from mobius.services.errors import ScanStateConflict
+    scan_id, artifact_key = _seed_scan(pg_engine, future_iso)
+
+    outcomes: list[str] = []
+    barrier = threading.Barrier(2)
+
+    def enqueue(tag):
+        with Session(pg_engine) as session:
+            try:
+                barrier.wait(timeout=10)
+                WorkerQueue(session).enqueue_secrets_analysis(scan_id, artifact_key)
                 session.commit()
                 outcomes.append(f"{tag}:ok")
             except ScanStateConflict:
