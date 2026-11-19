@@ -3,6 +3,7 @@ register-level flow with correct kill/join semantics, never from co-occurrence,
 method names, or format alone."""
 from __future__ import annotations
 
+from mobius.core import gates
 from mobius.core.reachability import MethodRef
 from mobius.core.secrets import (
     FlowBlock,
@@ -250,7 +251,7 @@ def test_pure_digit_pin_gets_review_evidence_not_placeholder_filtered():
     assert gate_attributes(cands[0])["access_comparison_suspect"] is True
 
 
-def test_format_and_entropy_genuine_not_forced_true():
+def test_format_inapplicable_left_unestablished_for_role_proven_key():
     m = M()
     value = "vendorsecretkey"
     flow = [
@@ -262,7 +263,15 @@ def test_format_and_entropy_genuine_not_forced_true():
     cands = detect_hardcoded_secrets(FakeIndex({m: (value,)}), {m: [FlowBlock(0, tuple(flow), ())]})
     attrs = gate_attributes(cands[0])
     assert attrs["used_in_security_context"] is True   # key-material evidence
-    assert attrs["format_and_entropy_ok"] is False     # gate decides what this means
+    # Credential-shape assessment is inapplicable to role-proven key material:
+    # the clause is left UNESTABLISHED (never forced True, never refuted on
+    # shape) and the gate reports it missing, not decisively failed.
+    assert "format_and_entropy_ok" not in attrs
+    assert "inapplicable" in attrs["format_assessment"]
+    result = gates.evaluate("hardcoded-secret", attrs)
+    assert not result.passed
+    assert result.missing_attributes == ("format_and_entropy_ok",)
+    assert result.failed_decisively == ()
 
 
 def test_move_chain_and_check_cast_preserve_provenance():
@@ -633,3 +642,696 @@ def test_descriptor_normalization_against_androguard_forms():
     assert m is not None
     assert m.group(1) == "Lcom/android/insecurebankv2/CryptoClass;"
     assert m.group(2) == "key"
+
+
+# -- derived-key route: literal -> pure return-transform -> cross-class sink ---
+
+CT = "dGVzdC1jaXBoZXJ0ZXh0LXZhbHVlLWZvcg=="
+DECODE = ("Lcom/example/Foo;", "decode")
+SINK = ("Lcom/example/Crypto;", "a")
+IVSPEC = ("Ljavax/crypto/spec/IvParameterSpec;", "<init>")
+
+
+def inv2(off, opcode, cls, name, desc, regs, static):
+    return SInstruction(off, opcode, tuple(regs), invoke_class=cls, invoke_method=name,
+                        invoke_descriptor=desc, is_static=static)
+
+
+def _derived_fixture(transform_extra=(), transform_replace=None, sink_opcode="invoke-static",
+                     sink_spec=SECRETKEYSPEC, sink_desc="([B[B)[B"):
+    """caller: const v1=SECRET; v2=decode(v1); a(v2, v3=CT). decode: pure hex-ish
+    transform over param v7. sink: SecretKeySpec.<init>(receiver, p0, 'AES')."""
+    caller = M(name="check")
+    decode = MethodRef("com.example.Foo", "decode", "(Ljava/lang/String;)[B")
+    sink = MethodRef("com.example.Crypto", "a", sink_desc)
+    caller_flow = [FlowBlock(0, (
+        cs(1, SECRET, 0),
+        cs(3, CT, 2),
+        inv2(4, "invoke-static", *DECODE, "(Ljava/lang/String;)[B", (1,), True),
+        mr(2, 6),
+        inv2(8, sink_opcode, *SINK, sink_desc, (2, 3), True),
+        mr(4, 10),
+    ), ())]
+    transform_body = (
+        SInstruction(0, "invoke-virtual", (7,), invoke_class="Ljava/lang/String;",
+                     invoke_method="length", invoke_descriptor="()I"),
+        SInstruction(2, "move-result", (0,)),
+        SInstruction(4, "const/4", (1,), const_value=0),
+        SInstruction(6, "new-array", (1, 0)),
+        SInstruction(8, "if-ge", (4, 0), branch_target=34),
+        SInstruction(10, "invoke-virtual", (7, 4), invoke_class="Ljava/lang/String;",
+                     invoke_method="charAt", invoke_descriptor="(I)C"),
+        SInstruction(12, "move-result", (2,)),
+        SInstruction(14, "const/16", (3,), const_value=16),
+        SInstruction(16, "invoke-static", (2, 3), invoke_class="Ljava/lang/Character;",
+                     invoke_method="digit", invoke_descriptor="(CI)I", is_static=True),
+        SInstruction(18, "move-result", (2,)),
+        SInstruction(20, "shl-int/lit8", (2, 2), const_value=4),
+        SInstruction(22, "add-int/lit8", (5, 4), const_value=1),
+        SInstruction(24, "invoke-virtual", (7, 5), invoke_class="Ljava/lang/String;",
+                     invoke_method="charAt", invoke_descriptor="(I)C"),
+        SInstruction(26, "move-result", (5,)),
+        SInstruction(28, "invoke-static", (5, 3), invoke_class="Ljava/lang/Character;",
+                     invoke_method="digit", invoke_descriptor="(CI)I", is_static=True),
+        SInstruction(30, "move-result", (5,)),
+        SInstruction(32, "add-int/2addr", (2, 5)),
+        SInstruction(34, "int-to-byte", (2, 2)),
+        SInstruction(36, "aput-byte", (2, 1, 4)),
+        SInstruction(38, "add-int/lit8", (4, 4), const_value=2),
+        SInstruction(40, "goto", (), branch_target=8),
+        SInstruction(42, "return-object", (1,)),
+    )
+    if transform_replace is not None:
+        transform_body = transform_replace
+    transform_flow = [FlowBlock(0, transform_body + tuple(transform_extra), ())]
+    sink_flow = [FlowBlock(0, (
+        SInstruction(0, "new-instance", (0,)),
+        cs(1, "AES", 2),
+        inv2(4, "invoke-direct", *(("Ljavax/crypto/spec/IvParameterSpec;", "<init>")
+             if sink_spec == IVSPEC else SECRETKEYSPEC),
+             "([B)V" if sink_spec == IVSPEC else "([BLjava/lang/String;)V",
+             (0, 2) if sink_spec == IVSPEC else (0, 2, 1), False),
+        SInstruction(6, "return-object", (2,)),
+    ), ())]
+    return caller, decode, sink, caller_flow, transform_flow, sink_flow
+
+
+def _run_derived(frame=True, dex=True, **kw):
+    caller, decode, sink, cf, tf, sf = _derived_fixture(**kw)
+    fi = {decode: (8, True), sink: (4, True)} if frame else None
+    return detect_hardcoded_secrets(
+        FakeIndex({caller: (SECRET, CT)}),
+        {caller: cf, decode: tf, sink: sf},
+        frame_info=fi,
+        dex_complete=dex)
+
+
+def test_derived_route_key_material_evidence_cross_class():
+    cands = _run_derived()
+    hit = [c for c in cands if c.value == SECRET]
+    assert len(hit) == 1
+    kinds = [e.kind for e in hit[0].evidence]
+    assert "key-material-argument-derived" in kinds
+    assert hit[0].used_in_security_context is True
+    assert hit[0].flow_complete is True
+    attrs = gate_attributes(hit[0])
+    assert attrs["used_in_security_context"] is True
+    assert "format_and_entropy_ok" not in attrs        # inapplicable, left missing
+    assert "inapplicable" in attrs["format_assessment"]
+    result = gates.evaluate("hardcoded-secret", attrs)
+    assert not result.passed
+    assert result.missing_attributes == ("format_and_entropy_ok",)
+    assert result.failed_decisively == ()              # manual review, never refuted
+
+
+def test_derived_route_gives_ciphertext_literal_no_key_evidence():
+    cands = _run_derived()
+    ct = [c for c in cands if c.value == CT]
+    assert not ct or all("key-material" not in e.kind for c in ct for e in c.evidence)
+
+
+def test_derived_route_rejects_field_read_in_transform():
+    dirty = (
+        SInstruction(0, "sget", (5,), field_ref=("Lcom/example/Foo;", "f", "I")),
+    )
+    cands = _run_derived(transform_extra=dirty)
+    hit = [c for c in cands if c.value == SECRET]
+    assert not hit or all("derived" not in e.kind for c in hit for e in c.evidence)
+
+
+def test_derived_route_rejects_disallowed_call_in_transform():
+    dirty = (
+        SInstruction(0, "invoke-static", (), invoke_class="Ljava/lang/System;",
+                     invoke_method="currentTimeMillis", invoke_descriptor="()J",
+                     is_static=True),
+        SInstruction(2, "move-result-wide", (5,)),
+    )
+    cands = _run_derived(transform_extra=dirty)
+    hit = [c for c in cands if c.value == SECRET]
+    assert not hit or all("derived" not in e.kind for c in hit for e in c.evidence)
+
+
+def test_derived_route_rejects_const_string_in_transform():
+    dirty = (cs(5, "injected-constant", 0),)
+    cands = _run_derived(transform_extra=dirty)
+    hit = [c for c in cands if c.value == SECRET]
+    assert not hit or all("derived" not in e.kind for c in hit for e in c.evidence)
+
+
+def test_derived_route_rejects_virtual_sink_call():
+    cands = _run_derived(sink_opcode="invoke-virtual")
+    hit = [c for c in cands if c.value == SECRET]
+    assert not hit or all("derived" not in e.kind for c in hit for e in c.evidence)
+
+
+def test_derived_route_requires_frame_info():
+    cands = _run_derived(frame=False)
+    hit = [c for c in cands if c.value == SECRET]
+    assert not hit or all("derived" not in e.kind for c in hit for e in c.evidence)
+
+
+def test_derived_route_iv_only_use_is_not_key_evidence():
+    cands = _run_derived(sink_spec=IVSPEC)
+    hit = [c for c in cands if c.value == SECRET]
+    assert not hit or all("key-material" not in e.kind for c in hit for e in c.evidence)
+
+
+def test_derived_route_rejects_two_literal_mixing():
+    caller = M(name="check")
+    decode = MethodRef("com.example.Foo", "decode", "(Ljava/lang/String;Ljava/lang/String;)[B")
+    sink = MethodRef("com.example.Crypto", "a", "([B[B)[B")
+    caller_flow = [FlowBlock(0, (
+        cs(1, SECRET, 0),
+        cs(2, "another-literal-value", 2),
+        cs(3, CT, 4),
+        inv2(6, "invoke-static", *DECODE, "(Ljava/lang/String;Ljava/lang/String;)[B", (1, 2), True),
+        mr(2, 8),
+        inv2(10, "invoke-static", *SINK, "([B[B)[B", (2, 3), True),
+        mr(4, 12),
+    ), ())]
+    _, _, _, _, tf, sf = _derived_fixture()
+    cands = detect_hardcoded_secrets(
+        FakeIndex({caller: (SECRET, CT)}),
+        {caller: caller_flow, decode: tf, sink: sf},
+        frame_info={decode: (8, True), sink: (4, True)},
+        dex_complete=True)
+    hit = [c for c in cands if c.value == SECRET]
+    assert not hit or all("derived" not in e.kind for c in hit for e in c.evidence)
+
+
+def test_derived_route_rejects_ambiguous_callee_resolution():
+    caller, decode, sink, cf, tf, sf = _derived_fixture()
+    dup = MethodRef("com.example.Foo", "decode", "( Ljava/lang/String; )[B")  # normalises equal
+    cands = detect_hardcoded_secrets(
+        FakeIndex({caller: (SECRET, CT)}),
+        {caller: cf, decode: tf, dup: tf, sink: sf},
+        frame_info={decode: (8, True), dup: (8, True), sink: (4, True)},
+        dex_complete=True)
+    hit = [c for c in cands if c.value == SECRET]
+    assert not hit or all("derived" not in e.kind for c in hit for e in c.evidence)
+
+
+def test_format_clause_still_decisive_without_key_evidence():
+    """A value failing format/entropy WITHOUT key-role evidence still reports
+    format_and_entropy_ok False (decisive): the inapplicability rule is scoped
+    to role-proven key material only."""
+    m = M()
+    value = 'api_key: "vendorsecretkey"'   # labeled: admitted, extract fails format
+    flow = [cs(1, value, 0)]
+    cands = detect_hardcoded_secrets(FakeIndex({m: (value,)}), {m: [FlowBlock(0, tuple(flow), ())]})
+    assert len(cands) == 1 and cands[0].value == "vendorsecretkey"
+    attrs = gate_attributes(cands[0])
+    assert attrs["format_and_entropy_ok"] is False
+    result = gates.evaluate("hardcoded-secret", attrs)
+    assert "format_and_entropy_ok" in result.failed_decisively
+
+
+def test_derived_route_incomplete_sink_scan_keeps_flow_incomplete():
+    caller, decode, sink, cf, tf, _ = _derived_fixture()
+    broken_sink = [FlowBlock(0, (
+        SInstruction(0, "new-instance", (0,)),
+        cs(1, "AES", 2),
+        inv2(4, "invoke-direct", *SECRETKEYSPEC, "([BLjava/lang/String;)V", (0, 2, 1), False),
+        SInstruction(6, "invoke-custom", (5,), invoke_class=None, invoke_method=None),
+        SInstruction(8, "return-object", (2,)),
+    ), ())]
+    cands = detect_hardcoded_secrets(
+        FakeIndex({caller: (SECRET, CT)}),
+        {caller: cf, decode: tf, sink: broken_sink},
+        frame_info={decode: (8, True), sink: (4, True)},
+        dex_complete=True)
+    hit = [c for c in cands if c.value == SECRET]
+    assert len(hit) == 1
+    assert any(e.kind == "key-material-argument-derived" for e in hit[0].evidence)
+    assert hit[0].flow_complete is False
+
+
+def _assert_no_derived(cands, value=SECRET):
+    hit = [c for c in cands if c.value == value]
+    assert not hit or all("derived" not in e.kind for c in hit for e in c.evidence)
+
+
+def test_derived_route_suppressed_without_ledger_metadata():
+    """Default is UNKNOWN: absent (None) or incomplete (False) DEX-completeness
+    metadata suppresses the derived tier entirely. The direct tier is
+    untouched by the flag."""
+    caller, decode, sink, cf, tf, sf = _derived_fixture()
+    for dex_complete in (None, False):
+        cands = detect_hardcoded_secrets(
+            FakeIndex({caller: (SECRET, CT)}),
+            {caller: cf, decode: tf, sink: sf},
+            frame_info={decode: (8, True), sink: (4, True)},
+            dex_complete=dex_complete)
+        _assert_no_derived(cands)
+    # control: same fixture with a verified-complete ledger yields the evidence
+    assert any("derived" in e.kind for c in _run_derived() for e in c.evidence)
+
+
+# --- Return-dependence counterexamples: reading the parameter is not proof ---
+# Each body below READS the literal-carrying parameter register v7 (the old
+# read-check accepted them) yet its return value does NOT depend on the
+# parameter's content. The bounded content-dependence fixpoint must reject all.
+
+def test_derived_route_rejects_const_filled_array_sized_by_param():
+    """Array contents are constants; only the SIZE depends on the parameter.
+    A tainted size must not taint the contents."""
+    body = (
+        SInstruction(0, "invoke-virtual", (7,), invoke_class="Ljava/lang/String;",
+                     invoke_method="length", invoke_descriptor="()I"),
+        SInstruction(2, "move-result", (0,)),
+        SInstruction(4, "const/4", (1,), const_value=0),
+        SInstruction(6, "new-array", (1, 0)),          # tainted size, fresh contents
+        SInstruction(8, "const/4", (2,), const_value=65),
+        SInstruction(10, "const/4", (3,), const_value=0),
+        SInstruction(12, "aput-byte", (2, 1, 3)),       # untainted value stored
+        SInstruction(14, "return-object", (1,)),
+    )
+    _assert_no_derived(_run_derived(transform_replace=body))
+
+
+def test_derived_route_rejects_branch_only_param_read():
+    """The parameter feeds only a branch condition; the returned array is
+    constant-filled. A branch read is not content dependence."""
+    body = (
+        SInstruction(0, "if-eqz", (7,), branch_target=12),
+        SInstruction(2, "const/4", (0,), const_value=4),
+        SInstruction(4, "new-array", (1, 0)),
+        SInstruction(6, "const/4", (2,), const_value=65),
+        SInstruction(8, "aput-byte", (2, 1, 0)),
+        SInstruction(10, "return-object", (1,)),
+    )
+    _assert_no_derived(_run_derived(transform_replace=body))
+
+
+def test_derived_route_rejects_overwritten_param_register():
+    """The parameter register is overwritten before any use; everything
+    downstream is constant. Overwrite kills provenance."""
+    body = (
+        SInstruction(0, "const/4", (7,), const_value=0),   # kill v7
+        SInstruction(2, "move", (0, 7)),
+        SInstruction(4, "new-array", (1, 0)),
+        SInstruction(6, "const/4", (2,), const_value=65),
+        SInstruction(8, "aput-byte", (2, 1, 0)),
+        SInstruction(10, "return-object", (1,)),
+    )
+    _assert_no_derived(_run_derived(transform_replace=body))
+
+
+# --- Route-shape controls ---
+
+def test_derived_route_rejects_chained_second_transform():
+    """caller: decode(lit) -> decode2(result) -> sink. The producer decode2 is
+    fed a prior call RESULT, not a literal: one transform hop only."""
+    caller, decode, sink, _, tf, sf = _derived_fixture()
+    decode2 = MethodRef("com.example.Foo", "decode2", "([B)[B")
+    caller_flow = [FlowBlock(0, (
+        cs(1, SECRET, 0),
+        cs(3, CT, 2),
+        inv2(4, "invoke-static", *DECODE, "(Ljava/lang/String;)[B", (1,), True),
+        mr(2, 6),
+        inv2(8, "invoke-static", "Lcom/example/Foo;", "decode2", "([B)[B", (2,), True),
+        mr(5, 10),
+        inv2(12, "invoke-static", *SINK, "([B[B)[B", (5, 3), True),
+        mr(4, 14),
+    ), ())]
+    decode2_flow = [FlowBlock(0, (
+        SInstruction(0, "array-length", (0, 3)),
+        SInstruction(2, "new-array", (1, 0)),
+        SInstruction(4, "aget-byte", (2, 3, 0)),
+        SInstruction(6, "aput-byte", (2, 1, 0)),
+        SInstruction(8, "return-object", (1,)),
+    ), ())]
+    cands = detect_hardcoded_secrets(
+        FakeIndex({caller: (SECRET, CT)}),
+        {caller: caller_flow, decode: tf, decode2: decode2_flow, sink: sf},
+        frame_info={decode: (8, True), decode2: (4, True), sink: (4, True)},
+        dex_complete=True)
+    _assert_no_derived(cands)
+
+
+def test_derived_route_rejects_external_mixing_at_call_site():
+    """The transform is called with (literal, external input): the literal is
+    not the sole value entering it."""
+    caller, decode, sink, _, tf, sf = _derived_fixture()
+    caller_flow = [FlowBlock(0, (
+        cs(1, SECRET, 0),
+        cs(3, CT, 2),
+        inv(6, *EXT, (4,)),
+        mr(5, 8),
+        inv2(10, "invoke-static", *DECODE,
+             "(Ljava/lang/String;Ljava/lang/String;)[B", (1, 5), True),
+        mr(2, 12),
+        inv2(14, "invoke-static", *SINK, "([B[B)[B", (2, 3), True),
+        mr(4, 16),
+    ), ())]
+    cands = detect_hardcoded_secrets(
+        FakeIndex({caller: (SECRET, CT)}),
+        {caller: caller_flow, decode: tf, sink: sf},
+        frame_info={decode: (8, True), sink: (4, True)},
+        dex_complete=True)
+    _assert_no_derived(cands)
+
+
+def test_derived_route_reaching_non_key_sink_is_not_key_evidence():
+    """Derived material reaching MessageDigest.digest (not a key-material
+    sink) yields no key evidence and no security-context use."""
+    caller, decode, sink, _, tf, _ = _derived_fixture()
+    digest = MethodRef("java.security.MessageDigest", "digest", "([B)[B")
+    caller_flow = [FlowBlock(0, (
+        cs(1, SECRET, 0),
+        inv2(4, "invoke-static", *DECODE, "(Ljava/lang/String;)[B", (1,), True),
+        mr(2, 6),
+        inv2(8, "invoke-static", "Ljava/security/MessageDigest;", "digest",
+             "([B)[B", (2,), True),
+        mr(4, 10),
+    ), ())]
+    digest_flow = [FlowBlock(0, (SInstruction(0, "return-object", (3,)),), ())]
+    cands = detect_hardcoded_secrets(
+        FakeIndex({caller: (SECRET,)}),
+        {caller: caller_flow, decode: tf, digest: digest_flow},
+        frame_info={decode: (8, True), digest: (4, True)},
+        dex_complete=True)
+    hit = [c for c in cands if c.value == SECRET]
+    assert not hit or all("key-material" not in e.kind for c in hit for e in c.evidence)
+    assert not hit or all(c.used_in_security_context is not True for c in hit)
+
+
+def test_derived_route_direct_cross_class_literal_gets_no_derived_evidence():
+    """A literal passed DIRECTLY to a cross-class sink (no transform) stays
+    unauthorized: the derived route is the only cross-class path and it
+    requires the transform hop."""
+    caller, decode, sink, _, tf, sf = _derived_fixture()
+    caller_flow = [FlowBlock(0, (
+        cs(1, SECRET, 0),
+        cs(3, CT, 2),
+        inv2(4, "invoke-static", *SINK, "([B[B)[B", (1, 3), True),
+        mr(4, 6),
+    ), ())]
+    cands = detect_hardcoded_secrets(
+        FakeIndex({caller: (SECRET, CT)}),
+        {caller: caller_flow, decode: tf, sink: sf},
+        frame_info={decode: (8, True), sink: (4, True)},
+        dex_complete=True)
+    hit = [c for c in cands if c.value == SECRET]
+    assert not hit or all("key-material" not in e.kind for c in hit for e in c.evidence)
+
+
+def test_derived_route_branch_union_external_and_transform_suppressed():
+    """Two branches merge: one feeds the sink argument from external input,
+    the other from the transform. The unioned origins are not exactly one
+    call-result origin, so the position is suppressed."""
+    caller, decode, sink, _, tf, sf = _derived_fixture()
+    caller_flow = [
+        FlowBlock(0, (
+            cs(1, SECRET, 0),
+            cs(3, CT, 2),
+            ifz(4, 4),
+        ), (10, 20)),
+        FlowBlock(10, (
+            inv(10, *EXT, (4,)),
+            mr(2, 12),
+        ), (30,)),
+        FlowBlock(20, (
+            inv2(20, "invoke-static", *DECODE, "(Ljava/lang/String;)[B", (1,), True),
+            mr(2, 22),
+        ), (30,)),
+        FlowBlock(30, (
+            inv2(30, "invoke-static", *SINK, "([B[B)[B", (2, 3), True),
+            mr(4, 32),
+        ), ()),
+    ]
+    cands = detect_hardcoded_secrets(
+        FakeIndex({caller: (SECRET, CT)}),
+        {caller: caller_flow, decode: tf, sink: sf},
+        frame_info={decode: (8, True), sink: (4, True)},
+        dex_complete=True)
+    _assert_no_derived(cands)
+
+
+def test_derived_route_rejects_staticness_mismatch_frame():
+    """Frame metadata says the producer is an instance method while the call
+    site is invoke-static: never guess."""
+    caller, decode, sink, cf, tf, sf = _derived_fixture()
+    cands = detect_hardcoded_secrets(
+        FakeIndex({caller: (SECRET, CT)}),
+        {caller: cf, decode: tf, sink: sf},
+        frame_info={decode: (8, False), sink: (4, True)},
+        dex_complete=True)
+    _assert_no_derived(cands)
+
+
+def test_derived_route_rejects_param_metadata_mismatch():
+    """registers_size 0 admits no parameter register: metadata mismatch
+    suppresses the route."""
+    caller, decode, sink, cf, tf, sf = _derived_fixture()
+    cands = detect_hardcoded_secrets(
+        FakeIndex({caller: (SECRET, CT)}),
+        {caller: cf, decode: tf, sink: sf},
+        frame_info={decode: (0, True), sink: (4, True)},
+        dex_complete=True)
+    _assert_no_derived(cands)
+
+
+def test_derived_route_hex_vector_and_short_key_stay_manual_review():
+    """A hex test-vector literal and a short sequential key with proven
+    derived key-role evidence surface as manual-review candidates: role
+    evidence never auto-confirms and shape never refutes."""
+    for lit in ("000102030405060708090a0b0c0d0e0f", "1234567890123456"):
+        caller, decode, sink, _, tf, sf = _derived_fixture()
+        cf = [FlowBlock(0, (
+            cs(1, lit, 0),
+            cs(3, CT, 2),
+            inv2(4, "invoke-static", *DECODE, "(Ljava/lang/String;)[B", (1,), True),
+            mr(2, 6),
+            inv2(8, "invoke-static", *SINK, "([B[B)[B", (2, 3), True),
+            mr(4, 10),
+        ), ())]
+        cands = detect_hardcoded_secrets(
+            FakeIndex({caller: (lit, CT)}),
+            {caller: cf, decode: tf, sink: sf},
+            frame_info={decode: (8, True), sink: (4, True)},
+            dex_complete=True)
+        hit = [c for c in cands if c.value == lit]
+        assert len(hit) == 1, (lit, cands)
+        assert any(e.kind == "key-material-argument-derived" for e in hit[0].evidence)
+        attrs = gate_attributes(hit[0])
+        result = gates.evaluate("hardcoded-secret", attrs)
+        assert not result.passed                  # never auto-confirmed
+        assert result.failed_decisively == ()     # never refuted on shape
+
+
+def test_derived_route_suppressed_by_adapter_duplicate_class_ledger():
+    """End-to-end through the REAL adapter path: the same dex fixture packed
+    as classes.dex + classes2.dex makes the coverage ledger ambiguous
+    (first-wins duplicate classes), dex_ledger_complete is False, and the
+    derived tier is suppressed. A clean single-dex package keeps it active."""
+    from io import BytesIO
+    from pathlib import Path
+    import zipfile
+    from mobius.adapters.flow_adapt import adapt_code
+    from mobius.adapters.provider_payload import dex_ledger_complete
+
+    raw = (Path(__file__).parent / "fixtures" / "dex" / "AnalysisTest.dex").read_bytes()
+
+    def ledger_for(names):
+        buf = BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            for name in names:
+                z.writestr(name, raw)
+        return adapt_code(buf.getvalue())[-1]
+
+    clean = dex_ledger_complete(ledger_for(["classes.dex"]))
+    dup_ledger = ledger_for(["classes.dex", "classes2.dex"])
+    dup = dex_ledger_complete(dup_ledger)
+    assert clean is True
+    assert dup is False
+    assert any(b.ambiguous or b.duplicates for b in dup_ledger)
+
+    caller, decode, sink, cf, tf, sf = _derived_fixture()
+
+    def has_derived(ledger_complete):
+        cands = detect_hardcoded_secrets(
+            FakeIndex({caller: (SECRET, CT)}),
+            {caller: cf, decode: tf, sink: sf},
+            frame_info={decode: (8, True), sink: (4, True)},
+            dex_complete=ledger_complete)
+        return any("derived" in e.kind for c in cands for e in c.evidence)
+
+    assert has_derived(clean) is True
+    assert has_derived(dup) is False
+
+
+FORMAT_OK_LITERAL = "kX9mZ2vB8qW4nR6pL0sT3yU7aC5dF1"   # passes format_and_entropy_ok
+
+
+def _derived_fixture_with_literal(lit):
+    """The standard derived fixture with the caller's literal swapped."""
+    caller, decode, sink, _, tf, sf = _derived_fixture()
+    cf = [FlowBlock(0, (
+        cs(1, lit, 0),
+        cs(3, CT, 2),
+        inv2(4, "invoke-static", *DECODE, "(Ljava/lang/String;)[B", (1,), True),
+        mr(2, 6),
+        inv2(8, "invoke-static", *SINK, "([B[B)[B", (2, 3), True),
+        mr(4, 10),
+    ), ())]
+    return caller, decode, sink, cf, tf, sf
+
+
+def test_derived_only_evidence_never_confirms_even_when_format_passes():
+    """BLOCKER A: a derived literal whose own string PASSES the format screen
+    must still leave the format clause missing - shape can never upgrade
+    may-depend evidence - and the whole gate can never pass."""
+    caller, decode, sink, cf, tf, sf = _derived_fixture_with_literal(FORMAT_OK_LITERAL)
+    cands = detect_hardcoded_secrets(
+        FakeIndex({caller: (FORMAT_OK_LITERAL, CT)}),
+        {caller: cf, decode: tf, sink: sf},
+        frame_info={decode: (8, True), sink: (4, True)},
+        dex_complete=True)
+    hit = [c for c in cands if c.value == FORMAT_OK_LITERAL]
+    assert len(hit) == 1
+    assert any(e.kind == "key-material-argument-derived" for e in hit[0].evidence)
+    assert not any(e.kind == "key-material-argument" for e in hit[0].evidence)
+    attrs = gate_attributes(hit[0])
+    assert "format_and_entropy_ok" not in attrs      # missing even though ok=True
+    assert "inapplicable" in attrs["format_assessment"]
+    assert attrs["security_use_basis"] == "may-depend-derived-route-only"
+    result = gates.evaluate("hardcoded-secret", attrs)
+    assert not result.passed
+    assert result.failed_decisively == ()
+
+
+def test_direct_evidence_with_format_passing_literal_keeps_reviewed_behavior():
+    """The format-passing + format-set behavior is preserved for INDEPENDENT
+    direct key-role evidence (same-method literal -> getBytes -> SecretKeySpec):
+    only derived-only evidence is forced inapplicable."""
+    m = M()
+    flow = [
+        cs(1, FORMAT_OK_LITERAL, 0),
+        inv(4, *GETBYTES, (1,)),
+        mr(2, 8),
+        inv(10, *SECRETKEYSPEC, (3, 2, 4)),
+    ]
+    cands = detect_hardcoded_secrets(FakeIndex({m: (FORMAT_OK_LITERAL,)}),
+                                     {m: [FlowBlock(0, tuple(flow), ())]},
+                                     dex_complete=True)
+    assert len(cands) == 1
+    attrs = gate_attributes(cands[0])
+    assert attrs["format_and_entropy_ok"] is True    # direct behavior unchanged
+    assert attrs["security_use_basis"] == "direct-key-material-evidence"
+
+
+def test_derived_route_union_return_is_may_depend_candidate_only():
+    """B1: one branch returns the param-derived array, the other a
+    constant-filled array; the union taints the return. The candidate is
+    reported as MAY-depend evidence and can never pass the gate."""
+    caller, decode, sink, cf, _, sf = _derived_fixture()
+    tf = [
+        FlowBlock(0, (
+            SInstruction(0, "if-eqz", (6,), branch_target=20),
+            SInstruction(2, "const/4", (0,), const_value=4),
+            SInstruction(4, "new-array", (1, 0)),
+            SInstruction(6, "invoke-virtual", (7,), invoke_class="Ljava/lang/String;",
+                         invoke_method="charAt", invoke_descriptor="(I)C"),
+            SInstruction(8, "move-result", (2,)),
+            SInstruction(10, "aput-byte", (2, 1, 0)),
+            SInstruction(12, "goto", (), branch_target=30),
+        ), (20, 30)),
+        FlowBlock(20, (
+            SInstruction(20, "const/4", (0,), const_value=4),
+            SInstruction(22, "new-array", (1, 0)),
+            SInstruction(24, "const/4", (2,), const_value=65),
+            SInstruction(26, "aput-byte", (2, 1, 0)),
+        ), (30,)),
+        FlowBlock(30, (
+            SInstruction(30, "return-object", (1,)),
+        ), ()),
+    ]
+    cands = detect_hardcoded_secrets(
+        FakeIndex({caller: (SECRET, CT)}),
+        {caller: cf, decode: tf, sink: sf},
+        frame_info={decode: (8, True), sink: (4, True)},
+        dex_complete=True)
+    hit = [c for c in cands if c.value == SECRET]
+    assert len(hit) == 1
+    derived = [e for e in hit[0].evidence if e.kind == "key-material-argument-derived"]
+    assert derived and "MAY depend" in derived[0].detail
+    result = gates.evaluate("hardcoded-secret", gate_attributes(hit[0]))
+    assert not result.passed
+
+
+def test_derived_route_length_only_dependence_is_not_content_provenance():
+    """B2: arr[i] = param.length(); return arr - the key depends only on the
+    literal's LENGTH, not its content. Suppressed."""
+    caller, decode, sink, cf, _, sf = _derived_fixture()
+    body = (
+        SInstruction(0, "invoke-virtual", (7,), invoke_class="Ljava/lang/String;",
+                     invoke_method="length", invoke_descriptor="()I"),
+        SInstruction(2, "move-result", (0,)),
+        SInstruction(4, "const/4", (1,), const_value=4),
+        SInstruction(6, "new-array", (1, 2)),
+        SInstruction(8, "aput-byte", (0, 1, 2)),     # stores the LENGTH as content
+        SInstruction(10, "return-object", (1,)),
+    )
+    cands = detect_hardcoded_secrets(
+        FakeIndex({caller: (SECRET, CT)}),
+        {caller: cf, decode: [FlowBlock(0, body, ())], sink: sf},
+        frame_info={decode: (8, True), sink: (4, True)},
+        dex_complete=True)
+    _assert_no_derived(cands)
+
+
+def test_derived_route_full_array_overwrite_stays_may_depend_candidate_only():
+    """B3: param content is stored, then every element is overwritten with a
+    constant. Weak updates keep the array tainted: reported as MAY-depend
+    evidence, never gate-passing (over-approximation stated, not hidden)."""
+    caller, decode, sink, cf, _, sf = _derived_fixture()
+    body = (
+        SInstruction(0, "const/4", (0,), const_value=1),
+        SInstruction(2, "new-array", (1, 0)),
+        SInstruction(4, "invoke-virtual", (7,), invoke_class="Ljava/lang/String;",
+                     invoke_method="charAt", invoke_descriptor="(I)C"),
+        SInstruction(6, "move-result", (2,)),
+        SInstruction(8, "aput-byte", (2, 1, 0)),
+        SInstruction(10, "const/4", (2,), const_value=65),
+        SInstruction(12, "aput-byte", (2, 1, 0)),    # full overwrite with constant
+        SInstruction(14, "return-object", (1,)),
+    )
+    cands = detect_hardcoded_secrets(
+        FakeIndex({caller: (SECRET, CT)}),
+        {caller: cf, decode: [FlowBlock(0, body, ())], sink: sf},
+        frame_info={decode: (8, True), sink: (4, True)},
+        dex_complete=True)
+    hit = [c for c in cands if c.value == SECRET]
+    assert len(hit) == 1
+    derived = [e for e in hit[0].evidence if e.kind == "key-material-argument-derived"]
+    assert derived and "MAY depend" in derived[0].detail
+    result = gates.evaluate("hardcoded-secret", gate_attributes(hit[0]))
+    assert not result.passed
+
+
+def test_derived_route_invalid_output_length_is_candidate_only():
+    """D: a transform emitting a 3-byte array (invalid AES key length) is
+    still reported - output bytes are unmodelled - but stays a may-depend
+    candidate and never passes the gate."""
+    caller, decode, sink, cf, _, sf = _derived_fixture()
+    body = (
+        SInstruction(0, "const/4", (0,), const_value=3),
+        SInstruction(2, "new-array", (1, 0)),
+        SInstruction(4, "invoke-virtual", (7,), invoke_class="Ljava/lang/String;",
+                     invoke_method="charAt", invoke_descriptor="(I)C"),
+        SInstruction(6, "move-result", (2,)),
+        SInstruction(8, "aput-byte", (2, 1, 0)),
+        SInstruction(10, "return-object", (1,)),
+    )
+    cands = detect_hardcoded_secrets(
+        FakeIndex({caller: (SECRET, CT)}),
+        {caller: cf, decode: [FlowBlock(0, body, ())], sink: sf},
+        frame_info={decode: (8, True), sink: (4, True)},
+        dex_complete=True)
+    hit = [c for c in cands if c.value == SECRET]
+    assert len(hit) == 1
+    derived = [e for e in hit[0].evidence if e.kind == "key-material-argument-derived"]
+    assert derived and "MAY depend" in derived[0].detail
+    result = gates.evaluate("hardcoded-secret", gate_attributes(hit[0]))
+    assert not result.passed
