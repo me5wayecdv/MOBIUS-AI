@@ -9,15 +9,26 @@ Skipped otherwise. CI exports MOBIUS_TEST_PG_URL instead, so that name is
 accepted as a fallback (DSN wins when both are set). The database is migrated
 with alembic to head so the test exercises the deployed schema, not just
 create_all.
+
+Isolation model: the configured database may hold anything (other test files
+in this suite build their schema in `public` via create_all, so alembic cannot
+migrate `public` without colliding - and must never be allowed to wipe it).
+Every test therefore runs inside its own generated schema (wqtest_<uuid>)
+through a search_path-pinned DSN, migrates that schema with alembic, asserts
+the migration landed there, and drops exactly that schema on teardown. A
+module-level guard proves this run's own public sentinel row is untouched and
+that no schema this run created is leaked.
 """
 from __future__ import annotations
 
 import os
 import threading
 import time
+import uuid
 
 import pytest
 from sqlalchemy import create_engine, text
+from sqlalchemy.engine.url import make_url
 from sqlalchemy.orm import Session
 
 from pg_dsn import resolve_pg_dsn
@@ -29,20 +40,135 @@ pytestmark = pytest.mark.skipif(
 pytest.importorskip("psycopg")
 
 
+SCHEMA_PREFIX = "wqtest_"
+
+# Names of every schema this run created, so the teardown guard validates
+# exactly what this run owns and nothing else (another run sharing the
+# database may legitimately own look-alike names).
+_CREATED_SCHEMAS: list[str] = []
+
+
+def _schema_url(dsn: str, schema: str) -> str:
+    """DSN pinned to a single schema via the libpq options connection
+    parameter, so every unqualified name (app tables, the alembic version
+    table, the scope-guard trigger function) resolves inside that schema."""
+    url = make_url(dsn)
+    query = dict(url.query)
+    setting = f"-csearch_path={schema}"
+    existing = query.get("options", "")
+    query["options"] = f"{existing} {setting}".strip()
+    return url.set(query=query).render_as_string(hide_password=False)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _public_schema_guard():
+    """Proof, not isolation: this module must never write to the public
+    schema and must drop every schema it creates.
+
+    Setup plants a sentinel row in a uniquely-named public table (uuid suffix:
+    the name cannot belong to another run, so setup never skips and
+    non-execution can never be masked); a setup failure removes the sentinel
+    before re-raising. Teardown checks this run's own sentinel row, then -
+    independently of the checks, on a fresh connection - drops any leaked
+    schema this run created (tracked in _CREATED_SCHEMAS, never a prefix
+    sweep) and the sentinel. Cleanup failures are recorded, never masked over
+    an error already propagating. Only after cleanup does the guard fail the
+    module if anything was amiss."""
+    sentinel = f"{SCHEMA_PREFIX}sentinel_{uuid.uuid4().hex}"
+    admin = create_engine(DSN, isolation_level="AUTOCOMMIT")
+    created = False
+    try:
+        with admin.connect() as conn:
+            conn.execute(text(f'CREATE TABLE public."{sentinel}" (id integer PRIMARY KEY)'))
+            created = True
+            conn.execute(text(f'INSERT INTO public."{sentinel}" (id) VALUES (1)'))
+    except BaseException:
+        if created:
+            try:
+                with admin.connect() as conn:
+                    conn.execute(text(f'DROP TABLE IF EXISTS public."{sentinel}"'))
+            except Exception:
+                pass  # the original setup failure takes precedence
+        admin.dispose()
+        raise
+    yield
+    errors: list[str] = []
+    try:
+        with admin.connect() as conn:
+            count = conn.execute(text(
+                f'SELECT COUNT(*) FROM public."{sentinel}"')).scalar_one()
+            if count != 1:
+                errors.append(
+                    f"public sentinel row changed (count={count}): "
+                    "a test wrote to public")
+    finally:
+        # Cleanup is independent of the checks: fresh connection, each
+        # statement guarded, failures recorded without masking a check
+        # failure already propagating.
+        leaked: list[str] = []
+        try:
+            with admin.connect() as conn:
+                if _CREATED_SCHEMAS:
+                    leaked = conn.execute(text(
+                        "SELECT schema_name FROM information_schema.schemata "
+                        "WHERE schema_name = ANY(:names)"
+                    ), {"names": list(_CREATED_SCHEMAS)}).scalars().all()
+                    for name in leaked:  # ours by construction
+                        try:
+                            conn.execute(text(f'DROP SCHEMA "{name}" CASCADE'))
+                        except Exception as exc:
+                            errors.append(f"failed to drop leaked schema {name}: {exc!r}")
+                try:
+                    conn.execute(text(f'DROP TABLE IF EXISTS public."{sentinel}"'))
+                except Exception as exc:
+                    errors.append(f"failed to drop sentinel: {exc!r}")
+        except Exception as exc:
+            errors.append(f"guard cleanup connection failed: {exc!r}")
+        finally:
+            admin.dispose()
+        if leaked:
+            errors.append(f"test schemas leaked (cleaned by guard): {leaked}")
+    assert not errors, "; ".join(errors)
+
+
 @pytest.fixture()
 def pg_engine():
+    """Migrate and run inside a per-test throwaway schema so the configured
+    database is never wiped or migrated. The schema name is generated here
+    (fixed prefix + uuid), never taken from configuration; teardown drops
+    exactly that schema and nothing else, including when migration or test
+    setup fails."""
     import subprocess
-    env = dict(os.environ, MOBIUS_DB_URL=DSN)
-    subprocess.run(["alembic", "upgrade", "head"], check=True, env=env,
-                   cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    engine = create_engine(DSN, isolation_level="READ COMMITTED")
-    yield engine
-    with engine.begin() as conn:
-        conn.execute(text(
-            "TRUNCATE worker_jobs, events, investigations, authorizations, "
-            "applications CASCADE"
-        ))
-    engine.dispose()
+    schema = SCHEMA_PREFIX + uuid.uuid4().hex
+    test_dsn = _schema_url(DSN, schema)
+    admin = create_engine(DSN, isolation_level="AUTOCOMMIT")
+    try:
+        with admin.connect() as conn:
+            conn.execute(text(f'CREATE SCHEMA "{schema}"'))
+        _CREATED_SCHEMAS.append(schema)
+        env = dict(os.environ, MOBIUS_DB_URL=test_dsn)
+        subprocess.run(["alembic", "upgrade", "head"], check=True, env=env,
+                       cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        # Deterministic tripwire: the migration must have landed in THIS
+        # private schema (admin is unpinned, so qualify explicitly).
+        with admin.connect() as conn:
+            for rel in ("worker_jobs", "alembic_version"):
+                landed = conn.execute(text(
+                    "SELECT to_regclass(:name)"
+                ), {"name": f"{schema}.{rel}"}).scalar_one()
+                assert landed is not None, (
+                    f"alembic did not land {rel} in private schema {schema}")
+        engine = create_engine(test_dsn, isolation_level="READ COMMITTED")
+        try:
+            yield engine
+        finally:
+            engine.dispose()
+    finally:
+        try:
+            with admin.connect() as conn:
+                conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        finally:
+            admin.dispose()
 
 
 def _seed_scan(engine, future_iso):
@@ -218,7 +344,7 @@ def _pg_client(pg_engine, tmp_path):
     from mobius.api.config import Settings
     from mobius.api.deps import AppContext, set_context
     from fastapi.testclient import TestClient
-    settings = Settings(db_url=DSN, artifact_root=tmp_path / "artifacts", env="test")
+    settings = Settings(db_url=pg_engine.url.render_as_string(hide_password=False), artifact_root=tmp_path / "artifacts", env="test")
     context = AppContext(settings)
     set_context(context)
     return TestClient(create_app()), context
@@ -275,6 +401,7 @@ def test_full_route_concurrent_apply_admits_exactly_one(pg_engine, tmp_path, fut
     finally:
         from mobius.api.deps import set_context
         set_context(None)
+        context.engine.dispose()  # release private-schema connections before DROP SCHEMA
 
 
 def test_full_route_reject_races_claim_without_deadlock(pg_engine, tmp_path, future_iso):
@@ -349,6 +476,7 @@ def test_full_route_reject_races_claim_without_deadlock(pg_engine, tmp_path, fut
     finally:
         from mobius.api.deps import set_context
         set_context(None)
+        context.engine.dispose()  # release private-schema connections before DROP SCHEMA
 
 
 def test_full_route_apply_loses_to_committed_claim(pg_engine, tmp_path, future_iso):
@@ -433,6 +561,7 @@ def test_full_route_apply_loses_to_committed_claim(pg_engine, tmp_path, future_i
     finally:
         from mobius.api.deps import set_context
         set_context(None)
+        context.engine.dispose()  # release private-schema connections before DROP SCHEMA
 
 
 def test_terminal_reject_loses_to_committed_claim(pg_engine, future_iso):
