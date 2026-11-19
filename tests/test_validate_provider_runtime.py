@@ -72,3 +72,13 @@ def test_validated_result_rejects_schema_invalid_payload() -> None:
     payload["schema_version"] = 2
     with pytest.raises(ValueError):
         runtime.validated_result({"result_json": payload}, sha)
+
+
+def test_validated_result_rejects_wrong_digest() -> None:
+    payload, _ = _valid_state()
+    other_sha = "0" * 64
+    with pytest.raises(ValueError, match="not bound"):
+        runtime.validated_result({"result_json": payload}, other_sha)
+    stored = json.dumps(payload)
+    with pytest.raises(ValueError, match="not bound"):
+        runtime.validated_result({"result_json": stored}, other_sha)

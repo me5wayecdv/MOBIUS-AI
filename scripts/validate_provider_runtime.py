@@ -223,8 +223,6 @@ def main() -> int:
             result = validated_result(state, sha)
         except Exception as exc:
             fail(f"stored result fails the API output contract: {exc}")
-        if result.artifact_sha256 != sha:
-            fail("result artifact digest mismatch")
         if result.package_name != "com.example":
             fail(f"unexpected package_name: {result.package_name}")
         if result.methods_adapted <= 0:
