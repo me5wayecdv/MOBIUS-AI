@@ -104,6 +104,17 @@ test("D-056: upload → investigation → evidence → graph → PoC → report;
   expect((after.items || []).map(e => e.seq)).toEqual((before.items || []).map(e => e.seq));
   await page.screenshot({ path: shots + "/d056-06-refresh-replay.png", fullPage: true });
 
+  await page.goto("/ui?scan_id=" + scanId);
+  const decisionPanel = page.locator("#d056");
+  await expect(decisionPanel).toContainText("NEXUS · enumerate_entrypoints");
+  await expect(decisionPanel).toContainText("deterministic · no model");
+  await expect(decisionPanel).toContainText("VERITAS · review_finding");
+  await expect(decisionPanel).toContainText("ADVISORY REVIEW");
+  await expect(decisionPanel).toContainText("no_material_challenge");
+  await expect(decisionPanel).toContainText("INDEPENDENCE UNVERIFIED");
+  await expect(decisionPanel).toContainText("mock/fixture-reviewer");
+  await expect(decisionPanel).toContainText("2 PERSISTED DECISIONS");
+
   for (const viewport of [{ width: 1280, height: 900, label: "desktop" }, { width: 390, height: 844, label: "mobile" }]) {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await page.reload();
@@ -115,6 +126,7 @@ test("D-056: upload → investigation → evidence → graph → PoC → report;
       ["d053", "d053-code-studio"],
       ["d054", "d054-attack-graph"],
       ["d055", "d055-poc-report"],
+      ["d056", "d056-decisions"],
     ]) {
       const panel = page.locator("#" + id);
       await panel.scrollIntoViewIfNeeded();

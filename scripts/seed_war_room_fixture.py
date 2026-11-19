@@ -7,7 +7,7 @@ import sys
 from sqlalchemy import select
 
 from mobius.adapters.events import SqlEventStore, utcnow
-from mobius.adapters.models import EvidenceRow, HypothesisRow, InvestigationRow, ObservationRow
+from mobius.adapters.models import DecisionRow, EvidenceRow, HypothesisRow, InvestigationRow, ObservationRow
 from mobius.api.config import Settings
 from mobius.api.deps import AppContext
 from mobius.core.enums import Fidelity, ObservationKind
@@ -49,6 +49,41 @@ def main(scan_id: str) -> None:
             priority=0.75, depth=0, parent_id=None, created_at=utcnow(),
         )
         session.add(hypothesis)
+        decisions = [
+            DecisionRow(
+                id=new_id(IdPrefix.DECISION), investigation_id=scan_id,
+                agent="NEXUS", action="enumerate_entrypoints",
+                action_args={"package": "com.example.lab"},
+                considered_evidence=[evidence.id],
+                alternatives=[{"action": "stop", "reason": "scope"}],
+                expected_outcome="Entry points are enumerated from the persisted manifest.",
+                uncertainty=None, prompt_version="v1",
+                model_id=None, provider=None, created_at=utcnow(),
+            ),
+            DecisionRow(
+                id=new_id(IdPrefix.DECISION), investigation_id=scan_id,
+                agent="VERITAS", action="review_finding",
+                action_args={"finding_id": "fnd_fixture", "producer_model_id": "fixture-producer",
+                             "producer_model_verified": False, "advisory_only": True},
+                considered_evidence=[evidence.id],
+                alternatives=[],
+                expected_outcome="Independently challenge the finding using only persisted evidence; never alter the deterministic verdict.",
+                uncertainty="Fixture review summary: evidence supports the gate verdict.",
+                prompt_version="veritas-independent-review-v1",
+                model_id="fixture-reviewer", provider="mock", model_role="reasoning",
+                requested_model="fixture-reviewer",
+                system_prompt_sha256="a" * 64, input_sha256="b" * 64,
+                schema_sha256="c" * 64, response_sha256="d" * 64,
+                schema_name="VeritasReviewReply",
+                output_json={"disposition": "no_material_challenge",
+                             "summary": "Fixture review summary.",
+                             "challenges": []},
+                input_tokens=30, output_tokens=20, latency_ms=42,
+                temperature=0.0, max_tokens=1200, created_at=utcnow(),
+            ),
+        ]
+        for decision in decisions:
+            session.add(decision)
         SqlEventStore(session).emit(
             scan_id, "fixture_hypothesis_seeded",
             {"hypothesis_id": hypothesis_id, "observation_id": observation_id,
