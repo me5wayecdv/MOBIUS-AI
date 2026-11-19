@@ -74,8 +74,7 @@ def build_jadx_tool_spec(
         version=version,
         args_model=_JadxArgs,
         build_argv=lambda args: (
-            # Only /work/outputs is writable inside the container (split-mount contract).
-            binary, "--no-res", "-d", f"/work/outputs/{args.output_dir}",
+            binary, "--no-res", "-d", f"/work/{args.output_dir}",
             f"/work/{args.input_file}",
         ),
         limits=ToolLimits(
@@ -181,7 +180,7 @@ class JadxAdapter:
                         stream.write(artifact)
                     input_path.chmod(0o444)
 
-                output_path = workspace / "outputs" / output_dir_name
+                output_path = workspace / output_dir_name
                 if output_path.exists() or output_path.is_symlink():
                     raise JadxExecutionFailed("workspace_conflict", "JADX output path already exists; refusing to overwrite it")
 
@@ -216,9 +215,24 @@ class JadxAdapter:
                 finally:
                     # The verified cache is the durable output; remove raw tool output and the
                     # temporary per-job home so no intermediate files/config are retained.
+                    # Cleanup is fail-closed: a tree the worker cannot fully remove (for
+                    # example container-uid-owned nested directories) is reported, never
+                    # silently left behind.
+                    residue = []
                     for temporary in (output_path, workspace / ".jadx-home"):
                         if temporary.exists() and not temporary.is_symlink():
-                            shutil.rmtree(temporary, ignore_errors=True)
+                            try:
+                                shutil.rmtree(temporary)
+                            except OSError:
+                                pass
+                        if temporary.exists() or temporary.is_symlink():
+                            residue.append(str(temporary))
+                    if residue:
+                        raise JadxExecutionFailed(
+                            "cleanup_failed",
+                            "JADX raw output could not be fully removed; residue: "
+                            + ", ".join(residue),
+                        )
         except OSError as exc:
             raise JadxExecutionFailed("io_error", f"JADX cache/workspace I/O failed: {exc}") from exc
 

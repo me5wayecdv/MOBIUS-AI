@@ -66,7 +66,7 @@ def _mount_assertions(command, root):
 
 
 def test_stdout_tools_get_a_read_only_mount_contract(tmp_path):
-    """Split-mount contract, stdout tools (recon/dex): the workspace directory itself is
+    """Mount contract for the stdout tools (recon/dex): the workspace directory itself is
     never mounted; the container gets a tmpfs /work and the staged input as a single
     read-only file bind. No writable host path is exposed at all. Also regression-guards
     that every --mount field is key=value (a bare `rw` once failed every job at start)."""
@@ -80,11 +80,10 @@ def test_stdout_tools_get_a_read_only_mount_contract(tmp_path):
     assert not any("/work/outputs" in m for m in mounts)
 
 
-def test_file_output_tools_get_the_writable_outputs_bind(tmp_path):
-    """Split-mount contract, file-output tools (JADX): only the per-job outputs/ directory
-    is additionally mounted writable (sticky 1777 inside the 0700 workspace, because the
-    fixed container uid 65532 must write it and a non-root worker cannot chown)."""
-    backend = make_backend(tmp_path, writable_output_binaries=frozenset({BINARY}))
+def test_no_writable_host_path_is_ever_mounted(tmp_path):
+    """The contract exposes no writable host path for ANY registered binary: file-output
+    tools (JADX) are held until a reviewed mount contract and verified cleanup exist."""
+    backend = make_backend(tmp_path)
     workspace = make_workspace(tmp_path)
     command = backend._container_argv(
         argv=(BINARY, "--version"), workspace=workspace,
@@ -92,12 +91,9 @@ def test_file_output_tools_get_the_writable_outputs_bind(tmp_path):
     )
     mounts = _mount_assertions(command, workspace.resolve())
     root = workspace.resolve()
-    assert f"type=bind,src={root / 'outputs'},dst=/work/outputs" in mounts
-
-
-def test_writable_output_binaries_must_be_registered(tmp_path):
-    with pytest.raises(ValueError, match="writable-output"):
-        make_backend(tmp_path, writable_output_binaries=frozenset({"/bin/sh"}))
+    assert f"type=bind,src={root / 'outputs'},dst=/work/outputs" not in mounts
+    writable = [m for m in mounts if "readonly" not in m]
+    assert writable == [], writable
 
 
 def test_container_command_requires_staged_input(tmp_path):
@@ -106,15 +102,6 @@ def test_container_command_requires_staged_input(tmp_path):
     empty.mkdir()
     with pytest.raises(ValueError, match="input.apk"):
         backend._container_argv(argv=(BINARY,), workspace=empty, limits=ToolLimits())
-
-
-def test_file_output_tools_require_an_outputs_directory(tmp_path):
-    backend = make_backend(tmp_path, writable_output_binaries=frozenset({BINARY}))
-    no_outputs = tmp_path / "no-outputs"
-    no_outputs.mkdir()
-    (no_outputs / "input.apk").write_bytes(b"fixture-apk")
-    with pytest.raises(ValueError, match="outputs"):
-        backend._container_argv(argv=(BINARY,), workspace=no_outputs, limits=ToolLimits())
 
 
 def test_unregistered_binary_rejected(tmp_path):

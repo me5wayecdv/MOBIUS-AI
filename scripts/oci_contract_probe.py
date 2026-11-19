@@ -6,22 +6,20 @@ images, no paid services. The probe swaps the tool invocation for a Python snipp
 ``--entrypoint`` so it can attempt exactly the writes the contract must forbid, then
 checks the host-side effect.
 
-What is asserted, per contract mode:
+What is asserted (the stdout-tool contract used by recon/dex):
 
-* stdout-tool contract (recon/dex): the workspace directory itself is never mounted;
-  /work/input.apk is a read-only file bind (write attempts fail); no /work/outputs
-  mount exists; anything the container writes into /work lands on the discarded tmpfs
-  and never reaches the host; a neighbouring job's workspace is not mounted, not
-  visible, and is byte-identical afterwards.
-* file-output contract (JADX-mode fixture): everything above, plus the outputs/
-  directory IS writable from inside and the write is visible on the host — and only
-  that subtree changes.
+* the workspace directory itself is never mounted;
+* /work/input.apk is a read-only file bind (write attempts fail);
+* no /work/outputs mount exists - there is no writable host path at all;
+* anything the container writes into /work lands on the discarded tmpfs and never
+  reaches the host;
+* a neighbouring job's workspace is not mounted, not visible, and is byte-identical
+  afterwards.
 
-The JADX image stays unpublished and untested; the writable mode is exercised with the
-recon image standing in as the pinned runtime fixture. Output-tree cleanup of
-uid-65532-owned nested directories by an unprivileged host worker is expressly NOT
-asserted here: it is an unresolved question and the JADX output-writing path stays
-held until it is answered.
+File-output tools (JADX) are deliberately out of scope: no writable host path exists
+in this contract, the JADX image stays unpublished, and the worker's jadx branch is
+held until a reviewed file-output mount contract and a verified output-tree cleanup
+exist.
 
 Exit code 0 = every assertion held; 1 = at least one failed (details on stderr).
 """
@@ -71,12 +69,9 @@ report["input_write_blocked"] = not can_write_file("/work/input.apk")
 mounts = [l.strip() for l in open("/proc/self/mountinfo") if " /work" in l]
 report["work_mounts"] = mounts
 report["outputs_is_mount"] = any(" /work/outputs " in l for l in mounts)
-if report["outputs_is_mount"]:
-    report["outputs_write_ok"] = can_write_tree("/work/outputs/probe-tree")
-else:
-    # No outputs mount: a same-named path can be created on the /work tmpfs, but it
-    # must never propagate to the host (asserted host-side).
-    report["tmpfs_write_ok"] = can_write_tree("/work/tmpfs-scratch")
+# Any in-container scratch write must land on the discarded tmpfs, never the host
+# (asserted host-side by comparing workspace snapshots).
+report["tmpfs_write_ok"] = can_write_tree("/work/tmpfs-scratch")
 print("PROBE-JSON:" + json.dumps(report))
 """
 
@@ -104,9 +99,6 @@ def stage_workspace(root: Path) -> Path:
     staged = workspace / "input.apk"
     staged.write_bytes(b"oci-contract-probe fixture apk bytes")
     staged.chmod(0o444)
-    outputs = workspace / "outputs"
-    outputs.mkdir()
-    outputs.chmod(0o1777)
     return workspace
 
 
@@ -140,7 +132,7 @@ def run_probe(command: tuple[str, ...]) -> dict:
     fail("probe produced no report")
 
 
-def check_mount_sources(report: dict, workspace: Path, *, outputs_expected: bool) -> None:
+def check_mount_sources(report: dict, workspace: Path) -> None:
     sources = []
     for line in report["work_mounts"]:
         if " - " not in line:
@@ -151,13 +143,10 @@ def check_mount_sources(report: dict, workspace: Path, *, outputs_expected: bool
     for source in sources:
         if source == root:
             fail("the workspace directory itself is mounted")
-        if source.startswith(root + "/") and source not in {
-            str(workspace / "input.apk"),
-            str(workspace / "outputs"),
-        }:
+        if source.startswith(root + "/") and source != str(workspace / "input.apk"):
             fail(f"unexpected workspace path mounted: {source}")
-    if outputs_expected != report["outputs_is_mount"]:
-        fail(f"outputs mount presence {report['outputs_is_mount']} != expected {outputs_expected}")
+    if report["outputs_is_mount"]:
+        fail("a /work/outputs mount exists; the stdout-only contract has no writable host path")
 
 
 def main() -> int:
@@ -175,48 +164,22 @@ def main() -> int:
     before_a = snapshot(ws_a)
     before_b = snapshot(ws_b)
 
-    backend_ro = OciBackend(runtime=runtime, binary_images={RECON_BINARY: image})
-    backend_rw = OciBackend(
-        runtime=runtime, binary_images={RECON_BINARY: image},
-        writable_output_binaries=frozenset({RECON_BINARY}),
-    )
+    backend = OciBackend(runtime=runtime, binary_images={RECON_BINARY: image})
 
-    print("== read-only contract (stdout tools: recon/dex)")
-    report = run_probe(build_probe_command(backend_ro, image, ws_a))
+    print("== stdout-only contract (recon/dex; the only contract this backend exposes)")
+    report = run_probe(build_probe_command(backend, image, ws_a))
     print(json.dumps(report, indent=2))
     if not report["input_read_ok"]:
         fail("container could not read the staged input")
     if not report["input_write_blocked"]:
         fail("READ-ONLY INPUT VIOLATED: container appended to /work/input.apk")
-    check_mount_sources(report, ws_a, outputs_expected=False)
+    check_mount_sources(report, ws_a)
     after_a = snapshot(ws_a)
     if after_a != before_a:
-        fail(f"read-only contract changed the workspace: {sorted(after_a)} != {sorted(before_a)}")
+        fail(f"contract changed the workspace: {sorted(after_a)} != {sorted(before_a)}")
     if snapshot(ws_b) != before_b:
-        fail("neighbouring job workspace changed during the read-only probe")
-    print("read-only contract: input immutable, no writable host path, tmpfs confined, jobs isolated")
-
-    print("== writable contract (file-output fixture standing in for JADX mode)")
-    report = run_probe(build_probe_command(backend_rw, image, ws_a))
-    print(json.dumps(report, indent=2))
-    if not report["input_write_blocked"]:
-        fail("READ-ONLY INPUT VIOLATED in writable mode")
-    if not report.get("outputs_write_ok"):
-        fail("outputs/ bind was not writable in writable mode")
-    check_mount_sources(report, ws_a, outputs_expected=True)
-    written = ws_a / "outputs" / "probe-tree" / "nested" / "deep" / "probe.txt"
-    if not written.is_file() or written.read_text() != "probe":
-        fail("container write into outputs/ is not host-visible")
-    after_a = snapshot(ws_a)
-    unexpected = set(after_a) - set(before_a) - {str(written.relative_to(ws_a))}
-    if unexpected:
-        fail(f"writable mode wrote outside outputs/: {sorted(unexpected)}")
-    changed = {k for k in before_a if before_a[k] != after_a.get(k)}
-    if changed:
-        fail(f"writable mode modified pre-existing files: {sorted(changed)}")
-    if snapshot(ws_b) != before_b:
-        fail("neighbouring job workspace changed during the writable probe")
-    print("writable contract: writes confined to outputs/, input immutable, jobs isolated")
+        fail("neighbouring job workspace changed during the probe")
+    print("stdout-only contract: input immutable, no writable host path, tmpfs confined, jobs isolated")
 
     shutil.rmtree(base, ignore_errors=True)
     print("OCI mount contract runtime assertions: ALL PASSED")

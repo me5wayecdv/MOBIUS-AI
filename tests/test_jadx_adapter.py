@@ -34,7 +34,7 @@ class FixtureBackend:
 
     def execute(self, *, argv, workspace, limits):
         self.calls.append(argv)
-        output_arg = next(part for part in argv if part.startswith("/work/outputs/jadx-output-"))
+        output_arg = next(part for part in argv if part.startswith("/work/jadx-output-"))
         output = workspace / output_arg.removeprefix("/work/")
         if self.create_source:
             source = output / "sources" / "com" / "example" / "Fixture.java"
@@ -103,8 +103,28 @@ def test_cache_is_reused_for_same_apk_digest_and_tool_version(tmp_path):
     assert first.apk_sha256 == digest
     assert first.tool_version == "1.5.6"
     assert len(backend.calls) == 1
-    assert not list((tmp_path / "workspaces" / SCAN / "outputs").glob("jadx-output-*"))
+    assert not list((tmp_path / "workspaces" / SCAN).glob("jadx-output-*"))
     assert not (tmp_path / "workspaces" / SCAN / ".jadx-home").exists()
+
+
+def test_cleanup_failure_is_reported_not_silent(tmp_path, monkeypatch):
+    """A raw-output tree the worker cannot remove must surface as cleanup_failed; the
+    previous ignore_errors=True cleanup could leave tool output behind invisibly."""
+    import shutil
+    from mobius.adapters.jadx import JadxExecutionFailed
+
+    real_rmtree = shutil.rmtree
+
+    def failing_rmtree(path, *args, **kwargs):
+        if "jadx-output-" in str(path):
+            raise OSError("simulated undeletable tree")
+        return real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(shutil, "rmtree", failing_rmtree)
+    adapter = make_adapter(tmp_path, FixtureBackend())
+    with pytest.raises(JadxExecutionFailed) as exc_info:
+        adapter.decompile(investigation_id=SCAN, artifact=b"fixture")
+    assert exc_info.value.status == "cleanup_failed"
 
 
 def test_cache_key_changes_when_jadx_version_changes(tmp_path):
