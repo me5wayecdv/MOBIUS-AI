@@ -1,0 +1,54 @@
+name: pentagi-smoke
+
+# Manual-only experiment: PentAGI (vxcontrol/pentagi) with a fully local,
+# no-key Ollama backend on the runner. No paid provider, no external target.
+on:
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - name: Start local Ollama
+        run: |
+          docker run -d --name ollama --network pentagi-network ollama/ollama:0.5.4 || {
+            docker network create pentagi-network
+            docker run -d --name ollama --network pentagi-network ollama/ollama:0.5.4
+          }
+          for i in $(seq 1 20); do
+            docker exec ollama ollama --version >/dev/null 2>&1 && break
+            sleep 3
+          done
+          docker exec ollama ollama pull qwen2.5:3b
+          docker exec ollama ollama pull nomic-embed-text
+          docker exec ollama ollama list
+      - name: Deploy PentAGI
+        run: |
+          git clone --depth 1 https://github.com/vxcontrol/pentagi.git
+          cd pentagi
+          cp .env.example .env
+          sed -i 's|^OLLAMA_SERVER_URL=.*|OLLAMA_SERVER_URL=http://ollama:11434|' .env
+          sed -i 's|^OLLAMA_SERVER_MODEL=.*|OLLAMA_SERVER_MODEL=qwen2.5:3b|' .env
+          sed -i 's|^OLLAMA_SERVER_PULL_MODELS_ENABLED=.*|OLLAMA_SERVER_PULL_MODELS_ENABLED=true|' .env
+          sed -i 's|^EMBEDDING_PROVIDER=.*|EMBEDDING_PROVIDER=ollama|' .env
+          sed -i 's|^EMBEDDING_MODEL=.*|EMBEDDING_MODEL=nomic-embed-text|' .env
+          sed -i 's|^EMBEDDING_URL=.*|EMBEDDING_URL=http://ollama:11434|' .env
+          grep -E "^(OLLAMA|EMBEDDING)_" .env | sed 's/KEY=.*/KEY=<redacted>/'
+          docker compose up -d
+          docker compose ps
+      - name: Verify PentAGI is healthy with the local model
+        run: |
+          ok=0
+          for i in $(seq 1 30); do
+            if curl -sk https://127.0.0.1:8443/api/v1/health 2>/dev/null | grep -qi "ok\|true\|healthy"; then
+              ok=1; break
+            fi
+            sleep 10
+          done
+          echo "health_ok=$ok"
+          cd pentagi
+          docker compose ps
+          docker compose logs --tail=60 pentagi || true
+          curl -sk https://127.0.0.1:8443/api/v1/health || true
+          test "$ok" = "1"
