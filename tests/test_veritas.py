@@ -147,6 +147,49 @@ def test_veritas_challenge_is_persisted_and_cannot_change_gate_verdict(
     assert finding.status == "confirmed"
 
 
+def test_veritas_review_mutates_no_finding_or_verdict_row(
+    session, reviewed_finding
+):
+    """Advisory review adds a DecisionRow + event only: every column of the
+    finding and every verdict row must be byte-identical afterwards."""
+    finding_id, investigation_id, verdict_id, evidence_id = reviewed_finding
+
+    def snapshot(row):
+        # Every mapped column, deep-copied: JSON columns hold mutable containers,
+        # so a shallow __dict__ copy would alias the live objects and unloaded
+        # attributes would be silently absent instead of compared.
+        from copy import deepcopy
+        from sqlalchemy import inspect as sa_inspect
+
+        return {
+            attr.key: deepcopy(getattr(row, attr.key))
+            for attr in sa_inspect(row).mapper.column_attrs
+        }
+
+    before_finding = snapshot(session.get(FindingRow, finding_id))
+    before_verdicts = [
+        snapshot(v)
+        for v in session.execute(select(VerdictRow)).scalars().all()
+    ]
+    gateway, _ = _gateway({
+        "disposition": "no_material_challenge",
+        "summary": "Persisted evidence supports the gate verdict.",
+        "challenges": [],
+    })
+    factory = sessionmaker(bind=session.get_bind(), expire_on_commit=False, future=True)
+
+    VeritasReviewService(
+        session, gateway=gateway, session_factory=factory
+    ).review(finding_id, producer_model_id="producer-v1")
+
+    session.expire_all()
+    assert snapshot(session.get(FindingRow, finding_id)) == before_finding
+    assert [
+        snapshot(v)
+        for v in session.execute(select(VerdictRow)).scalars().all()
+    ] == before_verdicts
+
+
 def test_veritas_refuses_same_requested_model_before_provider_call(
     session, reviewed_finding
 ):

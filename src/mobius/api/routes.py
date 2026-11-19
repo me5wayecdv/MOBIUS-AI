@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, U
 from fastapi.responses import JSONResponse, PlainTextResponse, StreamingResponse
 
 from ..adapters.events import SqlEventStore, utcnow
-from ..adapters.models import ApplicationRow, AuthorizationRow, EvidenceRow, FindingRow, HypothesisRow, InvestigationRow, WorkerJobRow, PoCRunRow
+from ..adapters.models import ApplicationRow, AuthorizationRow, DecisionRow, EvidenceRow, FindingRow, HypothesisRow, InvestigationRow, WorkerJobRow, PoCRunRow
 from ..core import fsm, gates
 from ..core.enums import EvidenceKind, InvestigationState, RejectionReason
 from ..services.evidence import EvidenceService
@@ -424,6 +424,138 @@ def generate_nexus_hypotheses(
         session_factory=ctx.session_factory,
         store=ctx.store,
     ).generate(scan_id, component=component)
+
+
+@router.get("/scans/{scan_id}/decisions", tags=["scans"])
+def get_decisions(
+    scan_id: str,
+    after: str | None = Query(default=None, max_length=40),
+    limit: int = Query(default=100, ge=1, le=200),
+    session=SessionDep,
+    who: str = Depends(analyst_id),
+):
+    """Replay the investigation's persisted decision provenance (D-025).
+
+    Decision rows, including rejected alternatives and full model provenance,
+    in deterministic (created_at, id) order. Pagination is keyset-based and
+    bounded: at most `limit` rows per call (default 100, max 200), ordered and
+    filtered in SQL - the route never loads the scan's full history. `after`
+    must name a DecisionRow id inside this investigation (unknown or
+    cross-investigation cursors are 404); follow `next_cursor` while it is
+    non-null for a complete, non-overlapping replay.
+    """
+    from sqlalchemy import and_
+
+    _require_scan_owner(session, scan_id, who)
+    query = session.query(DecisionRow).filter(
+        DecisionRow.investigation_id == scan_id
+    )
+    if after is not None:
+        cursor = session.get(DecisionRow, after)
+        if cursor is None or cursor.investigation_id != scan_id:
+            from ..services.errors import NotFound
+
+            raise NotFound(f"decision cursor {after} not found in this investigation")
+        query = query.filter(
+            (DecisionRow.created_at > cursor.created_at)
+            | (
+                and_(
+                    DecisionRow.created_at == cursor.created_at,
+                    DecisionRow.id > cursor.id,
+                )
+            )
+        )
+    rows = query.order_by(
+        DecisionRow.created_at.asc(), DecisionRow.id.asc()
+    ).limit(limit + 1).all()
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    next_cursor = rows[-1].id if rows and has_more else None
+    return {"next_cursor": next_cursor, "items": [{
+        "id": row.id,
+        "agent": row.agent,
+        "action": row.action,
+        "action_args": row.action_args,
+        "considered_evidence": row.considered_evidence,
+        "alternatives": row.alternatives,
+        "expected_outcome": row.expected_outcome,
+        "uncertainty": row.uncertainty,
+        "prompt_version": row.prompt_version,
+        "model_id": row.model_id,
+        "provider": row.provider,
+        "model_role": row.model_role,
+        "requested_model": row.requested_model,
+        "system_prompt_sha256": row.system_prompt_sha256,
+        "input_sha256": row.input_sha256,
+        "schema_sha256": row.schema_sha256,
+        "response_sha256": row.response_sha256,
+        "schema_name": row.schema_name,
+        "output_json": row.output_json,
+        "input_tokens": row.input_tokens,
+        "output_tokens": row.output_tokens,
+        "latency_ms": row.latency_ms,
+        "temperature": row.temperature,
+        "max_tokens": row.max_tokens,
+        "created_at": row.created_at,
+    } for row in rows]}
+
+
+@router.post("/scans/{scan_id}/findings/{finding_id}/veritas-review", tags=["nexus"])
+def run_veritas_review(
+    scan_id: str,
+    finding_id: str,
+    producer_model_id: str = Query(min_length=1, max_length=120),
+    session=SessionDep,
+    who: str = Depends(analyst_id),
+):
+    """Run the advisory VERITAS challenge against one finding (D-026).
+
+    Consent-gated and budgeted like every model path; the review is advisory
+    only - deterministic gates remain the sole verdict authority.
+    """
+    _require_scan_owner(session, scan_id, who)
+    from ..services.errors import (
+        BudgetExhausted,
+        ModelConsentRequiredError,
+        ModelOutputInvalidError,
+        ModelProviderUnavailable,
+        NotFound,
+    )
+    from ..services.model_provider import (
+        ModelBudgetExceeded,
+        ModelConsentRequired,
+        ModelOutputInvalid,
+        ModelProviderError,
+    )
+    from ..services.veritas import VeritasReviewService
+
+    finding = session.get(FindingRow, finding_id)
+    if finding is None or finding.investigation_id != scan_id:
+        raise NotFound(f"finding {finding_id} not found in this investigation")
+    ctx = get_context()
+    try:
+        return VeritasReviewService(
+            session,
+            gateway=ctx.model_gateway,
+            session_factory=ctx.session_factory,
+        ).review(finding_id, producer_model_id=producer_model_id)
+    except ModelConsentRequired as exc:
+        raise ModelConsentRequiredError(str(exc)) from exc
+    except (ModelOutputInvalid, ValueError) as exc:
+        # Stable client-facing message: raw validation/parse details can carry
+        # model output content and never leave the server.
+        raise ModelOutputInvalidError(
+            "reviewer model output failed validation or review input was not usable"
+        ) from exc
+    except ModelBudgetExceeded as exc:
+        raise BudgetExhausted(str(exc)) from exc
+    except ModelProviderError as exc:
+        # Provider unreachable/timeout/transport failure (ModelUnavailable and any
+        # other gateway-level failure): explicit 503, never a bare 500. The client
+        # gets a stable message; raw transport details never leave the server.
+        raise ModelProviderUnavailable(
+            "reviewer model provider unavailable; retry later"
+        ) from exc
 
 
 def _jadx_lookup(session):

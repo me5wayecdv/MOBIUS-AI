@@ -67,6 +67,25 @@ class VeritasReviewReply(BaseModel):
     challenges: list[ReviewChallenge] = Field(max_length=8)
 
 
+# Decision actions that may actually PRODUCE a finding. Advisory/review actions
+# (VERITAS's own "review_finding" above all) never qualify. v1 has no
+# model-backed finding producer - findings come from deterministic gates - so
+# this registry is intentionally EMPTY: producer independence stays unverified
+# until a real production action is introduced and registered here.
+_FINDING_PRODUCER_ACTIONS: frozenset[str] = frozenset()
+
+
+def _decision_references_finding(row: DecisionRow, finding_id: str) -> bool:
+    """Hash-safe, type-guarded reference check over arbitrary persisted JSON."""
+    args = row.action_args if isinstance(row.action_args, dict) else {}
+    output = row.output_json if isinstance(row.output_json, dict) else {}
+    for value in (args.get("finding_id"), output.get("finding_id")):
+        if isinstance(value, str) and value == finding_id:
+            return True
+    produced = output.get("produced_finding_ids")
+    return isinstance(produced, list) and finding_id in produced
+
+
 class VeritasReviewService:
     """Run a different model as an advisory reviewer without changing gate verdicts."""
 
@@ -92,6 +111,15 @@ class VeritasReviewService:
             raise NotFound(f"finding {finding_id} not found")
         if not producer_model_id or not producer_model_id.strip():
             raise ValueError("producer_model_id is required to enforce independent review")
+        producer_decision = self._producer_decision(finding)
+        producer_verified = producer_decision is not None
+        if producer_verified:
+            persisted = producer_decision.model_id
+            if persisted.strip().casefold() != producer_model_id.strip().casefold():
+                raise ModelOutputInvalid(
+                    "producer_model_id conflicts with the finding's persisted producer decision"
+                )
+            producer_model_id = persisted
         if self.gateway is None or self.session_factory is None:
             raise ModelConsentRequired("VERITAS model gateway is not configured")
         if self.gateway.model.strip().casefold() == producer_model_id.strip().casefold():
@@ -194,6 +222,7 @@ class VeritasReviewService:
             action_args={
                 "finding_id": finding.id,
                 "producer_model_id": producer_model_id,
+                "producer_model_verified": producer_verified,
                 "advisory_only": True,
             },
             considered_evidence=refs,
@@ -243,6 +272,10 @@ class VeritasReviewService:
             actor=AGENT,
         )
         self.session.flush()
+        # Independence is only PROVEN when the producer model is bound to a
+        # persisted decision; a caller-supplied producer alone cannot prove the
+        # reviewer differs from the true producer, so unverified reviews must
+        # not advertise independence.
         return {
             "mode": "model_gateway",
             "disposition": reply.disposition,
@@ -250,9 +283,40 @@ class VeritasReviewService:
             "challenges": output_json["challenges"],
             "decision_id": decision.id,
             "model_id": result["model_id"],
+            "producer_model_id": producer_model_id,
+            "producer_model_verified": producer_verified,
+            "independence_assured": producer_verified,
             "advisory_only": True,
             "gate_verdict_unchanged": True,
         }
+
+    def _producer_decision(self, finding: FindingRow) -> DecisionRow | None:
+        """Persisted model decision that PRODUCED this finding, when one exists.
+
+        Only decisions whose action is an explicitly registered finding-production
+        action qualify - a model-bearing decision that merely mentions the finding
+        (including this service's own advisory ``review_finding`` rows) is never a
+        producer. Selection is deterministic ((created_at, id) order); more than
+        one candidate means ambiguous provenance and fails closed.
+        """
+        if not _FINDING_PRODUCER_ACTIONS:
+            return None
+        rows = self.session.execute(
+            select(DecisionRow)
+            .where(
+                DecisionRow.investigation_id == finding.investigation_id,
+                DecisionRow.agent != AGENT,
+                DecisionRow.action.in_(sorted(_FINDING_PRODUCER_ACTIONS)),
+                DecisionRow.model_id.is_not(None),
+            )
+            .order_by(DecisionRow.created_at.asc(), DecisionRow.id.asc())
+        ).scalars().all()
+        matches = [row for row in rows if _decision_references_finding(row, finding.id)]
+        if len(matches) > 1:
+            raise ModelOutputInvalid(
+                "ambiguous producer provenance: multiple production decisions reference this finding"
+            )
+        return matches[0] if matches else None
 
 
 def _compact_json(value: dict[str, Any]) -> str:
