@@ -5,16 +5,18 @@ Two ways to run the full War Room stack on one machine:
 - **Option B (no Docker)** is the verified path: run end to end on
   2026-11-19 on Python 3.12 / PostgreSQL 16 (real pinned APK, upload to
   report; see "Verification status" at the bottom).
-- **Option A (Docker Compose)** is a candidate, not yet validated: the
-  definition follows the same verified steps, but no Docker host was
-  available where this was prepared. Run `docker compose up --build` once
-  locally before relying on it; treat it as unverified until then.
+- **Option A (Docker Compose)** is verified by CI startup smoke: the stack
+  builds, boots, and serves intake, persistence, and the UI shell on every
+  relevant change (`.github/workflows/local-delivery-smoke.yml`, first green
+  run on `main` at eb93308, 2026-11-19). The Compose stack runs the same
+  inline pipeline as Option B; the constrained OCI worker is not wired into
+  Compose (worker scope below).
 
 What you get: APK upload, RECON manifest/surface analysis, inline multi-DEX
 indexing, SPECTRE reachability, NEXUS investigation, attack graph, PoC lab
 (local harnesses only), Markdown report, War Room UI.
 
-## Option A: Docker Compose (candidate - unverified)
+## Option A: Docker Compose (CI startup-smoke verified)
 
 Prerequisites: Docker with the Compose plugin (`docker compose version`).
 
@@ -123,13 +125,14 @@ delivery; the JADX image stays unpublished.
   Allsafe APK, scan, investigation, report. Earlier adapter-level runs:
   92,817-method multi-DEX index, JADX adapter decompilation of 2 target
   classes with jadx 1.5.6.
-- Option A (Compose) and the Docker `Dockerfile`: reviewed only, never
-  executed. No Docker host was available; validate before demo.
-- CI smoke workflow: `scripts/local-delivery-smoke.yml` is a minimal
-  startup smoke (intake + persistence + UI shell), not a pipeline run.
-  Moving it into `.github/workflows/` requires the `workflow` scope, which
-  the automation token used here lacks; activation is pending via the
-  authorized account route.
+- Option A (Compose) and the Docker `Dockerfile`: exercised by the CI
+  startup smoke on `main` (build, boot, healthcheck, intake, scan
+  persistence, UI shell). The smoke does not run the analysis pipeline.
+- CI smoke workflows: `.github/workflows/local-delivery-smoke.yml` (active;
+  startup scope only) and `.github/workflows/worker-pipeline-smoke.yml`
+  (RECON + DEX as isolated worker jobs on the published digest images,
+  applied back through the API). Neither exercises JADX: its image stays
+  unpublished and owner-gated.
 
 ## Known limits (unchanged by this delivery)
 
