@@ -80,6 +80,12 @@ jobs:
     name: Provider image build + real runner/OCI validation (no push)
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    env:
+      # Job-local, credential-less docker config: the ambient runner config is
+      # never read, used, or modified by this job. Initialized empty below,
+      # before any docker command. Subprocesses (the validation script and the
+      # worker runner it launches) inherit it through the environment.
+      DOCKER_CONFIG: ${{ runner.temp }}/docker-config-isolated
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -94,6 +100,8 @@ jobs:
       - name: Start ephemeral loopback-only registry (job-local, no auth, no external push)
         run: |
           set -euo pipefail
+          mkdir -p "$DOCKER_CONFIG"
+          printf '{}' > "$DOCKER_CONFIG/config.json"
           docker run -d --name localreg -p 127.0.0.1:5000:5000 registry:2
           for i in $(seq 1 30); do
             curl -fsS http://127.0.0.1:5000/v2/ >/dev/null && break
@@ -120,10 +128,10 @@ jobs:
       - name: Assert no external registry credentials exist in this job
         run: |
           set -euo pipefail
-          if [ -s "$HOME/.docker/config.json" ]; then
-            python3 - <<'PYEOF'
+          test -f "$DOCKER_CONFIG/config.json"
+          python3 - <<'PYEOF'
           import json, os, sys
-          cfg = json.load(open(os.path.expanduser("~/.docker/config.json")))
+          cfg = json.load(open(os.path.join(os.environ["DOCKER_CONFIG"], "config.json")))
           if not isinstance(cfg, dict):
               sys.exit("malformed docker config: top level is not an object")
           auths = cfg.get("auths", {})
@@ -144,7 +152,6 @@ jobs:
                   sys.exit(f"loopback auth entry carries credential material: fields {sorted(entry)}")
           print("no external registry credentials; loopback auth entry is empty")
           PYEOF
-          fi
       - name: Run real-runner runtime validation on fixed fixtures
         env:
           PYTHONPATH: src
