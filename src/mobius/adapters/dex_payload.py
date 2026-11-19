@@ -7,6 +7,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from ..core.reachability import CallGraph, CallTarget, MethodRef
+from ..core.dataflow import DataFlowFinding
 from .dex import CodeIndex, DexCoverage
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
@@ -56,6 +57,20 @@ class MethodSourcesDTO(StrictModel):
     sources: list[str] = Field(default_factory=list, max_length=128)
 
 
+class DataFlowDTO(StrictModel):
+    method: MethodDTO
+    source_id: str = Field(min_length=1, max_length=128)
+    sink_id: str = Field(min_length=1, max_length=128)
+    source_offset: int = Field(ge=0, le=10_000_000)
+    sink_offset: int = Field(ge=0, le=10_000_000)
+    sink_register: int = Field(ge=0, le=65535)
+    guard_ids_before: list[str] = Field(default_factory=list, max_length=32)
+    guard_ids_after: list[str] = Field(default_factory=list, max_length=32)
+    guard_dominates_sink: bool = False
+    guard_outcome_verified: bool = False
+    assertion: str = "may-flow"
+
+
 class DexIndexDTO(StrictModel):
     schema_version: int = Field(ge=1, le=1)
     artifact_sha256: str
@@ -67,8 +82,19 @@ class DexIndexDTO(StrictModel):
     boundary: list[BoundaryDTO] = Field(max_length=50000)
     class_sources: dict[str, list[str]]
     method_sources: list[MethodSourcesDTO]
+    data_flows: list[DataFlowDTO] = Field(default_factory=list, max_length=1000)
+    data_flow_methods: int = Field(default=0, ge=0, le=50000)
+    data_flow_truncated_methods: int = Field(default=0, ge=0, le=50000)
+    data_flow_complete: bool = False
+    data_flow_limitations: list[str] = Field(default_factory=list, max_length=100)
 
     def to_code_index(self) -> CodeIndex:
+        if self.data_flow_truncated_methods > self.data_flow_methods or (
+            self.data_flows and self.data_flow_methods == 0
+        ):
+            raise ValueError("DEX data-flow coverage counts are inconsistent")
+        if self.data_flow_complete and (self.data_flow_limitations or self.data_flow_truncated_methods):
+            raise ValueError("DEX data-flow payload claims complete coverage with limitations")
         refs: dict[tuple[str, str, str], MethodRef] = {}
 
         def ref(dto: MethodDTO) -> MethodRef:
@@ -121,6 +147,23 @@ class DexIndexDTO(StrictModel):
         if len({item.entry for item in coverage}) != len(coverage):
             raise ValueError("duplicate DEX coverage entry")
 
+        data_flows = []
+        for item in self.data_flows:
+            if item.assertion != "may-flow" or item.guard_outcome_verified:
+                raise ValueError("DEX data-flow payload contains an unsupported assertion")
+            data_flows.append(DataFlowFinding(
+                method=ref(item.method),
+                source_id=item.source_id,
+                sink_id=item.sink_id,
+                source_offset=item.source_offset,
+                sink_offset=item.sink_offset,
+                sink_register=item.sink_register,
+                guard_ids_before=tuple(item.guard_ids_before),
+                guard_ids_after=tuple(item.guard_ids_after),
+                guard_dominates_sink=item.guard_dominates_sink,
+                guard_outcome_verified=False,
+            ))
+
         return CodeIndex(
             graph=CallGraph(edges=edges, strings=strings),
             boundary=boundary,
@@ -131,6 +174,11 @@ class DexIndexDTO(StrictModel):
             dex_coverage=coverage,
             class_sources={key: tuple(sorted(set(value))) for key, value in self.class_sources.items()},
             method_sources=method_sources,
+            data_flows=tuple(data_flows),
+            data_flow_methods=self.data_flow_methods,
+            data_flow_truncated_methods=self.data_flow_truncated_methods,
+            data_flow_complete=self.data_flow_complete,
+            data_flow_limitations=tuple(self.data_flow_limitations),
         )
 
 
@@ -168,6 +216,13 @@ def code_index_payload(index: CodeIndex, artifact_sha256: str) -> dict[str, Any]
             {"method": _method_dict(method), "sources": list(sources)}
             for method, sources in sorted(index.method_sources.items())
         ],
+        "data_flows": [
+            item.describe() for item in index.data_flows
+        ],
+        "data_flow_methods": index.data_flow_methods,
+        "data_flow_truncated_methods": index.data_flow_truncated_methods,
+        "data_flow_complete": index.data_flow_complete,
+        "data_flow_limitations": list(index.data_flow_limitations),
     }
 
 

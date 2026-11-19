@@ -168,6 +168,48 @@ class JadxCodeLookup:
             "truncated": False,
         }
 
+    def method_excerpt(
+        self,
+        investigation_id: str,
+        *,
+        class_name: str,
+        method_name: str,
+        max_lines: int = 40,
+    ) -> dict[str, Any]:
+        """Resolve one unambiguous method to a verified, at-most-40-line excerpt."""
+        if not 1 <= max_lines <= 40:
+            raise JadxError("invalid_limit", "method excerpt limit must be between 1 and 40 lines")
+        if not method_name or len(method_name) > 200:
+            raise JadxError("invalid_method", "method_name must contain 1 to 200 characters")
+        result = self.cached_result(investigation_id)
+        path = self._class_path(result, class_name)
+        source_text = self._read_text(result, path)
+        matches = [
+            method for method in self._parse_methods(class_name, path, source_text)
+            if method.name == method_name
+        ]
+        if not matches:
+            raise JadxError("method_not_found", f"method {method_name!r} is not present in {class_name!r}")
+        if len(matches) != 1:
+            raise JadxError("method_ambiguous", f"method {method_name!r} has multiple declarations in {class_name!r}")
+        method = matches[0]
+        lines = source_text.splitlines()
+        start_line = method.start_line
+        end_line = min(len(lines), start_line + max_lines - 1)
+        snippet = self.adapter.resolve_source(
+            result, relative_path=path, start_line=start_line, end_line=end_line
+        )
+        return {
+            "apk_sha256": result.apk_sha256,
+            "tool_version": result.tool_version,
+            "method_reference": f"{class_name}#{method.name}@{method.start_line}",
+            "path": snippet.path,
+            "start_line": snippet.start_line,
+            "end_line": snippet.end_line,
+            "text": snippet.text,
+            "fidelity": snippet.fidelity,
+        }
+
     @staticmethod
     def _class_path(result: JadxResult, class_name: str) -> str:
         expected = class_name.replace(".", "/")

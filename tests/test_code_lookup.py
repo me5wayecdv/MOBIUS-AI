@@ -193,3 +193,63 @@ def test_jadx_queue_rejects_mutable_worker_image_reference(client, ctx):
     )
     assert response.status_code == 503
     assert response.json()["detail"]["code"] == "JADX_WORKER_IMAGE_UNAVAILABLE"
+
+def test_method_source_can_be_persisted_and_included_in_targeted_evidence_package(client, ctx):
+    app, scan = _upload_authorized_scan(client)
+    _seed_jadx_cache(ctx, app)
+    base = f"/api/v1/scans/{scan['id']}"
+
+    captured = client.post(
+        base + "/code/source/evidence",
+        params={"class_name": "com.example.Entry", "method_name": "onCreate"},
+    )
+    assert captured.status_code == 201, captured.text
+    evidence = captured.json()
+    assert evidence["kind"] == "source"
+    assert evidence["method_reference"] == "com.example.Entry#onCreate@3"
+    assert evidence["start_line"] == 3
+    assert evidence["end_line"] == 9
+
+    package = client.get(
+        base + "/evidence-package",
+        params={"component": "com.example.Entry"},
+    )
+    assert package.status_code == 200, package.text
+    body = package.json()
+    assert len(body["source_snippets"]) == 1
+    snippet = body["source_snippets"][0]
+    assert snippet["evidence_id"] == evidence["evidence_id"]
+    assert snippet["sha256"] == evidence["sha256"]
+    assert snippet["apk_sha256"] == app["sha256"]
+    assert snippet["tool_version"] == "1.5.6"
+    assert snippet["method_reference"] == "com.example.Entry#onCreate@3"
+    assert "writeSecret" in snippet["text"]
+    assert any(item["id"] == evidence["evidence_id"] for item in body["evidence"])
+
+
+def test_method_source_evidence_is_component_scoped_and_owner_scoped(client, ctx):
+    app, scan = _upload_authorized_scan(client)
+    _seed_jadx_cache(ctx, app)
+    base = f"/api/v1/scans/{scan['id']}"
+
+    denied = client.post(
+        base + "/code/source/evidence",
+        params={"class_name": "com.example.Entry", "method_name": "onCreate"},
+        headers={"X-Analyst-ID": "another-analyst"},
+    )
+    assert denied.status_code == 404
+
+    captured = client.post(
+        base + "/code/source/evidence",
+        params={"class_name": "com.example.Entry", "method_name": "onCreate"},
+    )
+    assert captured.status_code == 201
+
+    unrelated = client.get(
+        base + "/evidence-package",
+        params={"component": "com.example.Other"},
+    )
+    assert unrelated.status_code == 200
+    assert unrelated.json()["source_snippets"] == []
+    assert any("No persisted verified JADX source excerpts" in item
+               for item in unrelated.json()["limitations"])

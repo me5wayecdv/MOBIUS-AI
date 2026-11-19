@@ -20,6 +20,7 @@ that was produced - content-addressed, not regenerated from a later database sta
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Any
 
@@ -30,6 +31,7 @@ from ..adapters.events import SqlEventStore, utcnow
 from ..adapters.models import (
     ApplicationRow,
     AuthorizationRow,
+    DecisionRow,
     EventRow,
     EvidenceRow,
     FindingRow,
@@ -50,15 +52,21 @@ AGENT = "ARCHIVIST"
 _LIMITATIONS = """\
 - **Static only.** Nothing was executed. No finding was confirmed by observing the target at
   runtime, and no dynamic-analysis capability exists in this build.
-- **No data-flow analysis.** Reachability means a call path exists in the bytecode from an
-  entry point to a security-relevant operation. It does **not** establish that
-  attacker-controlled data reaches that operation.
-- **No control-flow analysis.** A guard anywhere in the same method suppresses the
-  "no caller check" clause, whatever order it executes in. This biases toward *not* confirming.
+- **Bounded, selected-family data flow only.** The current slice tracks a small set of
+  incoming Intent/URI source candidates to selected direct sinks within one method; external caller control is not established. It does not model
+  exception edges (try/catch methods are marked incomplete), field/array memory, cross-method propagation, reflection, dynamic dispatch, or framework
+  internals. Results are `may-flow` evidence, never a confirmed vulnerability; no-flow is
+  not proof that no tainted path exists.
+- **Bounded CFG and guard evidence.** Basic-block order and dominance are recorded for selected
+  methods. Guard invocation before/dominating a sink is not proof that the successful branch
+  protects it: branch polarity, permission correctness and semantic guard effectiveness are
+  not verified. The existing call-graph gate remains conservative.
 - **Incomplete graphs are reported as such.** A truncated index can neither confirm nor refute
   absence; those candidates are listed under "Not determined", not as clean.
-- **No decompilation, no reflection, no multi-dex.** Source-level intent, reflective dispatch
-  and secondary dex files are outside what this build can see.
+- **Native code and resources are inventory-only.** Native libraries, assets and resources are listed where the APK archive can be read; they are not semantically analyzed.
+- **Obfuscation is not reversed.** Names remain as exposed by DEX/JADX; no deobfuscation is claimed.
+- **Multi-DEX coverage is per-entry.** The coverage manifest lists indexed, failed, skipped and truncated DEX entries; a partial entry set cannot support a clean bill of health.
+- **Incomplete semantic coverage.** JADX output is reconstructed code, not original source. Native boundaries, reflection, dynamic dispatch, obfuscation and framework internals remain unsupported or partial; DEX entry coverage is reported separately.
 - **Absence of a finding is not evidence of absence.** An empty findings list means this
   pipeline found nothing by these methods, not that the application is safe.
 """
@@ -94,6 +102,7 @@ class ArchivistService:
             self._method(row),
             self._evidence(row),
             self._events(row),
+            self._coverage_manifest(row),
         ]
         return Report(investigation_id, "\n".join(sections).rstrip() + "\n", generated)
 
@@ -391,17 +400,33 @@ class ArchivistService:
         return "\n".join(lines) + "\n"
 
     def _method(self, row: InvestigationRow) -> str:
+        model_rows = self._session.execute(
+            select(DecisionRow).where(
+                DecisionRow.investigation_id == row.id,
+                (DecisionRow.model_id.is_not(None)) | (DecisionRow.provider.is_not(None)),
+            )
+        ).scalars().all()
+        model_statement = (
+            f"{len(model_rows)} model-backed decision(s) are recorded in persisted provenance; "
+            "provider/model and token totals appear in the coverage manifest."
+            if model_rows
+            else "No language model was called according to persisted decision rows."
+        )
+        reproducibility_statement = (
+            "Deterministic stages are reproducible from stored evidence; model-backed outputs "
+            "are recorded with provenance but are not promised to reproduce byte-for-byte."
+            if model_rows
+            else "The deterministic path is reproducible from the APK bytes and authorisation."
+        )
         return "\n".join(
             [
                 "## 6. Method and limitations",
                 "",
-                "Decisions in this scan were made by deterministic code: manifest decoding "
-                "(RECON), a bounded call-graph search over the dex (SPECTRE), a priority-queue "
-                "dispatcher (NEXUS) and a fixed gate. **No language model was called**, so this "
-                "report is reproducible from the APK bytes and the authorisation alone.",
+                "Manifest decoding (RECON), bounded call-graph search over indexed DEX entries "
+                "(SPECTRE), the priority-queue dispatcher (NEXUS) and the fixed gate provide the "
+                "deterministic analysis and decision controls. " + model_statement,
                 "",
-                "What that buys: a reviewer can re-run the scan and get the same verdicts. "
-                "What it costs is stated below, and it is not small.",
+                reproducibility_statement + " What it costs is stated below, and it is not small.",
                 "",
                 _LIMITATIONS,
                 f"Investigation intensity was {row.intensity}; with a passive grant nothing in "
@@ -468,6 +493,51 @@ class ArchivistService:
             "The full event log is replayable from `GET /api/v1/scans/{id}/stream?after=0`.",
         ]
         return "\n".join(lines) + "\n"
+
+    def _coverage_manifest(self, row: InvestigationRow) -> str:
+        """Embed the same structured manifest exposed by the read-only API route."""
+        from .coverage_manifest import CoverageManifestBuilder
+
+        manifest = CoverageManifestBuilder(self._session, self._store).build(row.id)
+        encoded = json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2)
+        # APK-controlled ZIP names are data. Prevent a filename from closing the Markdown
+        # fence while preserving the exact JSON string after decoding the escaped backticks.
+        encoded = encoded.replace("```", r"\u0060\u0060\u0060")
+        limitations = [
+            f"| `{item['capability']}` | `{item['status']}` | {item['detail']} |"
+            for item in manifest["limitations"]
+        ]
+        return "\n".join([
+            "## 9. Code coverage and limitations manifest",
+            "",
+            f"**Overall coverage status:** `{manifest['overall_status'].upper()}`"
+            + (" · **truncation detected**" if manifest["truncated"] else ""),
+            "",
+            "| Area | Status / coverage |",
+            "|---|---|",
+            f"| APK archive inventory | `{manifest['apk_inventory'].get('status', 'unknown')}` |",
+            f"| RECON manifest | `{manifest['recon']['status']}` · {manifest['recon']['manifest_evidence_count']} evidence record(s) |",
+            f"| DEX index | `{manifest['dex_analysis']['status']}` · {manifest['dex_analysis'].get('indexed_entries', 0)}/{manifest['dex_analysis'].get('dex_entry_count', 0)} indexed entries |",
+            f"| JADX | `{manifest['jadx']['status']}` · {manifest['jadx'].get('source_file_count', 0)} source file(s) reported |",
+            f"| SPECTRE reachability | {manifest['reachability']['observation_count']} observation(s), {manifest['reachability']['truncated_observations']} truncated |",
+            f"| Model-backed decisions | {manifest['model_usage']['model_backed_decision_count']} of {manifest['model_usage']['decision_count']} decisions |",
+            f"| Native libraries | {manifest['apk_inventory'].get('native_libraries', {}).get('count', 0)} inventoried; not analyzed |",
+            f"| Assets / resources | {manifest['apk_inventory'].get('assets', {}).get('count', 0)} asset(s), {manifest['apk_inventory'].get('resources', {}).get('count', 0)} resource(s); inventory only |",
+            "",
+            "### Unsupported or inventory-only capabilities",
+            "",
+            "| Capability | Status | Limitation |",
+            "|---|---|---|",
+            *limitations,
+            "",
+            "### Machine-readable manifest",
+            "",
+            "```json",
+            encoded,
+            "```",
+            "",
+            "A missing or truncated entry is not evidence that the corresponding code or behavior is absent.",
+        ]) + "\\n"
 
     # -- helpers --------------------------------------------------------------------
 

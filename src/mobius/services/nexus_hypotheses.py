@@ -65,16 +65,18 @@ class NexusHypothesisService:
         *,
         gateway: StructuredModelGateway | None = None,
         session_factory=None,
+        store=None,
     ) -> None:
         self.session = session
         self.gateway = gateway
         self.session_factory = session_factory
+        self.store = store
 
     def generate(self, investigation_id: str, *, component: str | None = None) -> dict[str, Any]:
         investigation = self.session.get(InvestigationRow, investigation_id)
         if investigation is None:
             raise NotFound(f"investigation {investigation_id} not found")
-        package = EvidencePackageBuilder(self.session).build(
+        package = EvidencePackageBuilder(self.session, store=self.store).build(
             investigation_id, component=component
         )
         package_data = package.as_dict()
@@ -175,10 +177,10 @@ class NexusHypothesisService:
             agent=AGENT,
             action="generate_hypotheses",
             action_args={"component": component, "mode": mode},
-            considered_evidence=sorted({
-                ref for observation in package_data["observations"]
-                for ref in observation["evidence_refs"]
-            }),
+            considered_evidence=sorted(
+                {ref for observation in package_data["observations"] for ref in observation["evidence_refs"]}
+                | {item["id"] for item in package_data["evidence"]}
+            ),
             alternatives=[],
             expected_outcome="Persist testable hypotheses with explicit evidence requirements; no tests are executed.",
             uncertainty=summary,

@@ -89,7 +89,7 @@ def test_evidence_package_includes_method_path_sink_guard_and_provenance(
     assert data["guard_references"] == ["Lcom/example/Auth;->check()Z"]
     assert data["evidence"][0]["id"] == evidence.id
     assert data["evidence"][0]["sha256"] == evidence.sha256
-    assert "not decompiled source text" in data["limitations"][0]
+    assert "No persisted verified JADX source excerpts" in data["limitations"][0]
 
 
 def test_evidence_package_is_investigation_scoped_and_component_filtered(
