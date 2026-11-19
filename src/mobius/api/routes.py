@@ -595,7 +595,7 @@ def get_code_source(
 @router.get("/scans/{scan_id}/coverage-manifest", tags=["scans"])
 def get_coverage_manifest(
     scan_id: str,
-    session=Depends(_session),
+    session=SessionDep,
     who: str = Depends(analyst_id),
 ):
     """Return the investigation's structured, evidence-backed code coverage manifest."""
@@ -611,7 +611,7 @@ def persist_code_source_evidence(
     scan_id: str,
     class_name: str = Query(min_length=1, max_length=500),
     method_name: str = Query(min_length=1, max_length=200),
-    session=Depends(_session),
+    session=SessionDep,
     who: str = Depends(analyst_id),
 ):
     """Persist one bounded method excerpt from the verified JADX cache as immutable evidence."""
