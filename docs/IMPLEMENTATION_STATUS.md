@@ -77,7 +77,7 @@
 | 6 | PHANTOM | NOT STARTED — **likely blocked permanently** |
 | 7 | VECTOR | NOT STARTED |
 | 8 | VERITAS + ARCHIVIST | **PARTIAL** — ARCHIVIST writes a real report from stored rows; the VERITAS *model* validator does not exist (gates validate, not a second model) |
-| 9 | War Room | **PARTIAL** — D-050–D-055 panels read persisted scan, event, observation, graph, PoC and report APIs. Playwright D-056 browser flow and desktop/mobile screenshot artifacts are running in CI; owner visual review remains required. |
+| 9 | War Room | **PARTIAL** — D-050–D-055 panels read persisted scan, event, observation, graph, PoC and report APIs; PR #66 adds the D-056 decision-provenance panel (read-only replay of persisted decisions with advisory/fixture labelling). Playwright D-056 browser flow and desktop/mobile screenshot artifacts run in CI; owner visual review remains required. |
 | 10 | ORACLE | **DEFERRED — not in v1 scope** |
 | 11 | Reporting | **PARTIAL** — Markdown only and stored as evidence; **no PDF, no template engine, no downloadable bundle** |
 | 12 | Testing & evaluation | **PARTIAL** — 319 tests; first corpus measurement exists (7 samples, `BENCHMARK_RESULTS.md`). **Corpus too small, labels not independent, recall gap is a coverage gap** |
@@ -140,7 +140,7 @@ Statements that must **not** appear in any document until the corresponding row 
 | "MOBIUS investigates autonomously" | FSM + frontier + T-090 complete. The loop exists and closes scans, but it only dispatches work other tools queued — it cannot discover a new line of enquiry, so **not yet true** |
 | "MOBIUS reduces false positives" | T-111 measured on a held-out set. **Still not available**: one 7-sample corpus, labelled by the implementer, with no baseline comparison. `BENCHMARK_RESULTS.md` states what may and may not be claimed |
 | "MOBIUS validates findings independently" | T-084 + T-085 + T-086 green — gate + verdict **are** green; the independent *agent* is not |
-| "The War Room reflects real activity" | D-051/D-052 use persisted event data; D-056 Playwright refresh replay test and screenshot review pending |
+| "The War Room reflects real activity" | D-051/D-052 use persisted event data; the D-056 Playwright flow covers refresh replay, live decision updates, scan-switch isolation and overlapping-poll dedup, with panel screenshots at 1280/390 reviewed internally; owner visual review remains required |
 | "MOBIUS detects stager/malware patterns" | DCL gate + negative controls (T-075/T-085) |
 | "Model X outperforms model Y" | `MODEL_BENCHMARKS.md §6–7` populated |
 
