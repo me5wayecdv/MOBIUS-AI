@@ -111,11 +111,16 @@ publication is needed:
 
 ```sh
 docker build -f workers/jadx-image/Dockerfile -t mobius-jadx:local workers/jadx-image
-# Local images have no registry digest; reference them by image ID, which is
-# a content hash and satisfies the immutable-reference validator
-# (worker/runner.py requires <name>@sha256:<64 hex>):
+# Local images have no registry digest; the only validator-accepted local
+# form is name@image-ID (the image ID is a content hash and passes the
+# immutable-reference check in worker/runner.py, <name>@sha256:<64 hex>):
 docker image inspect --format='mobius-jadx@{{.Id}}' mobius-jadx:local
 export MOBIUS_JADX_IMAGE=mobius-jadx@sha256:<id from the command above>
+# UNVERIFIED: format acceptance by the validator is confirmed in code, but
+# whether `docker run` resolves a local name@sha256:<image-ID> reference was
+# NOT exercised (no Docker host where this was prepared). If your runtime
+# rejects it, the fallback is pushing the image to a registry you control and
+# pinning its real RepoDigest. Verify once on the demo host.
 ```
 
 GHCR publication of the JADX image remains a manual, owner-gated workflow
