@@ -80,12 +80,11 @@ jobs:
     name: Provider image build + real runner/OCI validation (no push)
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    env:
-      # Job-local, credential-less docker config: the ambient runner config is
-      # never read, used, or modified by this job. Initialized empty below,
-      # before any docker command. Subprocesses (the validation script and the
-      # worker runner it launches) inherit it through the environment.
-      DOCKER_CONFIG: ${{ runner.temp }}/docker-config-isolated
+    # Job-local, credential-less docker config (step-level env: the runner
+    # context is not valid in job-level env). The ambient runner config is
+    # never read, used, or modified by this job. Initialized empty before the
+    # first docker command; subprocesses (the validation script and the worker
+    # runner it launches) inherit it through the environment.
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -98,6 +97,8 @@ jobs:
           pip install -e ".[dev]"
           pip install "psycopg[binary]>=3.1"
       - name: Start ephemeral loopback-only registry (job-local, no auth, no external push)
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/docker-config-isolated
         run: |
           set -euo pipefail
           mkdir -p "$DOCKER_CONFIG"
@@ -109,10 +110,14 @@ jobs:
           done
           curl -fsS http://127.0.0.1:5000/v2/ >/dev/null
       - name: Build provider worker image locally (no login)
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/docker-config-isolated
         run: |
           set -euo pipefail
           docker build -f workers/provider-image/Dockerfile -t 127.0.0.1:5000/mobius-provider-validation:ci .
       - name: Push to the loopback registry and resolve the REAL manifest digest
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/docker-config-isolated
         run: |
           set -euo pipefail
           docker push 127.0.0.1:5000/mobius-provider-validation:ci >/dev/null
@@ -126,6 +131,8 @@ jobs:
           test "${#DIGEST}" -eq 64
           echo "PROVIDER_IMAGE=$REF" >> "$GITHUB_ENV"
       - name: Assert no external registry credentials exist in this job
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/docker-config-isolated
         run: |
           set -euo pipefail
           test -f "$DOCKER_CONFIG/config.json"
@@ -155,6 +162,7 @@ jobs:
       - name: Run real-runner runtime validation on fixed fixtures
         env:
           PYTHONPATH: src
+          DOCKER_CONFIG: ${{ runner.temp }}/docker-config-isolated
         run: |
           set -euo pipefail
           DOCKER_PATH="$(command -v docker)"
