@@ -163,8 +163,13 @@ def job_state(db_url: str, job_id: str):
 
 def validated_result(state, sha: str):
     from mobius.adapters.provider_payload import validate_provider_analysis_payload
+    result_json = state["result_json"]
+    # The raw text() read-back returns a sqlite JSON column as a string;
+    # decode before re-encoding or the DTO sees a JSON string literal.
+    if isinstance(result_json, str):
+        result_json = json.loads(result_json)
     return validate_provider_analysis_payload(
-        json.dumps(state["result_json"]).encode(), sha)
+        json.dumps(result_json).encode(), sha)
 
 
 def main() -> int:
