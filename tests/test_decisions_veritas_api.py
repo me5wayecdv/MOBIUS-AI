@@ -11,7 +11,7 @@ from __future__ import annotations
 import hashlib
 
 from mobius.adapters.events import utcnow
-from mobius.adapters.models import DecisionRow, FindingRow
+from mobius.adapters.models import DecisionRow, EvidenceRow, FindingRow
 
 
 def _upload(client, data=None, name="app.apk"):
@@ -58,19 +58,20 @@ def _make_scan(client):
     return _scan(client, app_id, auth_id).json()["id"]
 
 
-def _add_decision(session, scan_id, suffix, created_at):
+def _add_decision(session, scan_id, suffix, created_at, *, model_id=None, action_args=None, output_json=None):
     row = DecisionRow(
         id=f"dec_{suffix}",
         investigation_id=scan_id,
         agent="nexus",
         action="callers_of",
-        action_args={"method": "a"},
+        action_args=action_args or {"method": "a"},
+        output_json=output_json,
+        model_id=model_id,
         considered_evidence=["ev_a"],
         alternatives=[{"action": "stop", "reason": "budget"}],
         expected_outcome="Callers are enumerated",
         uncertainty=None,
         prompt_version="v1",
-        model_id=None,
         provider=None,
         created_at=created_at,
     )
@@ -241,3 +242,229 @@ def test_veritas_review_unexpected_gateway_failure_is_503_not_500(
     )
     assert response.status_code == 503
     assert response.json()["code"] == "MODEL_PROVIDER_UNAVAILABLE"
+
+
+def _rogue_client():
+    """A second caller identity via dependency override of the analyst stub."""
+    from fastapi.testclient import TestClient
+
+    from mobius.api.app import create_app
+    from mobius.api.deps import analyst_id
+
+    app = create_app()
+    app.dependency_overrides[analyst_id] = lambda: "analyst-2"
+    return TestClient(app)
+
+
+def test_decisions_replay_rejects_other_owner(client, session):
+    scan_id = _make_scan(client)  # created by the default analyst-1 stub
+    rogue = _rogue_client()
+    assert rogue.get(f"/api/v1/scans/{scan_id}/decisions").status_code == 404
+
+
+def test_veritas_review_rejects_other_owner(client, session):
+    scan_id = _make_scan(client)
+    finding_id = _add_finding(session, scan_id)
+    rogue = _rogue_client()
+    response = rogue.post(
+        f"/api/v1/scans/{scan_id}/findings/{finding_id}/veritas-review",
+        params={"producer_model_id": "qwen2.5:1.5b"},
+    )
+    assert response.status_code == 404
+
+
+def test_decisions_replay_paginates_with_bounded_keyset(client, session):
+    scan_id = _make_scan(client)
+    # Two rows share one timestamp: ordering must fall back to id, deterministically.
+    d1 = _add_decision(session, scan_id, "21", "2026-11-19T05:00:00.000Z")
+    d2 = _add_decision(session, scan_id, "22", "2026-11-19T05:00:00.000Z")
+    d3 = _add_decision(session, scan_id, "23", "2026-11-19T05:01:00.000Z")
+
+    page1 = client.get(f"/api/v1/scans/{scan_id}/decisions?limit=2").json()
+    assert [item["id"] for item in page1["items"]] == [d1, d2]
+    assert page1["next_cursor"] == d2
+
+    page2 = client.get(
+        f"/api/v1/scans/{scan_id}/decisions?limit=2&after={d2}"
+    ).json()
+    assert [item["id"] for item in page2["items"]] == [d3]
+    assert page2["next_cursor"] is None
+
+
+def test_decisions_replay_rejects_unknown_or_cross_scan_cursor(client, session):
+    scan_a = _make_scan(client)
+    scan_b = _make_scan(client)
+    b1 = _add_decision(session, scan_b, "31", "2026-11-19T05:00:00.000Z")
+
+    assert (
+        client.get(f"/api/v1/scans/{scan_a}/decisions?after=dec_missing").status_code
+        == 404
+    )
+    # A cursor from another scan leaks nothing: it is rejected, not applied.
+    assert (
+        client.get(f"/api/v1/scans/{scan_a}/decisions?after={b1}").status_code == 404
+    )
+
+
+def _configure_gateway(ctx, response_json, model_id="reviewer-v2"):
+    import json as _json  # noqa: F401 - response_json arrives pre-serialized
+
+    from mobius.services.model_provider import (
+        DeterministicMockProvider,
+        StructuredModelGateway,
+    )
+
+    ctx.model_gateway = StructuredModelGateway(
+        DeterministicMockProvider(
+            response_json, model_id=model_id, prompt_tokens=30, completion_tokens=20
+        ),
+        model="reviewer-v2",
+    )
+
+
+def _enable_consent(session, scan_id):
+    from mobius.adapters.models import InvestigationRow
+
+    row = session.get(InvestigationRow, scan_id)
+    row.llm_data_sharing = {"enabled": True, "provider": "mock"}
+    session.commit()
+
+
+def _add_evidence(session, scan_id, evidence_id="ev_route"):
+    session.add(
+        EvidenceRow(
+            id=evidence_id,
+            investigation_id=scan_id,
+            kind="code_analysis",
+            sha256="b" * 64,
+            object_key="evidence/route-test",
+            byte_size=64,
+            truncated=False,
+            redacted=True,
+            summary="Persisted route-test evidence of a reachable file write.",
+            produced_by="SPECTRE",
+            created_at=utcnow(),
+        )
+    )
+    session.commit()
+    return evidence_id
+
+
+_VALID_REPLY = (
+    '{"disposition": "no_material_challenge", '
+    '"summary": "Persisted evidence supports the gate verdict.", "challenges": []}'
+)
+
+
+def test_veritas_review_http_success_with_configured_gateway(client, session, ctx):
+    import json
+
+    _configure_gateway(ctx, _VALID_REPLY)
+    scan_id = _make_scan(client)
+    evidence_id = _add_evidence(session, scan_id)
+    finding_id = _add_finding(session, scan_id, evidence_refs=[evidence_id])
+    _enable_consent(session, scan_id)
+
+    response = client.post(
+        f"/api/v1/scans/{scan_id}/findings/{finding_id}/veritas-review",
+        params={"producer_model_id": "producer-v1"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["disposition"] == "no_material_challenge"
+    assert body["model_id"] == "reviewer-v2"
+    assert body["advisory_only"] is True
+    assert body["gate_verdict_unchanged"] is True
+    # Caller-supplied producer with no persisted producer decision: not proven.
+    assert body["producer_model_verified"] is False
+    assert body["independence_assured"] is False
+
+    decision = session.get(DecisionRow, body["decision_id"])
+    assert decision is not None
+    assert decision.agent == "VERITAS"
+    assert decision.considered_evidence == [evidence_id]
+    # The finding is untouched by the advisory review.
+    finding = session.get(FindingRow, finding_id)
+    assert finding.status == "pending"
+
+
+def test_veritas_review_http_consent_disabled_is_409(client, session, ctx):
+    _configure_gateway(ctx, _VALID_REPLY)
+    scan_id = _make_scan(client)
+    evidence_id = _add_evidence(session, scan_id)
+    finding_id = _add_finding(session, scan_id, evidence_refs=[evidence_id])
+    # No consent recorded on the investigation.
+    response = client.post(
+        f"/api/v1/scans/{scan_id}/findings/{finding_id}/veritas-review",
+        params={"producer_model_id": "producer-v1"},
+    )
+    assert response.status_code == 409
+    assert response.json()["code"] == "MODEL_CONSENT_REQUIRED"
+
+
+def test_veritas_review_http_malformed_model_output_is_422(client, session, ctx):
+    _configure_gateway(
+        ctx, '{"disposition": "challenge", "summary": "x", "challenges": "not-a-list"}'
+    )
+    scan_id = _make_scan(client)
+    evidence_id = _add_evidence(session, scan_id)
+    finding_id = _add_finding(session, scan_id, evidence_refs=[evidence_id])
+    _enable_consent(session, scan_id)
+    response = client.post(
+        f"/api/v1/scans/{scan_id}/findings/{finding_id}/veritas-review",
+        params={"producer_model_id": "producer-v1"},
+    )
+    assert response.status_code == 422
+    assert response.json()["code"] == "MODEL_OUTPUT_INVALID"
+
+
+def test_veritas_review_http_conflicting_claimed_producer_is_422(client, session, ctx):
+    _configure_gateway(ctx, _VALID_REPLY)
+    scan_id = _make_scan(client)
+    evidence_id = _add_evidence(session, scan_id)
+    finding_id = _add_finding(session, scan_id, evidence_refs=[evidence_id])
+    _enable_consent(session, scan_id)
+    # Persisted provenance: producer-v1 produced this finding.
+    _add_decision(
+        session,
+        scan_id,
+        "41",
+        "2026-11-19T04:00:00.000Z",
+        model_id="producer-v1",
+        action_args={"finding_id": finding_id},
+        output_json={"finding_id": finding_id},
+    )
+    response = client.post(
+        f"/api/v1/scans/{scan_id}/findings/{finding_id}/veritas-review",
+        params={"producer_model_id": "producer-v2"},  # lies about the producer
+    )
+    assert response.status_code == 422
+    assert response.json()["code"] == "MODEL_OUTPUT_INVALID"
+
+
+def test_veritas_review_http_matching_persisted_producer_proves_independence(
+    client, session, ctx
+):
+    _configure_gateway(ctx, _VALID_REPLY)
+    scan_id = _make_scan(client)
+    evidence_id = _add_evidence(session, scan_id)
+    finding_id = _add_finding(session, scan_id, evidence_refs=[evidence_id])
+    _enable_consent(session, scan_id)
+    _add_decision(
+        session,
+        scan_id,
+        "42",
+        "2026-11-19T04:00:00.000Z",
+        model_id="producer-v1",
+        action_args={"finding_id": finding_id},
+        output_json={"finding_id": finding_id},
+    )
+    response = client.post(
+        f"/api/v1/scans/{scan_id}/findings/{finding_id}/veritas-review",
+        params={"producer_model_id": "producer-v1"},
+    )
+    assert response.status_code == 200
+    body = response.json()
+    assert body["producer_model_id"] == "producer-v1"
+    assert body["producer_model_verified"] is True
+    assert body["independence_assured"] is True

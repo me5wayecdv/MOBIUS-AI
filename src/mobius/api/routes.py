@@ -430,29 +430,48 @@ def generate_nexus_hypotheses(
 def get_decisions(
     scan_id: str,
     after: str | None = Query(default=None, max_length=40),
+    limit: int = Query(default=100, ge=1, le=200),
     session=SessionDep,
     who: str = Depends(analyst_id),
 ):
     """Replay the investigation's persisted decision provenance (D-025).
 
-    Every decision row, including rejected alternatives and full model
-    provenance, in creation order. `after` returns only rows created after
-    the given DecisionRow id (cursor over creation order).
+    Decision rows, including rejected alternatives and full model provenance,
+    in deterministic (created_at, id) order. Pagination is keyset-based and
+    bounded: at most `limit` rows per call (default 100, max 200), ordered and
+    filtered in SQL - the route never loads the scan's full history. `after`
+    must name a DecisionRow id inside this investigation (unknown or
+    cross-investigation cursors are 404); follow `next_cursor` while it is
+    non-null for a complete, non-overlapping replay.
     """
+    from sqlalchemy import and_
+
     _require_scan_owner(session, scan_id, who)
-    rows = session.query(DecisionRow).filter(
+    query = session.query(DecisionRow).filter(
         DecisionRow.investigation_id == scan_id
-    ).order_by(DecisionRow.created_at.asc(), DecisionRow.id.asc()).all()
+    )
     if after is not None:
-        seen = False
-        kept = []
-        for row in rows:
-            if seen:
-                kept.append(row)
-            elif row.id == after:
-                seen = True
-        rows = kept
-    return {"items": [{
+        cursor = session.get(DecisionRow, after)
+        if cursor is None or cursor.investigation_id != scan_id:
+            from ..services.errors import NotFound
+
+            raise NotFound(f"decision cursor {after} not found in this investigation")
+        query = query.filter(
+            (DecisionRow.created_at > cursor.created_at)
+            | (
+                and_(
+                    DecisionRow.created_at == cursor.created_at,
+                    DecisionRow.id > cursor.id,
+                )
+            )
+        )
+    rows = query.order_by(
+        DecisionRow.created_at.asc(), DecisionRow.id.asc()
+    ).limit(limit + 1).all()
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    next_cursor = rows[-1].id if rows and has_more else None
+    return {"next_cursor": next_cursor, "items": [{
         "id": row.id,
         "agent": row.agent,
         "action": row.action,
@@ -528,8 +547,11 @@ def run_veritas_review(
         raise BudgetExhausted(str(exc)) from exc
     except ModelProviderError as exc:
         # Provider unreachable/timeout/transport failure (ModelUnavailable and any
-        # other gateway-level failure): explicit 503, never a bare 500.
-        raise ModelProviderUnavailable(str(exc)) from exc
+        # other gateway-level failure): explicit 503, never a bare 500. The client
+        # gets a stable message; raw transport details never leave the server.
+        raise ModelProviderUnavailable(
+            "reviewer model provider unavailable; retry later"
+        ) from exc
 
 
 def _jadx_lookup(session):
