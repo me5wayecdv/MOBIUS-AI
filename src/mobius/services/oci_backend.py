@@ -68,6 +68,15 @@ class OciBackend:
         root = workspace.resolve(strict=True)
         if not root.is_dir():
             raise ValueError("workspace must be a directory")
+        # Mount contract: the container never sees the workspace directory itself. It
+        # gets an in-container tmpfs at /work and the staged input as a single read-only
+        # file bind; results come back on stdout. No writable host path is exposed at
+        # all. File-output tools are deliberately NOT supported by this backend: the
+        # writable outputs contract and the cleanup of container-uid-owned output trees
+        # are unverified, so JADX output-writing is held (see the worker's jadx branch).
+        input_file = root / "input.apk"
+        if input_file.is_symlink() or not input_file.is_file():
+            raise ValueError("staged input.apk must be a regular non-symlink file")
         image = self.binary_images[argv[0]]
         return (
             self.runtime, "run", "--rm", "--init", "--network=none", "--read-only",
@@ -79,7 +88,13 @@ class OciBackend:
             "--ulimit", f"fsize={limits.max_output_bytes}:{limits.max_output_bytes}",
             "--ulimit", "nofile=1024:1024", "--user=65532:65532",
             f"--tmpfs=/tmp:rw,noexec,nosuid,nodev,size={self.tmpfs_mb}m",
-            "--mount", f"type=bind,src={root},dst=/work,rw",
+            # In-container scratch root; discarded with the container. Parents-first order
+            # matters: the single input bind below lands inside this tmpfs.
+            f"--tmpfs=/work:rw,noexec,nosuid,nodev,size={self.tmpfs_mb}m",
+            # --mount fields must be key=value; a bare `rw` is rejected by the runtime.
+            # The input is a single-file read-only bind: the runtime enforces immutability
+            # and no host directory traversal is needed to reach it.
+            "--mount", f"type=bind,src={input_file},dst=/work/input.apk,readonly",
             "--workdir=/work", "--hostname=mobius-tool",
             "--env=HOME=/tmp", "--env=TMPDIR=/tmp", image, *argv,
         )

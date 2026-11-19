@@ -72,6 +72,27 @@ def _tool_for(kind: str, runtime: str) -> tuple[str, str, ToolSpec]:
     raise RuntimeError(f"unsupported worker job kind: {kind}")
 
 
+#: Reason recorded on every held jadx_decompile job; asserted by regression tests.
+JADX_OUTPUT_HOLD_REASON = (
+    "JADX output-writing is held: no verified file-output mount contract "
+    "or output-tree cleanup; the stdout-only OCI contract cannot run JADX"
+)
+
+
+def _run_jadx_job() -> None:
+    """HOLD: JADX is the one file-output tool, and the OCI backend exposes no
+    writable host path at all (stdout-only contract, verified by the CI runtime
+    probe). A writable-outputs contract for JADX and the cleanup of the
+    container-uid-owned output tree are unverified, so this refuses to run instead
+    of silently writing to the ephemeral tmpfs and reporting an empty/invalid
+    output after the fact. The held implementation (writable outputs bind +
+    adapter call) is in the branch's PR history; re-enable only with a reviewed
+    file-output mount contract and a verified cleanup path. Enqueue stays gated
+    on an approved immutable JADX image reference (MOBIUS_JADX_IMAGE; image
+    unpublished)."""
+    raise RuntimeError(JADX_OUTPUT_HOLD_REASON)
+
+
 def run_once() -> bool:
     db_url = _required("MOBIUS_WORKER_DB_URL")
     artifact_root = Path(_required("MOBIUS_ARTIFACT_ROOT")).resolve()
@@ -110,33 +131,7 @@ def run_once() -> bool:
         input_path.chmod(0o444)
 
         if kind == "jadx_decompile":
-            import hashlib
-            from ..adapters.jadx import JadxAdapter, build_jadx_tool_spec
-
-            binary = "/opt/jadx/bin/jadx"
-            image = _required("MOBIUS_JADX_IMAGE")
-            spec = build_jadx_tool_spec(binary=binary, version="1.5.6")
-            backend = OciBackend(runtime=runtime, binary_images={binary: image})
-            runner = ToolRunner(workspace_root=workspace_root, backend=backend, tools=(spec,))
-            cache_root = Path(
-                os.environ.get("MOBIUS_JADX_CACHE_ROOT", str(artifact_root / "jadx-cache"))
-            ).resolve()
-            adapter = JadxAdapter(runner=runner, cache_root=cache_root, tool_version="1.5.6")
-            decompiled = adapter.decompile(
-                investigation_id=scan_id,
-                artifact=payload,
-                expected_sha256=hashlib.sha256(payload).hexdigest(),
-                artifact_name="input.apk",
-            )
-            output = {
-                "apk_sha256": decompiled.apk_sha256,
-                "tool_version": decompiled.tool_version,
-                "source_file_count": len(decompiled.source_files),
-                "source_files": list(decompiled.source_files[:5000]),
-                "cache_entry": f"{decompiled.apk_sha256}/{decompiled.tool_version}",
-                "cached": decompiled.cached,
-                "fidelity": decompiled.fidelity,
-            }
+            _run_jadx_job()
         else:
             binary, image, spec = _tool_for(kind, runtime)
             backend = OciBackend(runtime=runtime, binary_images={binary: image})

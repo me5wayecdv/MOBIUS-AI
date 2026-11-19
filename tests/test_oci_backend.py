@@ -24,10 +24,17 @@ def test_runtime_path_must_be_absolute():
         OciBackend(runtime="podman", binary_images={})
 
 
-def test_container_command_enforces_security_flags(tmp_path):
-    backend = make_backend(tmp_path)
+def make_workspace(tmp_path):
     workspace = tmp_path / "work"
     workspace.mkdir()
+    (workspace / "input.apk").write_bytes(b"fixture-apk")
+    (workspace / "outputs").mkdir()
+    return workspace
+
+
+def test_container_command_enforces_security_flags(tmp_path):
+    backend = make_backend(tmp_path)
+    workspace = make_workspace(tmp_path)
     command = backend._container_argv(
         argv=(BINARY, "--version"), workspace=workspace,
         limits=ToolLimits(timeout_seconds=30, memory_mb=512, cpu_seconds=20),
@@ -40,6 +47,61 @@ def test_container_command_enforces_security_flags(tmp_path):
     assert "--pids-limit=128" in command
     assert "--memory=512m" in command
     assert IMAGE in command
+
+
+def _mount_assertions(command, root):
+    mounts = [command[i + 1] for i, part in enumerate(command) if part == "--mount"]
+    assert f"type=bind,src={root / 'input.apk'},dst=/work/input.apk,readonly" in mounts
+    # The workspace root must not appear as a mount source at all.
+    assert not any(f"src={root}," in m or m.endswith(f"src={root}") for m in mounts)
+    # Bare fields are only valid for boolean flags (readonly); a bare `rw` is rejected
+    # by the runtime ('invalid field rw must be a key=value pair').
+    boolean_flags = {"readonly"}
+    for mount in mounts:
+        for field in mount.split(","):
+            assert "=" in field or field in boolean_flags, field
+    tmpfs = [part for part in command if part.startswith("--tmpfs=")]
+    assert any(spec.startswith("--tmpfs=/work:") for spec in tmpfs)
+    return mounts
+
+
+def test_stdout_tools_get_a_read_only_mount_contract(tmp_path):
+    """Mount contract for the stdout tools (recon/dex): the workspace directory itself is
+    never mounted; the container gets a tmpfs /work and the staged input as a single
+    read-only file bind. No writable host path is exposed at all. Also regression-guards
+    that every --mount field is key=value (a bare `rw` once failed every job at start)."""
+    backend = make_backend(tmp_path)
+    workspace = make_workspace(tmp_path)
+    command = backend._container_argv(
+        argv=(BINARY, "--version"), workspace=workspace,
+        limits=ToolLimits(timeout_seconds=30, memory_mb=512, cpu_seconds=20),
+    )
+    mounts = _mount_assertions(command, workspace.resolve())
+    assert not any("/work/outputs" in m for m in mounts)
+
+
+def test_no_writable_host_path_is_ever_mounted(tmp_path):
+    """The contract exposes no writable host path for ANY registered binary: file-output
+    tools (JADX) are held until a reviewed mount contract and verified cleanup exist."""
+    backend = make_backend(tmp_path)
+    workspace = make_workspace(tmp_path)
+    command = backend._container_argv(
+        argv=(BINARY, "--version"), workspace=workspace,
+        limits=ToolLimits(timeout_seconds=30, memory_mb=512, cpu_seconds=20),
+    )
+    mounts = _mount_assertions(command, workspace.resolve())
+    root = workspace.resolve()
+    assert f"type=bind,src={root / 'outputs'},dst=/work/outputs" not in mounts
+    writable = [m for m in mounts if "readonly" not in m]
+    assert writable == [], writable
+
+
+def test_container_command_requires_staged_input(tmp_path):
+    backend = make_backend(tmp_path)
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    with pytest.raises(ValueError, match="input.apk"):
+        backend._container_argv(argv=(BINARY,), workspace=empty, limits=ToolLimits())
 
 
 def test_unregistered_binary_rejected(tmp_path):

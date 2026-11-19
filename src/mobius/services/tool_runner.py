@@ -162,7 +162,6 @@ class ToolRunner:
         resolved = workspace.resolve()
         if resolved.parent != root:
             raise ToolRejected("workspace escaped the configured root")
-
         result = self.backend.execute(argv=argv, workspace=resolved, limits=spec.limits)
         if result.status not in {"ok", "error", "timeout", "killed", "unavailable"}:
             raise ToolRejected("isolation backend returned an unknown status")

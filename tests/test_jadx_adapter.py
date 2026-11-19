@@ -107,6 +107,32 @@ def test_cache_is_reused_for_same_apk_digest_and_tool_version(tmp_path):
     assert not (tmp_path / "workspaces" / SCAN / ".jadx-home").exists()
 
 
+def test_cleanup_failure_is_reported_not_silent(tmp_path, monkeypatch):
+    """A raw-output tree the worker cannot remove must surface as cleanup_failed; the
+    previous ignore_errors=True cleanup could leave tool output behind invisibly."""
+    import shutil
+    from mobius.adapters.jadx import JadxExecutionFailed
+
+    real_rmtree = shutil.rmtree
+
+    def failing_rmtree(path, *args, **kwargs):
+        if "jadx-output-" in str(path):
+            raise OSError("simulated undeletable tree")
+        return real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(shutil, "rmtree", failing_rmtree)
+    adapter = make_adapter(tmp_path, FixtureBackend())
+    with pytest.raises(JadxExecutionFailed) as exc_info:
+        adapter.decompile(investigation_id=SCAN, artifact=b"fixture")
+    exc = exc_info.value
+    # Exception shape: the stable status drives the HTTP mapping, the detail names the
+    # residue so an operator can act, and the failure type is the execution-failure
+    # class (never a silent success or a bare OSError leaking through).
+    assert exc.status == "cleanup_failed"
+    assert "jadx-output-" in exc.detail
+    assert "residue" in exc.detail
+
+
 def test_cache_key_changes_when_jadx_version_changes(tmp_path):
     artifact = b"same-apk"
     first_backend = FixtureBackend()

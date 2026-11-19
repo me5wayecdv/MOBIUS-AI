@@ -1,0 +1,204 @@
+# Worker pipeline smoke: proves the durable queue worker runs RECON and DEX as
+# isolated OCI jobs on the published digest-pinned images and that their
+# results apply back into an investigation through the API.
+#
+# Scope: intake -> recon_manifest job (enqueue, worker, apply -> SURFACE_READY,
+# manifest evidence, surface_ready event) -> dex_index job (enqueue, worker,
+# apply -> worker_job_applied + code_analysis_complete with classes > 0).
+# The worker runs on the CI runner's Docker daemon; this is not a
+# deployed-worker-host verification, and it does not exercise JADX (image
+# unpublished, owner-gated manual workflow).
+name: Worker pipeline smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/mobius/worker/**"
+      - "src/mobius/services/oci_backend.py"
+      - "src/mobius/services/worker_queue.py"
+      - "src/mobius/services/tool_runner.py"
+      - "src/mobius/services/recon.py"
+      - "src/mobius/services/spectre.py"
+      - "src/mobius/adapters/dex.py"
+      - "src/mobius/adapters/dex_payload.py"
+      - "src/mobius/api/routes.py"
+      - "migrations/**"
+      - "alembic.ini"
+      - "pyproject.toml"
+      - "tests/_axml.py"
+      - "tests/fixtures/dex/**"
+      - "scripts/seed_pipeline_apk.py"
+      - "scripts/healthcheck.sh"
+      - "scripts/oci_contract_probe.py"
+      - ".github/workflows/worker-pipeline-smoke.yml"
+  pull_request:
+    paths:
+      - "src/mobius/worker/**"
+      - "src/mobius/services/oci_backend.py"
+      - "src/mobius/services/worker_queue.py"
+      - "src/mobius/services/tool_runner.py"
+      - "src/mobius/services/recon.py"
+      - "src/mobius/services/spectre.py"
+      - "src/mobius/adapters/dex.py"
+      - "src/mobius/adapters/dex_payload.py"
+      - "src/mobius/api/routes.py"
+      - "migrations/**"
+      - "alembic.ini"
+      - "pyproject.toml"
+      - "tests/_axml.py"
+      - "tests/fixtures/dex/**"
+      - "scripts/seed_pipeline_apk.py"
+      - "scripts/healthcheck.sh"
+      - "scripts/oci_contract_probe.py"
+      - ".github/workflows/worker-pipeline-smoke.yml"
+
+concurrency:
+  group: worker-pipeline-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  worker-pipeline:
+    name: RECON + DEX run as isolated worker jobs on the published digest images
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install MOBIUS with the worker extra
+        run: pip install -e ".[worker]"
+
+      - name: Start PostgreSQL
+        run: |
+          set -euo pipefail
+          docker run -d --name mobius-pg \
+            -e POSTGRES_USER=mobius \
+            -e POSTGRES_PASSWORD=mobius_local_only \
+            -e POSTGRES_DB=mobius \
+            -p 127.0.0.1:5432:5432 \
+            postgres:16-alpine
+          for _ in $(seq 1 30); do
+            if docker exec mobius-pg pg_isready -U mobius -d mobius >/dev/null 2>&1; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "PostgreSQL did not become ready" >&2
+          exit 1
+
+      - name: Pull the pinned published worker images
+        run: |
+          set -euo pipefail
+          docker pull ghcr.io/me5wayecdv/mobius-recon@sha256:3874d22044f2452360e7bd94773ab9f8e4979f1fdc0adffd8f40f6fcfde9e789
+          docker pull ghcr.io/me5wayecdv/mobius-dex@sha256:3ea8feba92f374825a60e75a94c557584a29a280f2c32b8bb2ec5535929f3f02
+
+      - name: Probe the worker container mount contract at runtime
+        env:
+          MOBIUS_RECON_IMAGE: ghcr.io/me5wayecdv/mobius-recon@sha256:3874d22044f2452360e7bd94773ab9f8e4979f1fdc0adffd8f40f6fcfde9e789
+        run: |
+          set -euo pipefail
+          MOBIUS_OCI_RUNTIME="$(command -v docker)" python3 scripts/oci_contract_probe.py
+
+      - name: Migrate, then start the API and the queue worker
+        env:
+          MOBIUS_DB_URL: postgresql+psycopg://mobius:mobius_local_only@127.0.0.1:5432/mobius
+          MOBIUS_ENV: development
+          MOBIUS_ARTIFACT_ROOT: ${{ github.workspace }}/.pipeline-data/artifacts
+          MOBIUS_WORKSPACE_ROOT: ${{ github.workspace }}/.pipeline-data/workspaces
+          MOBIUS_RECON_IMAGE: ghcr.io/me5wayecdv/mobius-recon@sha256:3874d22044f2452360e7bd94773ab9f8e4979f1fdc0adffd8f40f6fcfde9e789
+          MOBIUS_DEX_IMAGE: ghcr.io/me5wayecdv/mobius-dex@sha256:3ea8feba92f374825a60e75a94c557584a29a280f2c32b8bb2ec5535929f3f02
+        run: |
+          set -euo pipefail
+          mkdir -p "$MOBIUS_ARTIFACT_ROOT" "$MOBIUS_WORKSPACE_ROOT"
+          alembic upgrade head
+          python -m uvicorn mobius.api.app:create_app --factory --host 127.0.0.1 --port 8000 > api.log 2>&1 &
+          echo $! > api.pid
+          scripts/healthcheck.sh http://127.0.0.1:8000 120
+          # OciBackend requires an absolute runtime path; resolve it on the runner.
+          MOBIUS_OCI_RUNTIME="$(command -v docker)" MOBIUS_WORKER_DB_URL="$MOBIUS_DB_URL" python -m mobius.worker.runner > worker.log 2>&1 &
+          echo $! > worker.pid
+
+      - name: Drive intake and the RECON + DEX worker jobs
+        run: |
+          set -euo pipefail
+          BASE=http://127.0.0.1:8000
+          python scripts/seed_pipeline_apk.py .pipeline-data/pipeline-lab.apk
+          APK=.pipeline-data/pipeline-lab.apk
+          SHA=$(sha256sum "$APK" | cut -d' ' -f1)
+          APP=$(curl -fsS -F "file=@$APK;type=application/vnd.android.package-archive" "$BASE/api/v1/applications")
+          APP_ID=$(printf '%s' "$APP" | jq -er .id)
+          AUTH=$(curl -fsS -X POST -H 'Content-Type: application/json' "$BASE/api/v1/authorizations" -d "{
+            \"apk_sha256\": \"$SHA\",
+            \"target_package\": \"com.example.demo\",
+            \"scope_text\": \"CI worker-pipeline smoke: synthetic lab fixture, static analysis only.\",
+            \"statement\": \"Worker pipeline smoke test.\",
+            \"max_intensity\": 0,
+            \"expires_at\": \"2030-01-01T00:00:00Z\"}")
+          AUTH_ID=$(printf '%s' "$AUTH" | jq -er .id)
+          SCAN=$(curl -fsS -X POST -H 'Content-Type: application/json' "$BASE/api/v1/scans" -d "{
+            \"application_id\": \"$APP_ID\",
+            \"authorization_id\": \"$AUTH_ID\",
+            \"objective\": \"worker pipeline smoke\",
+            \"intensity\": 0}")
+          SCAN_ID=$(printf '%s' "$SCAN" | jq -er .id)
+          echo "scan: $SCAN_ID"
+
+          wait_job() {
+            local url="$1" limit="$2" deadline body status
+            deadline=$(( $(date +%s) + limit ))
+            while :; do
+              body=$(curl -fsS "$url")
+              status=$(printf '%s' "$body" | jq -er .status)
+              case "$status" in
+                succeeded) echo "job succeeded: $url"; return 0 ;;
+                failed) printf 'worker job failed: %s\n' "$body" >&2; return 1 ;;
+              esac
+              if [ "$(date +%s)" -ge "$deadline" ]; then
+                printf 'worker job timed out: %s\n' "$body" >&2
+                return 1
+              fi
+              sleep 3
+            done
+          }
+
+          RECON_JOB=$(curl -fsS -X POST "$BASE/api/v1/scans/$SCAN_ID/recon/jobs" | jq -er .job_id)
+          wait_job "$BASE/api/v1/scans/$SCAN_ID/recon/jobs/$RECON_JOB" 240
+          echo "-- recon apply response:"
+          curl -fsS -X POST "$BASE/api/v1/scans/$SCAN_ID/recon/jobs/$RECON_JOB/apply"
+          echo
+          curl -fsS "$BASE/api/v1/scans/$SCAN_ID" | jq -e '.state == "SURFACE_READY"' >/dev/null
+          curl -fsS "$BASE/api/v1/scans/$SCAN_ID/evidence" | jq -e '[.items[].kind] | index("manifest") != null' >/dev/null
+          curl -fsS "$BASE/api/v1/scans/$SCAN_ID/events?limit=1000" | jq -e '[.items[].type] | index("surface_ready") != null' >/dev/null
+          echo "recon worker job applied: SURFACE_READY with manifest evidence"
+
+          DEX_JOB=$(curl -fsS -X POST "$BASE/api/v1/scans/$SCAN_ID/spectre/jobs" | jq -er .job_id)
+          wait_job "$BASE/api/v1/scans/$SCAN_ID/spectre/jobs/$DEX_JOB" 540
+          echo "-- dex apply response:"
+          curl -fsS -X POST "$BASE/api/v1/scans/$SCAN_ID/spectre/jobs/$DEX_JOB/apply"
+          echo
+          curl -fsS "$BASE/api/v1/scans/$SCAN_ID/events?limit=1000" | jq -e '
+            ([.items[] | select(.type == "worker_job_applied" and .payload.kind == "dex_index")] | length >= 1)
+            and ([.items[] | select(.type == "code_analysis_complete" and (.payload.classes > 0))] | length >= 1)' >/dev/null
+          echo "dex worker job applied: code_analysis_complete with classes > 0"
+          echo "worker pipeline smoke OK"
+
+      - name: Show API and worker logs on failure
+        if: failure()
+        run: |
+          echo "== api.log =="
+          cat api.log || true
+          echo "== worker.log =="
+          cat worker.log || true
+
+      - name: Tear down
+        if: always()
+        run: |
+          if [ -f api.pid ]; then kill "$(cat api.pid)" 2>/dev/null || true; fi
+          if [ -f worker.pid ]; then kill "$(cat worker.pid)" 2>/dev/null || true; fi
+          docker rm -f mobius-pg 2>/dev/null || true
