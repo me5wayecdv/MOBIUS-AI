@@ -103,7 +103,7 @@ jobs:
       - name: Build provider worker image locally (no login)
         run: |
           set -euo pipefail
-          docker build -t 127.0.0.1:5000/mobius-provider-validation:ci workers/provider-image
+          docker build -f workers/provider-image/Dockerfile -t 127.0.0.1:5000/mobius-provider-validation:ci .
       - name: Push to the loopback registry and resolve the REAL manifest digest
         run: |
           set -euo pipefail
