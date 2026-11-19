@@ -120,9 +120,30 @@ jobs:
       - name: Assert no external registry credentials exist in this job
         run: |
           set -euo pipefail
-          if [ -s "$HOME/.docker/config.json" ] && grep -q '"auths": {' "$HOME/.docker/config.json"; then
-            echo "registry auth config present; refusing to run" >&2
-            exit 1
+          if [ -s "$HOME/.docker/config.json" ]; then
+            python3 - <<'PYEOF'
+          import json, os, sys
+          cfg = json.load(open(os.path.expanduser("~/.docker/config.json")))
+          if not isinstance(cfg, dict):
+              sys.exit("malformed docker config: top level is not an object")
+          auths = cfg.get("auths", {})
+          if not isinstance(auths, dict):
+              sys.exit("malformed docker config: auths is not an object")
+          # Structure only: entry keys, field names and value lengths - never values.
+          for key in sorted(auths):
+              entry = auths[key]
+              fields = ({k: len(str(v)) for k, v in entry.items()}
+                        if isinstance(entry, dict) else "<non-object>")
+              print(f"auth entry key={key!r} fields={fields}")
+          if cfg.get("credsStore") or cfg.get("credHelpers"):
+              sys.exit("credential helpers configured; refusing")
+          for key, entry in auths.items():
+              if key != "127.0.0.1:5000":  # exact job-local endpoint only
+                  sys.exit(f"external registry auth key present: {key}")
+              if entry:
+                  sys.exit(f"loopback auth entry carries credential material: fields {sorted(entry)}")
+          print("no external registry credentials; loopback auth entry is empty")
+          PYEOF
           fi
       - name: Run real-runner runtime validation on fixed fixtures
         env:
