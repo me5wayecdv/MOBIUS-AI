@@ -226,6 +226,69 @@ class WorkerQueue:
         )
         return self._flush_new(job)
 
+    def enqueue_secrets_analysis(self, investigation_id: str, artifact_key: str) -> WorkerJobRow:
+        """Queue isolated secrets candidate analysis for the authorized APK.
+
+        Same state and authorization gates as provider analysis: the worker
+        parses attacker-supplied bytes, so it only runs on an authorized,
+        surfaced investigation. The result applies through the secrets
+        apply route's anchor chain; this method only queues compute."""
+        investigation = self.session.get(InvestigationRow, investigation_id)
+        if investigation is None:
+            raise NotFound(f"investigation {investigation_id} not found")
+        if investigation.state != "SURFACE_READY":
+            raise ScanStateConflict(
+                f"secrets analysis requires SURFACE_READY state, got {investigation.state}"
+            )
+        application = self.session.get(ApplicationRow, investigation.application_id)
+        authorization = self.session.get(AuthorizationRow, investigation.authorization_id)
+        if application is None or authorization is None:
+            raise ScanStateConflict("secrets analysis requires an existing APK and authorization")
+        if (
+            authorization.revoked_at is not None
+            or is_expired(authorization.expires_at)
+            or authorization.apk_sha256 != application.sha256
+        ):
+            raise ScanStateConflict("APK authorization is no longer valid for this artifact")
+        if artifact_key != application.artifact_key:
+            raise ScanStateConflict("worker job artifact does not match the investigation APK")
+        already_applied = self.session.execute(
+            select(WorkerJobRow).where(
+                WorkerJobRow.investigation_id == investigation_id,
+                WorkerJobRow.kind == "secrets_analysis",
+                WorkerJobRow.applied_at.is_not(None),
+            ).limit(1)
+        ).scalar_one_or_none()
+        if already_applied is not None:
+            # A second run would duplicate candidates and evidence. Refuse
+            # BEFORE any compute is queued; the applied result stands.
+            raise ScanStateConflict(
+                f"secrets analysis was already applied for this investigation "
+                f"(worker job {already_applied.id})"
+            )
+        active = self.session.execute(
+            select(WorkerJobRow).where(
+                WorkerJobRow.investigation_id == investigation_id,
+                WorkerJobRow.kind == "secrets_analysis",
+                WorkerJobRow.status.in_(("queued", "running", "succeeded")),
+                WorkerJobRow.applied_at.is_(None),
+            ).limit(1)
+        ).scalar_one_or_none()
+        if active is not None:
+            raise ScanStateConflict(
+                f"secrets-analysis worker job {active.id} is already active or awaiting application"
+            )
+        job = WorkerJobRow(
+            id=str(uuid4()),
+            investigation_id=investigation_id,
+            kind="secrets_analysis",
+            artifact_key=artifact_key,
+            status="queued",
+            attempts=0,
+            created_at=utcnow(),
+        )
+        return self._flush_new(job)
+
     def claim_apply(self, job_id: str) -> WorkerJobRow:
         """Race-safe apply gate: exactly one concurrent applier can move a
         succeeded, unapplied job into the applied state. The conditional
@@ -301,7 +364,8 @@ class WorkerQueue:
             select(WorkerJobRow)
             .where(
                 WorkerJobRow.kind.in_(
-                    ("recon_manifest", "dex_index", "jadx_decompile", "provider_analysis")
+                    ("recon_manifest", "dex_index", "jadx_decompile",
+                     "provider_analysis", "secrets_analysis")
                 ),
                 WorkerJobRow.attempts < 3,
                 or_(
@@ -322,7 +386,8 @@ class WorkerQueue:
         row.started_at = utcnow()
         # The lease must outlive the job's tool timeout or a slow worker loses
         # ownership mid-run and its late result hits a job it no longer owns.
-        lease_minutes = {"jadx_decompile": 10, "provider_analysis": 20}.get(row.kind, 5)
+        lease_minutes = {"jadx_decompile": 10, "provider_analysis": 20,
+                         "secrets_analysis": 20}.get(row.kind, 5)
         row.lease_until = (
             datetime.now(timezone.utc) + timedelta(minutes=lease_minutes)
         ).isoformat(timespec="milliseconds").replace("+00:00", "Z")
