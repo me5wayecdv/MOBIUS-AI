@@ -94,8 +94,8 @@ Commands run and their observed output, so a reader can distinguish measurement 
 | SSE stream | replays from `after=0` and closes with `stream_end` on a terminal scan |
 | Unauthorised scan | 409 `AUTH_REQUIRED` |
 | Self-validation | 409 `VALIDATOR_MUST_DIFFER` |
-| Negative control (exported launcher, no sink) | `rejected`, reason `not-reachable` |
-| SPECTRE on a real APK, over HTTP | `com.politedroid_4.apk` (18 489 B, real androguard): 10 classes, 34 methods, 34 graph nodes, 41 internal calls, `truncated=False`; 1 candidate → `not-reached` over 6 methods → `REJECTED` / `not-reachable`, confidence 0.38, `caller_check_absent: null`, `path_length: null`; repeat call → 409 `SCAN_STATE_CONFLICT`; 15 events ending `code_analysis_complete` |
+| Negative control (exported launcher, no sink) | `manual_review_required` / `insufficient_evidence`, no rejection reason (was `rejected` / `not-reachable` before the NOT_DETERMINED change); never confirmed |
+| SPECTRE on a real APK, over HTTP | `com.politedroid_4.apk` (18 489 B, real androguard): 10 classes, 34 methods, 34 graph nodes, 41 internal calls, `truncated=False`; 1 candidate → `not-reached` over 6 methods → manual review (originally recorded as `REJECTED` / `not-reachable`; superseded), confidence 0.38, `caller_check_absent: null`, `path_length: null`; repeat call → 409 `SCAN_STATE_CONFLICT`; 15 events ending `code_analysis_complete` |
 | Truncation ≠ refutation | `test_truncation_never_reports_absence`: an exhausted node budget yields `sink_reachable=None` → `insufficient_evidence`, never `not-reachable` |
 | Sink catalogue tightened | A real APK produced a **false positive** (`SharedPreferences.getString`); the sink was removed and a regression test pins its absence |
 | Unparseable dex | 422 `CODE_INDEX_FAILED` over HTTP, typed |
@@ -122,8 +122,8 @@ Reachability is a **graph property**, and it is the only thing SPECTRE claims to
 | Verdict path | What it means | What it does *not* mean |
 |---|---|---|
 | `reached`, no guard → `confirmed` | An exported entry point reaches a security-relevant operation with no caller check on the path | That attacker-controlled data reaches it — there is no data flow analysis |
-| `reached`, guard on the path → `REJECTED` / `guarded-by-caller-check` | A caller check exists somewhere in the same method | That the app is safe: a guard refutes one clause, not the finding |
-| exhaustive `not-reached` → `REJECTED` / `not-reachable` | The complete traversal found no sink | That no sink exists via reflection, native code or multi-dex |
+| exhaustive `not-reached` → manual review / `insufficient_evidence` | The complete traversal found no catalogued sink on direct calls (kept as a bounded-search observation) | That the component is safe: unmodelled catalogue entries, callbacks, inter-component flows, reflection, native code, multi-dex. Allsafe v1.6 showed this; real recall is UNESTABLISHED |
+| `reached`, guard call on the path → manual review / `insufficient_evidence` (guard kept as observation) | A catalogued guard call (by class and method name) occurs on the path | That the check is enforced, ignores its result, runs before the sink or constrains the caller: unproven, so neither confirmed nor rejected |
 | truncated / no entry point / no index → `insufficient_evidence` | The search did not finish, or could not start | **Nothing about safety.** Treated as missing evidence, never as a negative |
 
 The graph holds application classes only. A call into the framework is recorded as a boundary

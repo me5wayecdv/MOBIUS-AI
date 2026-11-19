@@ -120,10 +120,12 @@ def test_a_rejection_is_reported_with_the_reason_it_was_rejected(session, store,
     scan = _rejected_scan(session, store, future_iso)
     text = _text(session, store, scan)
 
-    assert "## 4. Rejected hypotheses" in text
-    assert "A rejection is a conclusion reached on evidence, not a silence." in text
-    assert "`not-reachable`" in text
-    assert "no sensitive sink reachable" in text
+    # Absence of a catalogued sink is never reported as a refuted hypothesis.
+    assert "| Rejected | 0 |" in text
+    assert "| Manual review | 1 |" in text or "could not be decided" in text
+    assert "## 5. Not determined" in text
+    assert "no catalogued sink found" in text
+    assert "no sensitive sink reachable" not in text
 
 
 def test_the_outcome_sentence_matches_the_counts(session, store, future_iso):

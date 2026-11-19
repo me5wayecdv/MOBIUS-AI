@@ -128,26 +128,22 @@ def test_confirmed_finding_is_persisted_with_its_gate_evidence(session, store, s
     assert finding.maswe == ["MASWE-0029"]
 
 
-def test_guard_on_the_path_rejects_and_names_the_reason(session, store, surface_ready):
+def test_guard_call_on_the_path_is_undetermined_not_rejected(session, store, surface_ready):
     result = _spectre(session, store, _index(guarded=True)).analyse(surface_ready)
-    assert result["rejected"] == 1
+    assert result["rejected"] == 0
     entry = result["results"][0]
-    assert entry["status"] == FindingStatus.REJECTED.value
-    assert entry["verdict"] == Verdict.REJECTED.value
-    assert entry["rejection_reason"] == RejectionReason.GUARDED_BY_CALLER_CHECK.value
+    assert entry["status"] == FindingStatus.MANUAL_REVIEW_REQUIRED.value
+    assert entry["verdict"] == Verdict.INSUFFICIENT_EVIDENCE.value
+    assert entry["rejection_reason"] is None
+    # The guard stays on the record as an observation for the human reviewer.
     assert entry["guards"] == ["check-calling-permission"]
-    # Reachability is still true: the path exists. What failed is the claim that there is no
-    # caller check, which is a different clause and a different reason.
     assert entry["attributes"]["sink_reachable"] is True
-    assert entry["attributes"]["caller_check_absent"] is False
+    assert entry["attributes"]["caller_check_absent"] is None
 
 
-def test_rejection_reason_is_not_mislabelled_as_unreachable(session, store, surface_ready):
-    _spectre(session, store, _index(guarded=True)).analyse(surface_ready)
-    verdict = session.query(VerdictRow).one()
-    assert verdict.verdict == "rejected"
-    assert verdict.rejection_reason == "guarded-by-caller-check"
-    assert verdict.rejection_reason != "not-reachable"
+def test_a_guarded_path_is_never_confirmed_either(session, store, surface_ready):
+    result = _spectre(session, store, _index(guarded=True)).analyse(surface_ready)
+    assert result["confirmed"] == 0
 
 
 def test_truncated_index_cannot_support_absence(session, store, surface_ready):
@@ -355,7 +351,7 @@ def test_a_rejected_finding_reports_no_path_rather_than_a_zero_length_one(
     assert entry["attributes"] == {
         "exported": True,
         "permission": None,
-        "sink_reachable": False,
+        "sink_reachable": None,
         "caller_check_absent": None,
     }
 
@@ -366,8 +362,9 @@ def test_the_finding_title_matches_what_the_search_established(session, store, s
     title = session.query(FindingRow).filter_by(
         id=rejected["results"][0]["finding_id"]
     ).one().title
-    assert "no sensitive sink reachable" in title
-    assert "not established" not in title
+    assert "no catalogued sink found" in title
+    assert "not determined" in title
+    assert "no sensitive sink reachable" not in title
 
 
 def test_an_unfinished_search_says_so_in_its_title(session, store, surface_ready):

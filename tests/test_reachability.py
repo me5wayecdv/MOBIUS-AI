@@ -55,7 +55,7 @@ def test_sink_reached_through_one_internal_hop():
     assert result.explain().startswith("reaches file-write")
 
 
-def test_guard_on_the_path_refutes_caller_check_absent():
+def test_guard_on_the_path_leaves_caller_check_undetermined():
     root, helper = M("com.x.A", "onCreate"), M("com.x.A", "writeFile")
     graph, boundary = build(
         edges={root: [helper], helper: []},
@@ -67,7 +67,8 @@ def test_guard_on_the_path_refutes_caller_check_absent():
     assert [g.id for g in result.guards] == ["check-calling-permission"]
     attrs = result.attributes()
     assert attrs["sink_reachable"] is True
-    assert attrs["caller_check_absent"] is False
+    assert attrs["caller_check_absent"] is None  # a guard call is not proof of enforcement
+    assert "not proof of enforcement" in result.explain()
 
 
 def test_guard_off_the_path_is_not_counted():
@@ -84,13 +85,14 @@ def test_guard_off_the_path_is_not_counted():
     assert result.attributes()["caller_check_absent"] is True
 
 
-def test_complete_search_without_a_sink_is_a_real_refutation():
+def test_complete_search_without_a_sink_is_a_bounded_fact_not_a_refutation():
     root, helper = M("com.x.A", "onCreate"), M("com.x.A", "go")
     graph, boundary = build(edges={root: [helper], helper: []})
     result = analyse(graph, entry_points=[root], boundary=boundary)
     assert result.status == "not-reached"
     assert result.exhaustive is True
-    assert result.attributes()["sink_reachable"] is False
+    assert result.attributes()["sink_reachable"] is None  # bounded search, not a refutation
+    assert "not determined" in result.explain()
 
 
 def test_depth_cap_truncates_instead_of_refuting():
@@ -278,7 +280,7 @@ def test_absent_path_claims_nothing_about_a_caller_check():
     result = analyse(graph, entry_points=(a,), boundary={})
 
     assert result.status == "not-reached"
-    assert result.attributes()["sink_reachable"] is False  # exhaustive, so refuted
+    assert result.attributes()["sink_reachable"] is None  # not a refutation
     assert result.attributes()["caller_check_absent"] is None
 
 
