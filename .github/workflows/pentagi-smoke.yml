@@ -2,127 +2,302 @@ name: pentagi-smoke
 
 # Manual-only experiment (workflow_dispatch; nothing runs automatically).
 #
-# Runs PentAGI (github.com/vxcontrol/pentagi, commit-pinned) against OWASP
-# Juice Shop, a deliberately vulnerable TRAINING application, all inside one
-# ephemeral GitHub-hosted runner. PentAGI's own terms allow testing only
-# systems you own or are authorized to test; the target here is a local
-# container on an isolated Docker network created by this job.
+# Runs PentAGI (github.com/vxcontrol/pentagi, commit-grounded API semantics)
+# against OWASP Juice Shop, a deliberately vulnerable TRAINING application,
+# all inside one ephemeral GitHub-hosted runner. PentAGI's terms allow
+# testing only systems you are authorized to test; the target here is a
+# local container on a runner-local Docker network created by this job.
+#
+# Enforced scope boundary (not prompt-level): runner iptables DROP all
+# egress from every Docker bridge subnet except container-to-container
+# traffic, with a time-boxed exception for the Ollama model registry that
+# is removed before the flow starts. PentAGI tool containers join the same
+# network (DOCKER_NETWORK), so the boundary covers dynamically spawned
+# containers too. A live probe from inside a container proves egress is
+# blocked before the flow is created.
 #
 # Cost/privacy shape:
 # - No paid provider: a local ollama/ollama container serves the LLM and
 #   embeddings (qwen2.5:3b, nomic-embed-text). No API keys anywhere.
 # - The runner repository is NOT checked out; no private code, data, or
-#   secrets enter the job. Session cookies are kept in files, never printed.
-# - Everything is torn down in an always() step; the runner itself is
-#   ephemeral.
-# - Services bind to 127.0.0.1 or the internal network only. PentAGI mounts
-#   the runner's docker socket (its documented tool-sandbox requirement); the
-#   ephemeral runner holds no secrets, and the socket dies with it.
+#   secrets enter the job. Session cookies live in files, never printed.
+# - No scraper/search container is started; telemetry (OTEL) unset=off;
+#   Graphiti disabled; the egress DROP also blocks PentAGI's default
+#   update/support endpoints.
+# - Everything is torn down in an always() step, including the iptables
+#   rules; the runner itself is single-use ephemeral.
+# - Services publish to 127.0.0.1 only; PentAGI worker containers are
+#   pinned to loopback with DOCKER_PUBLIC_IP=127.0.0.1 (upstream default
+#   is 0.0.0.0, per backend/pkg/config/config.go).
 on:
   workflow_dispatch:
 
 permissions:
   contents: none
 
+env:
+  OLLAMA_IMAGE: ollama/ollama:0.5.4@sha256:18bfb1d605604fd53dcad20d0556df4c781e560ebebcd923454d627c994a0e37
+  PENTAGI_IMAGE: vxcontrol/pentagi@sha256:0abdf8e9e9e19839dccc5d2ec365060e5c41941588279897cabd628d29a9afd7
+  PGVECTOR_IMAGE: vxcontrol/pgvector@sha256:09afd689127bdb42319a133b2ef7cd4318b7ebda58412644975d6eacd2367fb0
+  JUICESHOP_IMAGE: bkimminich/juice-shop@sha256:877fc77b12d72b42e486eb09b6b1711cc56514306d92006b284e7e7cf076a809
+  KALI_TEST_IMAGE: vxcontrol/kali-linux:test@sha256:2ec4b178bc232dd264a166db1593bfa44dd792077119b72430ce28079b1fa0bc
+  DEBIAN_IMAGE: debian:latest@sha256:9c6e381421d0f48d1b8133e573f33c185ee16cbf505eda9c4a8a4791b25ea8a6
+  LLM_MODEL: qwen2.5:3b
+  EMBED_MODEL: nomic-embed-text
+  FLOW_DEADLINE_SECONDS: 1500
+
 jobs:
   smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 75
     steps:
-      - name: Start local Ollama (digest-pinned, no API keys)
+      - name: Pull pinned images and verify digests
         run: |
-          docker network create pentagi-network
-          docker run -d --name ollama --network pentagi-network \
-            ollama/ollama:0.5.4@sha256:18bfb1d605604fd53dcad20d0556df4c781e560ebebcd923454d627c994a0e37
-          for i in $(seq 1 20); do
-            docker exec ollama ollama --version >/dev/null 2>&1 && break
-            sleep 3
+          set -euo pipefail
+          for img in "$OLLAMA_IMAGE" "$PENTAGI_IMAGE" "$PGVECTOR_IMAGE" "$JUICESHOP_IMAGE" "$KALI_TEST_IMAGE" "$DEBIAN_IMAGE"; do
+            docker pull "$img"
           done
-          docker exec ollama ollama pull qwen2.5:3b
-          docker exec ollama ollama pull nomic-embed-text
+          echo "== resolved RepoDigests (pin verification) =="
+          for img in "$OLLAMA_IMAGE" "$PENTAGI_IMAGE" "$PGVECTOR_IMAGE" "$JUICESHOP_IMAGE"; do
+            docker inspect --format '{{index .RepoDigests 0}}' "$img"
+          done
+
+      - name: Install egress boundary (iptables)
+        run: |
+          set -euo pipefail
+          # Container subnets are drawn from 172.16.0.0/12 on docker defaults.
+          sudo iptables -A DOCKER-USER -s 172.16.0.0/12 -d 172.16.0.0/12 -j ACCEPT -m comment --comment pentagi-smoke
+          # Time-boxed Ollama registry window (removed before the flow starts).
+          getent ahostsv4 registry.ollama.ai | awk '{print $1}' | sort -u > /tmp/ollama_ips.txt
+          test -s /tmp/ollama_ips.txt
+          while read -r ip; do
+            sudo iptables -A DOCKER-USER -s 172.16.0.0/12 -d "$ip" -j ACCEPT -m comment --comment pentagi-smoke-pull
+          done < /tmp/ollama_ips.txt
+          sudo iptables -A DOCKER-USER -s 172.16.0.0/12 -j DROP -m comment --comment pentagi-smoke
+          if sudo ip6tables -L DOCKER-USER >/dev/null 2>&1; then
+            sudo ip6tables -A DOCKER-USER -j DROP -m comment --comment pentagi-smoke
+          fi
+          echo "== DOCKER-USER after install =="
+          sudo iptables -L DOCKER-USER -n -v
+
+      - name: Create network and start postgres + ollama
+        run: |
+          set -euo pipefail
+          docker network create pentagi-network
+          PGPASS=$(head -c 24 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9')
+          echo "$PGPASS" > /tmp/pgpass.txt
+          chmod 600 /tmp/pgpass.txt
+          docker run -d --name pgvector --network pentagi-network \
+            -e POSTGRES_USER=pentagiuser -e POSTGRES_PASSWORD="$PGPASS" -e POSTGRES_DB=pentagidb \
+            "$PGVECTOR_IMAGE"
+          docker run -d --name ollama --network pentagi-network "$OLLAMA_IMAGE"
+          for i in $(seq 1 60); do
+            docker exec pgvector pg_isready -U pentagiuser -q && break || sleep 2
+          done
+          docker exec pgvector pg_isready -U pentagiuser
+          for i in $(seq 1 60); do
+            docker exec ollama ollama list >/dev/null 2>&1 && break || sleep 2
+          done
           docker exec ollama ollama list
 
-      - name: Start the authorized training target (OWASP Juice Shop)
+      - name: Pull local models (inside registry window)
         run: |
+          set -euo pipefail
+          pull_model() {
+            local model="$1"
+            for attempt in 1 2; do
+              if docker exec ollama ollama pull "$model"; then return 0; fi
+              getent ahostsv4 registry.ollama.ai | awk '{print $1}' | sort -u > /tmp/ollama_ips_new.txt
+              while read -r ip; do
+                grep -qx "$ip" /tmp/ollama_ips.txt || sudo iptables -A DOCKER-USER -s 172.16.0.0/12 -d "$ip" -j ACCEPT -m comment --comment pentagi-smoke-pull
+              done < /tmp/ollama_ips_new.txt
+              cat /tmp/ollama_ips_new.txt >> /tmp/ollama_ips.txt
+              sort -u /tmp/ollama_ips.txt -o /tmp/ollama_ips.txt
+            done
+            return 1
+          }
+          pull_model "$LLM_MODEL"
+          pull_model "$EMBED_MODEL"
+          docker exec ollama ollama list
+
+      - name: Close registry window and verify egress is blocked
+        run: |
+          set -euo pipefail
+          while read -r ip; do
+            sudo iptables -D DOCKER-USER -s 172.16.0.0/12 -d "$ip" -j ACCEPT -m comment --comment pentagi-smoke-pull || true
+          done < /tmp/ollama_ips.txt
+          echo "== DOCKER-USER after window close =="
+          sudo iptables -L DOCKER-USER -n -v
+          echo "== egress probe (must FAIL) =="
+          if docker run --rm --network pentagi-network --entrypoint node "$JUICESHOP_IMAGE" \
+            -e "fetch('http://1.1.1.1',{signal:AbortSignal.timeout(4000)}).then(()=>{console.log('EGRESS-OPEN');process.exit(0)}).catch(()=>{console.log('EGRESS-BLOCKED');process.exit(1)})"; then
+            echo "::error::container egress to the internet is NOT blocked"
+            exit 1
+          else
+            echo "egress blocked as required"
+          fi
+
+      - name: Start Juice Shop training target
+        run: |
+          set -euo pipefail
           docker run -d --name juice-shop --network pentagi-network \
-            -p 127.0.0.1:3000:3000 \
-            bkimminich/juice-shop:latest@sha256:877fc77b12d72b42e486eb09b6b1711cc56514306d92006b284e7e7cf076a809
-          for i in $(seq 1 30); do
-            curl -sf http://127.0.0.1:3000 >/dev/null && { echo "juice-shop reachable"; break; }
-            sleep 5
+            -p 127.0.0.1:3000:3000 "$JUICESHOP_IMAGE"
+          for i in $(seq 1 45); do
+            curl -sf -o /dev/null http://127.0.0.1:3000 && break || sleep 2
           done
-          curl -sf -o /dev/null -w "juice-shop http %{http_code}\n" http://127.0.0.1:3000
+          curl -sf -o /dev/null http://127.0.0.1:3000
+          echo "== internal reachability probe from a sibling container (must SUCCEED) =="
+          docker run --rm --network pentagi-network --entrypoint node "$JUICESHOP_IMAGE" \
+            -e "fetch('http://juice-shop:3000',{signal:AbortSignal.timeout(5000)}).then(r=>{console.log('TARGET-REACHABLE',r.status);process.exit(0)}).catch(e=>{console.log('TARGET-UNREACHABLE');process.exit(1)})"
 
-      - name: Deploy PentAGI (commit-pinned source, digest-pinned images)
+      - name: Start PentAGI (ollama-only, loopback-only)
         run: |
-          git clone https://github.com/vxcontrol/pentagi.git
-          cd pentagi
-          git checkout cffed9485aa1cca70762cd08a57ac62a80406258
-          cp .env.example .env
-          openssl rand -hex 32 | xargs -I VALUE sed -E -i 's/^COOKIE_SIGNING_SALT=.*/COOKIE_SIGNING_SALT=VALUE/' .env
-          openssl rand -hex 16 | xargs -I VALUE sed -E -i 's/^PENTAGI_POSTGRES_PASSWORD=.*/PENTAGI_POSTGRES_PASSWORD=VALUE/' .env
-          sed -i 's|^OLLAMA_SERVER_URL=.*|OLLAMA_SERVER_URL=http://ollama:11434|' .env
-          sed -i 's|^OLLAMA_SERVER_MODEL=.*|OLLAMA_SERVER_MODEL=qwen2.5:3b|' .env
-          sed -i 's|^OLLAMA_SERVER_PULL_MODELS_ENABLED=.*|OLLAMA_SERVER_PULL_MODELS_ENABLED=true|' .env
-          sed -i 's|^EMBEDDING_PROVIDER=.*|EMBEDDING_PROVIDER=ollama|' .env
-          sed -i 's|^EMBEDDING_MODEL=.*|EMBEDDING_MODEL=nomic-embed-text|' .env
-          sed -i 's|^EMBEDDING_URL=.*|EMBEDDING_URL=http://ollama:11434|' .env
-          printf '%s\n' \
-            'PENTAGI_IMAGE=vxcontrol/pentagi:latest@sha256:0abdf8e9e9e19839dccc5d2ec365060e5c41941588279897cabd628d29a9afd7' \
-            'PGVECTOR_IMAGE=vxcontrol/pgvector:latest@sha256:09afd689127bdb42319a133b2ef7cd4318b7ebda58412644975d6eacd2367fb0' \
-            'PGEXPORTER_IMAGE=quay.io/prometheuscommunity/postgres-exporter:v0.16.0@sha256:fe38515ba4d00fe9b4e83bc53e7ea38e1eb451d415c5447454ae1a3e043ff13d' \
-            'SCRAPER_IMAGE=vxcontrol/scraper:latest@sha256:4a3b0f179ab29003313167877ee2f6ab74c89f3fcb1ce108e648ca1ffadc51b7' \
-            >> .env
-          grep -E '^(OLLAMA|EMBEDDING|PENTAGI_IMAGE|PGVECTOR_IMAGE|SCRAPER_IMAGE|PGEXPORTER_IMAGE)' .env
-          docker compose up -d
-          docker compose ps
-
-      - name: Verify backend health and provider
-        run: |
-          ok=0
-          for i in $(seq 1 36); do
-            if curl -sk -o /dev/null -w "%{http_code}" https://127.0.0.1:8443/ | grep -q '^200$'; then ok=1; break; fi
-            sleep 5
+          set -euo pipefail
+          SALT=$(head -c 24 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9')
+          PGPASS=$(cat /tmp/pgpass.txt)
+          docker run -d --name pentagi --network pentagi-network \
+            -p 127.0.0.1:8080:8080 \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            -v /tmp/pentagi-data:/opt/pentagi/data \
+            -e DATABASE_URL="postgres://pentagiuser:${PGPASS}@pgvector:5432/pentagidb?sslmode=disable" \
+            -e COOKIE_SIGNING_SALT="$SALT" \
+            -e OLLAMA_SERVER_URL="http://ollama:11434" \
+            -e OLLAMA_SERVER_MODEL="$LLM_MODEL" \
+            -e OLLAMA_SERVER_PULL_MODELS_ENABLED=false \
+            -e OLLAMA_SERVER_LOAD_MODELS_ENABLED=true \
+            -e EMBEDDING_PROVIDER=ollama \
+            -e EMBEDDING_URL="http://ollama:11434" \
+            -e EMBEDDING_MODEL="$EMBED_MODEL" \
+            -e DOCKER_NETWORK=pentagi-network \
+            -e DOCKER_PUBLIC_IP=127.0.0.1 \
+            -e ASK_USER=false \
+            -e GRAPHITI_ENABLED=false \
+            "$PENTAGI_IMAGE"
+          for i in $(seq 1 150); do
+            curl -sf -o /dev/null http://127.0.0.1:8080/api/v1/info && break || sleep 4
           done
-          echo "ui_ok=$ok"
-          cd pentagi && docker compose ps && docker compose logs --tail=40 pentagi
-          test "$ok" = "1"
+          curl -sf http://127.0.0.1:8080/api/v1/info | head -c 300 | sed -E 's/([a-zA-Z0-9_-]{20})[a-zA-Z0-9_-]+/\1…/g'; echo
 
-      - name: Run a bounded task against the training target
+      - name: Verify effective listeners and config
         run: |
-          BASE=https://127.0.0.1:8443/api/v1
-          code=$(curl -sk -o /tmp/login.json -w "%{http_code}" -c /tmp/cookies -X POST "$BASE/auth/login" \
+          set -euo pipefail
+          echo "== published listeners (must be loopback only) =="
+          ss -tln | grep -E ':(3000|8080)\b' || { echo "::error::expected listeners missing"; exit 1; }
+          if ss -tln | grep -E ':(3000|8080)\b' | grep -qv '127.0.0.1'; then
+            echo "::error::a service is published on a non-loopback address"
+            ss -tln | grep -E ':(3000|8080)\b'
+            exit 1
+          fi
+          echo "== container PortBindings =="
+          docker inspect --format '{{.Name}} {{json .HostConfig.PortBindings}}' pentagi juice-shop
+          echo "== effective PentAGI env (selected, non-secret keys only) =="
+          for k in OLLAMA_SERVER_URL OLLAMA_SERVER_MODEL OLLAMA_SERVER_PULL_MODELS_ENABLED EMBEDDING_PROVIDER EMBEDDING_URL EMBEDDING_MODEL DOCKER_NETWORK DOCKER_PUBLIC_IP ASK_USER GRAPHITI_ENABLED SERVER_PORT SERVER_USE_SSL; do
+            printf '%s=%s\n' "$k" "$(docker exec pentagi printenv "$k" 2>/dev/null || echo '<unset>')"
+          done
+
+      - name: Login and create the training flow
+        run: |
+          set -euo pipefail
+          JAR=/tmp/pentagi-cookies.txt
+          # Default first-run credentials from the pinned commit's README.md
+          # (line ~868: admin@pentagi.com / admin). Ephemeral instance only.
+          code=$(curl -s -o /tmp/login.out -w '%{http_code}' -c "$JAR" \
             -H 'Content-Type: application/json' \
-            -d '{"mail":"admin@pentagi.local","password":"admin"}')
-          echo "login http $code"
-          FLOW=$(curl -sk -b /tmp/cookies -X POST "$BASE/flows" -H 'Content-Type: application/json' \
-            -d '{"input":"Test http://juice-shop:3000 - a deliberately vulnerable training application (OWASP Juice Shop) running as a container on the same isolated Docker network, authorized for this test. Do a brief reconnaissance, try the most evident vulnerability classes, and report what you find. Keep it short.","provider":"ollama"}')
-          echo "$FLOW"
-          FLOW_ID=$(printf '%s' "$FLOW" | python3 -c "import json,sys; print(json.load(sys.stdin)['data']['id'])")
-          echo "flow_id=$FLOW_ID"
-          for i in $(seq 1 60); do
-            ST=$(curl -sk -b /tmp/cookies "$BASE/flows/$FLOW_ID" | python3 -c "import json,sys; print(json.load(sys.stdin)['data'].get('status'))")
-            echo "poll $i status=$ST"
-            case "$ST" in finished|failed|done|completed|stopped) break;; esac
-            sleep 15
-          done
-          curl -sk -b /tmp/cookies "$BASE/flows/$FLOW_ID" > /tmp/flow_final.json
-          python3 -c "
-          import json
-          d = json.load(open('/tmp/flow_final.json'))['data']
-          print('final status:', d.get('status'))
-          print('title:', d.get('title'))
-          "
+            -d '{"mail":"admin@pentagi.com","password":"admin"}' \
+            http://127.0.0.1:8080/api/v1/auth/login)
+          echo "login_http=$code"
+          [ "$code" = "200" ] || { echo "::error::login failed"; exit 1; }
+          code=$(curl -s -o /tmp/flow.out -w '%{http_code}' -b "$JAR" \
+            -H 'Content-Type: application/json' \
+            -d '{"input":"Assess the web application reachable at http://juice-shop:3000 (a local training target). Using terminal tools such as curl, retrieve the root page, identify at least two endpoints or files it exposes (for example product or score-board paths), and report one observable security weakness with the exact request you used. Do not contact any other host.","provider":"ollama"}' \
+            http://127.0.0.1:8080/api/v1/flows)
+          echo "create_flow_http=$code"
+          [ "$code" = "200" ] || [ "$code" = "201" ] || { echo "::error::flow creation failed"; exit 1; }
+          FLOW_ID=$(jq -er '.id' /tmp/flow.out)
+          echo "FLOW_ID=$FLOW_ID" >> "$GITHUB_ENV"
+          echo "flow_id=$FLOW_ID provider=$(jq -r '.model_provider_type' /tmp/flow.out) status=$(jq -r '.status' /tmp/flow.out)"
 
-      - name: Collect evidence logs
+      - name: Poll flow and classify results (bounded)
+        run: |
+          set -euo pipefail
+          JAR=/tmp/pentagi-cookies.txt
+          deadline=$(( $(date +%s) + FLOW_DEADLINE_SECONDS ))
+          final=""
+          while [ "$(date +%s)" -lt "$deadline" ]; do
+            st=$(curl -sf -b "$JAR" "http://127.0.0.1:8080/api/v1/flows/${FLOW_ID}" | jq -r '.status')
+            echo "flow_status=$st"
+            case "$st" in
+              finished|failed) final="$st"; break ;;
+              created|running|waiting) sleep 30 ;;
+              *) echo "::error::unknown flow status spelling: $st"; exit 1 ;;
+            esac
+          done
+          [ -n "$final" ] || { echo "::error::flow still not terminal at deadline"; final="deadline-exceeded"; }
+          echo "FLOW_FINAL=$final" >> "$GITHUB_ENV"
+
+      - name: Collect sanitized evidence and apply gates
         if: always()
         run: |
-          cd pentagi 2>/dev/null && docker compose logs --tail=200 pentagi || true
-          docker logs --tail=60 ollama 2>/dev/null || true
+          set -uo pipefail
+          sanitize() { sed -E \
+            -e 's/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/[REDACTED-JWT]/g' \
+            -e 's/((password|passwd|token|secret|salt|cookie|authorization|api[-_]?key)([":= -]+))[^ ",}&]+/\1[REDACTED]/gi' \
+            -e 's/(.{400}).*/\1[truncated]/'; }
+          JAR=/tmp/pentagi-cookies.txt
+          echo "== classification =="
+          tasks_json=$(curl -sf -b "$JAR" "http://127.0.0.1:8080/api/v1/flows/${FLOW_ID}/tasks" 2>/dev/null || echo '[]')
+          task_count=$(echo "$tasks_json" | jq 'length' 2>/dev/null || echo 0)
+          echo "tasks_observed=$task_count"
+          echo "$tasks_json" | jq -r '.[] | "task id=\(.id) status=\(.status) title=\(.title[0:120])"' 2>/dev/null | sanitize || true
+          gen_calls=$(docker logs ollama 2>&1 | grep -c 'api/generate' || true)
+          embed_calls=$(docker logs ollama 2>&1 | grep -c 'api/embed' || true)
+          echo "ollama_generate_calls=$gen_calls ollama_embed_calls=$embed_calls"
+          js_reqs=$(docker logs juice-shop 2>&1 | grep -cE '"(GET|POST|HEAD|PUT|DELETE|OPTIONS) ' || true)
+          echo "juice_shop_request_log_lines=$js_reqs"
+          echo "flow_final=${FLOW_FINAL:-not-reached}"
+          echo "== DOCKER-USER counters at end =="
+          sudo iptables -L DOCKER-USER -n -v | sanitize
+          echo "== pentagi worker containers observed (loopback check) =="
+          docker ps -a --format '{{.Names}} {{.Ports}}' | sanitize
+          if ss -tln 2>/dev/null | grep -E ':(28[0-9]{3})\b' | grep -qv '127.0.0.1'; then
+            echo "::error::a pentagi worker published on a non-loopback address"
+          fi
+          {
+            echo "### PentAGI smoke classification"
+            echo "- flow_final: ${FLOW_FINAL:-not-reached}"
+            echo "- tasks_observed: $task_count"
+            echo "- ollama_generate_calls: $gen_calls"
+            echo "- ollama_embed_calls: $embed_calls"
+            echo "- juice_shop_request_log_lines: $js_reqs"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "${FLOW_FINAL:-}" = "finished" ] && [ "$task_count" -ge 1 ] && [ "$gen_calls" -ge 1 ]; then
+            echo "GATE: PASS (finished flow, >=1 task, >=1 model call)"
+          else
+            echo "::error::GATE: FAIL (requires finished flow + tasks + model calls; target-log lines reported separately)"
+            exit 1
+          fi
 
       - name: Teardown
         if: always()
         run: |
-          cd pentagi 2>/dev/null && docker compose down -v --remove-orphans || true
-          docker rm -f ollama juice-shop 2>/dev/null || true
+          sanitize() { sed -E \
+            -e 's/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/[REDACTED-JWT]/g' \
+            -e 's/((password|passwd|token|secret|salt|cookie|authorization|api[-_]?key)([":= -]+))[^ ",}&]+/\1[REDACTED]/gi' \
+            -e 's/(.{400}).*/\1[truncated]/'; }
+          if [ "${{ job.status }}" != "success" ]; then
+            echo "== pentagi logs tail (sanitized, failure triage only) =="
+            docker logs pentagi --tail 120 2>&1 | sanitize || true
+          fi
+          rm -f /tmp/pentagi-cookies.txt /tmp/pgpass.txt /tmp/login.out /tmp/flow.out
+          docker rm -f pentagi juice-shop ollama pgvector 2>/dev/null || true
+          docker ps -aq --filter network=pentagi-network | xargs -r docker rm -f 2>/dev/null || true
           docker network rm pentagi-network 2>/dev/null || true
+          sudo iptables -D DOCKER-USER -s 172.16.0.0/12 -d 172.16.0.0/12 -j ACCEPT -m comment --comment pentagi-smoke 2>/dev/null || true
+          while read -r ip; do
+            sudo iptables -D DOCKER-USER -s 172.16.0.0/12 -d "$ip" -j ACCEPT -m comment --comment pentagi-smoke-pull 2>/dev/null || true
+          done < /tmp/ollama_ips.txt 2>/dev/null || true
+          sudo iptables -D DOCKER-USER -s 172.16.0.0/12 -j DROP -m comment --comment pentagi-smoke 2>/dev/null || true
+          if sudo ip6tables -L DOCKER-USER >/dev/null 2>&1; then
+            sudo ip6tables -D DOCKER-USER -j DROP -m comment --comment pentagi-smoke 2>/dev/null || true
+          fi
+          sudo rm -rf /tmp/pentagi-data
