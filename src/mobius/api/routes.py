@@ -52,6 +52,13 @@ def _session():
         session.close()
 
 
+# Function scope: the commit must land before the response is sent. The default
+# ("request") scope runs teardown after the response, which let a follow-up
+# GET /scans read before the POST /scans commit was visible (War Room E2E flake:
+# the investigation list came back empty right after creation).
+SessionDep = Depends(_session, scope="function")
+
+
 def _require_scan_owner(session, scan_id: str, who: str) -> InvestigationRow:
     """Hide investigations owned by another identity behind the same 404 as missing IDs.
 
@@ -132,7 +139,7 @@ def list_gates() -> list[dict[str, object]]:
 async def upload_application(
     file: UploadFile,
     force: bool = Query(default=False),
-    session=Depends(_session),
+    session=SessionDep,
     who: str = Depends(analyst_id),
 ):
     ctx = get_context()
@@ -151,7 +158,7 @@ async def upload_application(
 @router.post("/authorizations", status_code=201, tags=["authorizations"])
 def create_authorization(
     payload: AuthorizationCreate,
-    session=Depends(_session),
+    session=SessionDep,
     who: str = Depends(analyst_id),
 ):
     ctx = get_context()
@@ -182,7 +189,7 @@ def create_authorization(
 @router.post("/scans", status_code=201, tags=["scans"])
 def create_scan(
     payload: ScanCreate,
-    session=Depends(_session),
+    session=SessionDep,
     who: str = Depends(analyst_id),
 ):
     if payload.llm_data_sharing:
@@ -207,7 +214,7 @@ def create_scan(
 
 
 @router.get("/scans", tags=["scans"])
-def list_scans(limit: int = Query(default=50, ge=1, le=200), session=Depends(_session), who: str = Depends(analyst_id)):
+def list_scans(limit: int = Query(default=50, ge=1, le=200), session=SessionDep, who: str = Depends(analyst_id)):
     """Investigations, newest first.
 
     Exists because a UI cannot show a scan it cannot list, and because the alternative -
@@ -238,14 +245,14 @@ def list_scans(limit: int = Query(default=50, ge=1, le=200), session=Depends(_se
 
 
 @router.get("/scans/{scan_id}", tags=["scans"])
-def get_scan(scan_id: str, session=Depends(_session), who: str = Depends(analyst_id)):
+def get_scan(scan_id: str, session=SessionDep, who: str = Depends(analyst_id)):
     _require_scan_owner(session, scan_id, who)
     return _scan_body(session, scan_id)
 
 
 @router.post("/scans/{scan_id}/pause", tags=["scans"])
 def pause_scan(
-    scan_id: str, payload: PauseRequest | None = None, session=Depends(_session), who: str = Depends(analyst_id)
+    scan_id: str, payload: PauseRequest | None = None, session=SessionDep, who: str = Depends(analyst_id)
 ):
     _require_scan_owner(session, scan_id, who)
     ctx = get_context()
@@ -254,7 +261,7 @@ def pause_scan(
 
 
 @router.post("/scans/{scan_id}/resume", tags=["scans"])
-def resume_scan(scan_id: str, session=Depends(_session), who: str = Depends(analyst_id)):
+def resume_scan(scan_id: str, session=SessionDep, who: str = Depends(analyst_id)):
     _require_scan_owner(session, scan_id, who)
     ctx = get_context()
     IntakeService(session, ctx.store).resume(scan_id, by=who)
@@ -262,7 +269,7 @@ def resume_scan(scan_id: str, session=Depends(_session), who: str = Depends(anal
 
 
 @router.post("/scans/{scan_id}/cancel", tags=["scans"])
-def cancel_scan(scan_id: str, session=Depends(_session), who: str = Depends(analyst_id)):
+def cancel_scan(scan_id: str, session=SessionDep, who: str = Depends(analyst_id)):
     _require_scan_owner(session, scan_id, who)
     ctx = get_context()
     IntakeService(session, ctx.store).cancel(scan_id, by=who)
@@ -274,7 +281,7 @@ def get_events(
     scan_id: str,
     after: int = Query(default=0, ge=0),
     limit: int = Query(default=200, ge=1, le=1000),
-    session=Depends(_session),
+    session=SessionDep,
     who: str = Depends(analyst_id),
 ):
     _require_scan_owner(session, scan_id, who)
@@ -299,7 +306,7 @@ def get_events(
 
 
 @router.get("/scans/{scan_id}/findings", tags=["scans"])
-def get_findings(scan_id: str, session=Depends(_session), who: str = Depends(analyst_id)):
+def get_findings(scan_id: str, session=SessionDep, who: str = Depends(analyst_id)):
     _require_scan_owner(session, scan_id, who)
     rows = (
         session.query(FindingRow)
@@ -330,7 +337,7 @@ def get_findings(scan_id: str, session=Depends(_session), who: str = Depends(ana
 
 
 @router.get("/scans/{scan_id}/hypotheses", tags=["scans"])
-def get_hypotheses(scan_id: str, session=Depends(_session), who: str = Depends(analyst_id)):
+def get_hypotheses(scan_id: str, session=SessionDep, who: str = Depends(analyst_id)):
     _require_scan_owner(session, scan_id, who)
     rows = session.query(HypothesisRow).filter(
         HypothesisRow.investigation_id == scan_id
@@ -344,7 +351,7 @@ def get_hypotheses(scan_id: str, session=Depends(_session), who: str = Depends(a
 
 
 @router.get("/scans/{scan_id}/evidence", tags=["scans"])
-def get_evidence(scan_id: str, session=Depends(_session), who: str = Depends(analyst_id)):
+def get_evidence(scan_id: str, session=SessionDep, who: str = Depends(analyst_id)):
     _require_scan_owner(session, scan_id, who)
     ctx = get_context()
     items = EvidenceService(session, ctx.store).list_for(scan_id)
@@ -367,7 +374,7 @@ def get_evidence(scan_id: str, session=Depends(_session), who: str = Depends(ana
 def set_model_consent(
     scan_id: str,
     payload: ModelConsentRequest,
-    session=Depends(_session),
+    session=SessionDep,
     who: str = Depends(analyst_id),
 ):
     """Record explicit, revocable per-investigation consent for local model processing."""
@@ -403,7 +410,7 @@ def list_nexus_actions():
 def generate_nexus_hypotheses(
     scan_id: str,
     component: str | None = Query(default=None, max_length=500),
-    session=Depends(_session),
+    session=SessionDep,
     who: str = Depends(analyst_id),
 ):
     """Generate testable hypotheses; model use is consent-gated and budgeted cumulatively."""
@@ -492,7 +499,7 @@ def _enqueue_jadx_job(scan_id: str, session, who: str):
 @router.post("/scans/{scan_id}/code/decompile", status_code=202, tags=["code"])
 def decompile_scan_code(
     scan_id: str,
-    session=Depends(_session),
+    session=SessionDep,
     who: str = Depends(analyst_id),
 ):
     """Queue the authorized APK for isolated JADX decompilation."""
@@ -502,7 +509,7 @@ def decompile_scan_code(
 @router.post("/scans/{scan_id}/code/decompile/jobs", status_code=202, tags=["code"])
 def enqueue_jadx_decompile(
     scan_id: str,
-    session=Depends(_session),
+    session=SessionDep,
     who: str = Depends(analyst_id),
 ):
     """Explicit queued-job alias for clients that prefer a /jobs resource."""
@@ -513,7 +520,7 @@ def enqueue_jadx_decompile(
 def get_jadx_decompile_job(
     scan_id: str,
     job_id: str,
-    session=Depends(_session),
+    session=SessionDep,
     who: str = Depends(analyst_id),
 ):
     _require_scan_owner(session, scan_id, who)
@@ -541,7 +548,7 @@ def get_code_classes(
     scan_id: str,
     prefix: str | None = Query(default=None, max_length=300),
     limit: int = Query(default=200, ge=1, le=5000),
-    session=Depends(_session),
+    session=SessionDep,
     who: str = Depends(analyst_id),
 ):
     _require_scan_owner(session, scan_id, who)
@@ -556,7 +563,7 @@ def get_code_methods(
     scan_id: str,
     class_name: str = Query(min_length=1, max_length=500),
     limit: int = Query(default=200, ge=1, le=500),
-    session=Depends(_session),
+    session=SessionDep,
     who: str = Depends(analyst_id),
 ):
     _require_scan_owner(session, scan_id, who)
@@ -572,7 +579,7 @@ def get_code_source(
     path: str = Query(min_length=1, max_length=1000),
     start_line: int = Query(default=1, ge=1),
     end_line: int = Query(default=40, ge=1),
-    session=Depends(_session),
+    session=SessionDep,
     who: str = Depends(analyst_id),
 ):
     _require_scan_owner(session, scan_id, who)
@@ -588,7 +595,7 @@ def get_code_source(
 def get_evidence_package(
     scan_id: str,
     component: str | None = Query(default=None, max_length=500),
-    session=Depends(_session),
+    session=SessionDep,
     who: str = Depends(analyst_id),
 ):
     """Build bounded, targeted context from this investigation's persisted evidence."""
@@ -608,7 +615,7 @@ def get_evidence_package(
 
 
 @router.post("/scans/{scan_id}/graph/rebuild", tags=["graph"])
-def rebuild_attack_graph(scan_id: str, session=Depends(_session), who: str = Depends(analyst_id)):
+def rebuild_attack_graph(scan_id: str, session=SessionDep, who: str = Depends(analyst_id)):
     """Rebuild the persisted evidence graph and candidate paths for one owned investigation."""
     _require_scan_owner(session, scan_id, who)
     from ..services.graph import GraphPersistenceService
@@ -632,7 +639,7 @@ def rebuild_attack_graph(scan_id: str, session=Depends(_session), who: str = Dep
 
 
 @router.get("/scans/{scan_id}/graph", tags=["graph"])
-def get_attack_graph(scan_id: str, session=Depends(_session), who: str = Depends(analyst_id)):
+def get_attack_graph(scan_id: str, session=SessionDep, who: str = Depends(analyst_id)):
     """Read persisted graph nodes/edges in a React Flow-compatible shape."""
     _require_scan_owner(session, scan_id, who)
     from ..services.graph import GraphPersistenceService
@@ -663,7 +670,7 @@ def post_evidence(
     kind: EvidenceKind,
     summary: str,
     content: str,
-    session=Depends(_session),
+    session=SessionDep,
     who: str = Depends(analyst_id),
 ):
     _require_scan_owner(session, scan_id, who)
@@ -682,7 +689,7 @@ def post_evidence(
 def validate(
     scan_id: str,
     payload: ValidationRequest,
-    session=Depends(_session),
+    session=SessionDep,
     who: str = Depends(analyst_id),
 ):
     _require_scan_owner(session, scan_id, who)
@@ -729,7 +736,7 @@ def validate(
 
 
 @router.post("/scans/{scan_id}/recon", tags=["scans"])
-def run_recon(scan_id: str, session=Depends(_session), who: str = Depends(analyst_id)):
+def run_recon(scan_id: str, session=SessionDep, who: str = Depends(analyst_id)):
     _require_scan_owner(session, scan_id, who)
     """Run the deterministic manifest analysis. Idempotent only in the sense that it
     refuses to run twice: re-running would duplicate observations and frontier entries."""
@@ -741,7 +748,7 @@ def run_recon(scan_id: str, session=Depends(_session), who: str = Depends(analys
 
 
 @router.post("/scans/{scan_id}/recon/jobs", status_code=202, tags=["scans"])
-def enqueue_recon_job(scan_id: str, session=Depends(_session), who: str = Depends(analyst_id)):
+def enqueue_recon_job(scan_id: str, session=SessionDep, who: str = Depends(analyst_id)):
     """Queue APK manifest decoding for the separately deployed isolated worker."""
     scan = _require_scan_owner(session, scan_id, who)
     app = session.get(ApplicationRow, scan.application_id)
@@ -764,7 +771,7 @@ def enqueue_recon_job(scan_id: str, session=Depends(_session), who: str = Depend
 
 
 @router.get("/scans/{scan_id}/recon/jobs/{job_id}", tags=["scans"])
-def get_recon_job(scan_id: str, job_id: str, session=Depends(_session), who: str = Depends(analyst_id)):
+def get_recon_job(scan_id: str, job_id: str, session=SessionDep, who: str = Depends(analyst_id)):
     _require_scan_owner(session, scan_id, who)
     job = WorkerQueue(session).get(job_id)
     if job.investigation_id != scan_id or job.kind != "recon_manifest":
@@ -785,7 +792,7 @@ def get_recon_job(scan_id: str, job_id: str, session=Depends(_session), who: str
 
 
 @router.post("/scans/{scan_id}/recon/jobs/{job_id}/apply", tags=["scans"])
-def apply_recon_job(scan_id: str, job_id: str, session=Depends(_session), who: str = Depends(analyst_id)):
+def apply_recon_job(scan_id: str, job_id: str, session=SessionDep, who: str = Depends(analyst_id)):
     _require_scan_owner(session, scan_id, who)
     job = WorkerQueue(session).get(job_id)
     if job.investigation_id != scan_id or job.kind != "recon_manifest":
@@ -812,14 +819,14 @@ def apply_recon_job(scan_id: str, job_id: str, session=Depends(_session), who: s
 
 
 @router.get("/scans/{scan_id}/surface", tags=["scans"])
-def get_surface(scan_id: str, session=Depends(_session), who: str = Depends(analyst_id)):
+def get_surface(scan_id: str, session=SessionDep, who: str = Depends(analyst_id)):
     _require_scan_owner(session, scan_id, who)
     ctx = get_context()
     return ReconService(session, ctx.store).surface(scan_id)
 
 
 @router.post("/scans/{scan_id}/spectre/jobs", status_code=202, tags=["scans"])
-def enqueue_spectre_job(scan_id: str, session=Depends(_session), who: str = Depends(analyst_id)):
+def enqueue_spectre_job(scan_id: str, session=SessionDep, who: str = Depends(analyst_id)):
     """Queue DEX indexing in the separately deployed, networkless OCI worker."""
     scan = _require_scan_owner(session, scan_id, who)
     app = session.get(ApplicationRow, scan.application_id)
@@ -842,7 +849,7 @@ def enqueue_spectre_job(scan_id: str, session=Depends(_session), who: str = Depe
 
 
 @router.get("/scans/{scan_id}/spectre/jobs/{job_id}", tags=["scans"])
-def get_spectre_job(scan_id: str, job_id: str, session=Depends(_session), who: str = Depends(analyst_id)):
+def get_spectre_job(scan_id: str, job_id: str, session=SessionDep, who: str = Depends(analyst_id)):
     _require_scan_owner(session, scan_id, who)
     job = WorkerQueue(session).get(job_id)
     if job.investigation_id != scan_id or job.kind != "dex_index":
@@ -864,7 +871,7 @@ def get_spectre_job(scan_id: str, job_id: str, session=Depends(_session), who: s
 
 
 @router.post("/scans/{scan_id}/spectre/jobs/{job_id}/apply", tags=["scans"])
-def apply_spectre_job(scan_id: str, job_id: str, session=Depends(_session), who: str = Depends(analyst_id)):
+def apply_spectre_job(scan_id: str, job_id: str, session=SessionDep, who: str = Depends(analyst_id)):
     scan = _require_scan_owner(session, scan_id, who)
     job = WorkerQueue(session).get(job_id)
     if job.investigation_id != scan_id or job.kind != "dex_index":
@@ -903,7 +910,7 @@ def apply_spectre_job(scan_id: str, job_id: str, session=Depends(_session), who:
 
 
 @router.post("/scans/{scan_id}/spectre", tags=["scans"])
-def run_spectre(scan_id: str, session=Depends(_session), who: str = Depends(analyst_id)):
+def run_spectre(scan_id: str, session=SessionDep, who: str = Depends(analyst_id)):
     _require_scan_owner(session, scan_id, who)
     """Run code analysis: build a call graph, search for sink reachability, ask the gate.
 
@@ -927,7 +934,7 @@ def run_spectre(scan_id: str, session=Depends(_session), who: str = Depends(anal
 def run_nexus(
     scan_id: str,
     max_steps: int | None = Query(default=None, ge=1, le=200),
-    session=Depends(_session),
+    session=SessionDep,
     who: str = Depends(analyst_id),
 ):
     _require_scan_owner(session, scan_id, who)
@@ -959,7 +966,7 @@ def run_nexus(
 @router.post("/scans/{scan_id}/poc/approvals", status_code=201, tags=["poc"])
 def request_poc_approval(
     scan_id: str, payload: PoCApprovalRequest,
-    session=Depends(_session), who: str = Depends(analyst_id),
+    session=SessionDep, who: str = Depends(analyst_id),
 ):
     _require_scan_owner(session, scan_id, who)
     plan = PoCTestPlan.model_validate(payload.plan)
@@ -978,7 +985,7 @@ def request_poc_approval(
 @router.post("/scans/{scan_id}/poc/approvals/{approval_id}/resolve", tags=["poc"])
 def resolve_poc_approval(
     scan_id: str, approval_id: str, payload: PoCApprovalDecision,
-    session=Depends(_session), who: str = Depends(analyst_id),
+    session=SessionDep, who: str = Depends(analyst_id),
 ):
     _require_scan_owner(session, scan_id, who)
     try:
@@ -994,7 +1001,7 @@ def resolve_poc_approval(
 @router.post("/scans/{scan_id}/poc/approvals/{approval_id}/cancel", tags=["poc"])
 def cancel_poc_approval(
     scan_id: str, approval_id: str,
-    session=Depends(_session), who: str = Depends(analyst_id),
+    session=SessionDep, who: str = Depends(analyst_id),
 ):
     _require_scan_owner(session, scan_id, who)
     try:
@@ -1009,7 +1016,7 @@ def cancel_poc_approval(
 @router.post("/scans/{scan_id}/poc/execute", tags=["poc"])
 def execute_poc(
     scan_id: str, payload: PoCTestPlan,
-    session=Depends(_session), who: str = Depends(analyst_id),
+    session=SessionDep, who: str = Depends(analyst_id),
 ):
     _require_scan_owner(session, scan_id, who)
     if payload.investigation_id != scan_id:
@@ -1023,7 +1030,7 @@ def execute_poc(
 
 @router.post("/scans/{scan_id}/poc/plans/{plan_id}/cancel", tags=["poc"])
 def cancel_poc_execution(
-    scan_id: str, plan_id: str, session=Depends(_session), who: str = Depends(analyst_id),
+    scan_id: str, plan_id: str, session=SessionDep, who: str = Depends(analyst_id),
 ):
     _require_scan_owner(session, scan_id, who)
     if not request_poc_cancel(plan_id):
@@ -1035,7 +1042,7 @@ def cancel_poc_execution(
 
 
 @router.get("/scans/{scan_id}/poc/runs", tags=["poc"])
-def list_poc_runs(scan_id: str, session=Depends(_session), who: str = Depends(analyst_id)):
+def list_poc_runs(scan_id: str, session=SessionDep, who: str = Depends(analyst_id)):
     _require_scan_owner(session, scan_id, who)
     rows = session.query(PoCRunRow).filter(
         PoCRunRow.investigation_id == scan_id
@@ -1056,7 +1063,7 @@ def list_poc_runs(scan_id: str, session=Depends(_session), who: str = Depends(an
 
 
 @router.post("/scans/{scan_id}/report", tags=["scans"])
-def write_report(scan_id: str, session=Depends(_session), who: str = Depends(analyst_id)):
+def write_report(scan_id: str, session=SessionDep, who: str = Depends(analyst_id)):
     _require_scan_owner(session, scan_id, who)
     """Write the investigation report and store it as evidence.
 
@@ -1069,7 +1076,7 @@ def write_report(scan_id: str, session=Depends(_session), who: str = Depends(ana
 
 
 @router.get("/scans/{scan_id}/report", tags=["scans"], response_class=PlainTextResponse)
-def get_report(scan_id: str, session=Depends(_session), who: str = Depends(analyst_id)):
+def get_report(scan_id: str, session=SessionDep, who: str = Depends(analyst_id)):
     _require_scan_owner(session, scan_id, who)
     """The most recently written report, as Markdown.
 

@@ -9,7 +9,7 @@ description = "MOBIUS - evidence-driven Android security investigation platform"
 requires-python = ">=3.11"
 dependencies = [
     "pydantic>=2.7",
-    "fastapi>=0.110",
+    "fastapi>=0.121",
     "uvicorn[standard]>=0.29",
     "sqlalchemy>=2.0",
     "python-multipart>=0.0.9",
