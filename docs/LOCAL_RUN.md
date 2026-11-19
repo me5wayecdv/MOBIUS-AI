@@ -19,7 +19,7 @@ indexing, SPECTRE reachability, NEXUS investigation, attack graph, PoC lab
 Prerequisites: Docker with the Compose plugin (`docker compose version`).
 
 ```sh
-docker compose up --build
+docker compose up --build --detach
 scripts/healthcheck.sh          # waits for http://127.0.0.1:8000/api/v1/health
 ```
 
@@ -76,10 +76,11 @@ export MOBIUS_MODEL_NAME=qwen2.5:1.5b
 Then grant consent per scan and request hypotheses:
 
 ```sh
+SCAN_ID=<your scan id>
 curl -fsS -X PUT -H 'Content-Type: application/json' \
-  http://127.0.0.1:8000/api/v1/scans/<scan_id>/model-consent \
+  "http://127.0.0.1:8000/api/v1/scans/$SCAN_ID/model-consent" \
   -d '{"enabled": true, "provider": "ollama"}'
-curl -fsS -X POST http://127.0.0.1:8000/api/v1/scans/<scan_id>/nexus/hypotheses
+curl -fsS -X POST "http://127.0.0.1:8000/api/v1/scans/$SCAN_ID/nexus/hypotheses"
 ```
 
 Budget: every scan carries a default budget of 400,000 model tokens
@@ -106,25 +107,13 @@ container), with the cache directory shared between that host and wherever
 the API reads it (`MOBIUS_JADX_CACHE_ROOT`; see
 docs/ISOLATED_JADX_WORKER.md).
 
-On a host with Docker, build the worker image locally - no registry
-publication is needed:
-
-```sh
-docker build -f workers/jadx-image/Dockerfile -t mobius-jadx:local workers/jadx-image
-# Local images have no registry digest; the only validator-accepted local
-# form is name@image-ID (the image ID is a content hash and passes the
-# immutable-reference check in worker/runner.py, <name>@sha256:<64 hex>):
-docker image inspect --format='mobius-jadx@{{.Id}}' mobius-jadx:local
-export MOBIUS_JADX_IMAGE=mobius-jadx@sha256:<id from the command above>
-# UNVERIFIED: format acceptance by the validator is confirmed in code, but
-# whether `docker run` resolves a local name@sha256:<image-ID> reference was
-# NOT exercised (no Docker host where this was prepared). If your runtime
-# rejects it, the fallback is pushing the image to a registry you control and
-# pinning its real RepoDigest. Verify once on the demo host.
-```
-
-GHCR publication of the JADX image remains a manual, owner-gated workflow
-and is not part of local delivery.
+The only reference form the validator accepts is a real registry digest
+(`<repo>@sha256:<64 hex>`): build the image, push it to a registry you
+control, and pin its RepoDigest. Obtaining and resolving that reference is
+part of the separate validated host setup above - there is no verified
+local-image shortcut, and none is documented here. GHCR publication of the
+JADX image remains a manual, owner-gated workflow and is not part of local
+delivery; the JADX image stays unpublished.
 
 ## Verification status (2026-11-19)
 
