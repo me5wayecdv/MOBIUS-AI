@@ -127,8 +127,9 @@ delivery; the JADX image stays unpublished.
   executed. No Docker host was available; validate before demo.
 - CI smoke workflow: `scripts/local-delivery-smoke.yml` is a minimal
   startup smoke (intake + persistence + UI shell), not a pipeline run.
-  Moving it into `.github/workflows/` requires a token with the `workflow`
-  scope (a one-time owner step; the automation token used here lacks it).
+  Moving it into `.github/workflows/` requires the `workflow` scope, which
+  the automation token used here lacks; activation is pending via the
+  authorized account route.
 
 ## Known limits (unchanged by this delivery)
 
