@@ -1,0 +1,72 @@
+# Ready-to-enable CI smoke for the local delivery stack.
+# To activate: move this file to .github/workflows/local-delivery-smoke.yml
+# (requires a token with the `workflow` scope or the GitHub web UI).
+name: Local delivery smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Dockerfile
+      - docker-compose.yml
+      - scripts/healthcheck.sh
+      - docs/LOCAL_RUN.md
+      - .github/workflows/local-delivery-smoke.yml
+  pull_request:
+    paths:
+      - Dockerfile
+      - docker-compose.yml
+      - scripts/healthcheck.sh
+      - docs/LOCAL_RUN.md
+      - .github/workflows/local-delivery-smoke.yml
+
+concurrency:
+  group: local-delivery-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  compose-smoke:
+    name: docker compose stack serves a real scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build and start the local delivery stack
+        run: docker compose up --build --detach
+
+      - name: Wait for the API healthcheck
+        run: scripts/healthcheck.sh http://127.0.0.1:8000 120
+
+      - name: Run the minimal real journey
+        run: |
+          set -euo pipefail
+          python scripts/seed_demo_apk.py
+          APK=frontend/e2e/fixtures/demo-lab.apk
+          SHA=$(sha256sum "$APK" | cut -d' ' -f1)
+          APP=$(curl -fsS -F "file=@$APK;type=application/vnd.android.package-archive" http://127.0.0.1:8000/api/v1/applications)
+          APP_ID=$(printf '%s' "$APP" | jq -r .id)
+          AUTH=$(curl -fsS -X POST -H 'Content-Type: application/json' http://127.0.0.1:8000/api/v1/authorizations -d "{
+            \"apk_sha256\": \"$SHA\",
+            \"target_package\": \"com.example.lab\",
+            \"scope_text\": \"CI smoke: synthetic lab fixture, static analysis only.\",
+            \"statement\": \"Compose smoke test.\",
+            \"max_intensity\": 0,
+            \"expires_at\": \"2030-01-01T00:00:00Z\"}")
+          AUTH_ID=$(printf '%s' "$AUTH" | jq -r .id)
+          SCAN=$(curl -fsS -X POST -H 'Content-Type: application/json' http://127.0.0.1:8000/api/v1/scans -d "{
+            \"application_id\": \"$APP_ID\",
+            \"authorization_id\": \"$AUTH_ID\",
+            \"objective\": \"compose smoke\",
+            \"intensity\": 0}")
+          SCAN_ID=$(printf '%s' "$SCAN" | jq -r .id)
+          curl -fsS "http://127.0.0.1:8000/api/v1/scans/$SCAN_ID" | jq '{id, status}'
+          curl -fsS http://127.0.0.1:8000/ | grep -qi 'war room\|MOBIUS'
+
+      - name: Show container logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
