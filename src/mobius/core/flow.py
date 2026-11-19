@@ -135,6 +135,9 @@ class CallRecord:
     is_static: bool
     arg_origins: tuple[frozenset, ...]
     opcode: str = ""
+    #: scan-local invoke id, shared with ("res", id) move-result origins so a
+    #: consumer can pair a call-return origin with the call that produced it.
+    invoke_id: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -246,7 +249,8 @@ def _scan_block(
             pending = key_seed[0]
             if calls is not None:
                 calls.append(CallRecord(ins.offset, cls, name, ins.invoke_descriptor,
-                                        ins.is_static, arg_origins, ins.opcode))
+                                        ins.is_static, arg_origins, ins.opcode,
+                                        invoke_id=key_seed[0]))
             if sink_args is not None and sink_flows is not None:
                 positions = sink_args.get((cls, name, ins.invoke_descriptor))
                 if positions is None:
