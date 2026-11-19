@@ -130,7 +130,7 @@ def test_required_evidence_is_declared_before_evaluation():
 
 
 def test_gate_catalogue_is_complete():
-    assert len(gates.all_categories()) == 10
+    assert len(gates.all_categories()) == 11
     for gate in gates.GATES.values():
         assert gate.clauses, f"{gate.category} has no clauses - it would pass vacuously"
         assert gate.maswe or gate.masvs, f"{gate.category} has no standards mapping"

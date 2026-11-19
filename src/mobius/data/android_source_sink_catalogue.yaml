@@ -220,6 +220,66 @@ sinks:
     impact: integrity
     description: Executes SQL; attacker influence over query construction must be proven
     references: [MASTG-TEST-0339]
+  - id: sql-exec
+    class_descriptor: Landroid/database/sqlite/SQLiteDatabase;
+    method: execSQL
+    family: sql
+    maswe: [MASWE-0050]
+    masvs: [MASVS-CODE-4]
+    confidence: low
+    impact: integrity
+    description: Executes a raw SQL statement; attacker influence over the statement must be proven
+    references: [MASTG-TEST-0339]
+  - id: sql-query-selection
+    class_descriptor: Landroid/database/sqlite/SQLiteDatabase;
+    method: query
+    family: sql
+    maswe: [MASWE-0050]
+    masvs: [MASVS-CODE-4]
+    confidence: low
+    impact: confidentiality
+    description: Runs a query whose selection argument is raw SQL predicate syntax; caller control of the predicate must be proven
+    references: [MASTG-TEST-0339]
+  - id: sql-update-where
+    class_descriptor: Landroid/database/sqlite/SQLiteDatabase;
+    method: update
+    family: sql
+    maswe: [MASWE-0050]
+    masvs: [MASVS-CODE-4]
+    confidence: low
+    impact: integrity
+    description: Updates rows matching a whereClause argument that is raw SQL predicate syntax; caller control must be proven
+    references: [MASTG-TEST-0339]
+  - id: sql-delete-where
+    class_descriptor: Landroid/database/sqlite/SQLiteDatabase;
+    method: delete
+    family: sql
+    maswe: [MASWE-0050]
+    masvs: [MASVS-CODE-4]
+    confidence: low
+    impact: integrity
+    description: Deletes rows matching a whereClause argument that is raw SQL predicate syntax; caller control must be proven
+    references: [MASTG-TEST-0339]
+  - id: sql-querybuilder-appendwhere
+    class_descriptor: Landroid/database/sqlite/SQLiteQueryBuilder;
+    method: appendWhere
+    family: sql
+    maswe: [MASWE-0050]
+    masvs: [MASVS-CODE-4]
+    confidence: low
+    impact: confidentiality
+    description: Appends a raw SQL predicate fragment to a query under construction; caller control must be proven
+    references: [MASTG-TEST-0339]
+  - id: sql-querybuilder-query
+    class_descriptor: Landroid/database/sqlite/SQLiteQueryBuilder;
+    method: query
+    family: sql
+    maswe: [MASWE-0050]
+    masvs: [MASVS-CODE-4]
+    confidence: low
+    impact: confidentiality
+    description: Runs a query whose selection argument is raw SQL predicate syntax; caller control must be proven
+    references: [MASTG-TEST-0339]
 guards:
   - id: check-calling-permission
     class_descriptor: Landroid/content/Context;

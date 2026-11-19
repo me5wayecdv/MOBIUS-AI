@@ -121,6 +121,30 @@ _GATES: tuple[Gate, ...] = (
         ),
     ),
     Gate(
+        category="exported-provider-unprotected-sink",
+        title="Exported provider operation reaches a database sink with no permission",
+        maswe=("MASWE-0029",),
+        masvs=("MASVS-PLATFORM-3",),
+        severity_hint=Severity.HIGH,
+        clauses=(
+            Clause("exported", "The provider is reachable by another app", _is_true),
+            Clause("permission", "No effective operation permission guards it", _is_empty,
+                   absence_is_evidence=True),
+            Clause(
+                "caller_check_absent",
+                "No enforcing runtime caller verification on the operation's sink paths",
+                _is_true,
+            ),
+            Clause("sink_reachable", "Caller-controlled input reaches a database sink", _is_true),
+            Clause(
+                "data_boundary_crossed",
+                "The exposed data is not an intentionally public, non-sensitive "
+                "surface (sensitivity/data-boundary evidence, not exported+SQL alone)",
+                _is_true,
+            ),
+        ),
+    ),
+    Gate(
         category="hardcoded-secret",
         title="Hardcoded credential used in a security context",
         maswe=("MASWE-0001",),
