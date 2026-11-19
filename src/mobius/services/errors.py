@@ -84,3 +84,13 @@ class MissingEvidence(DomainError):
 class ValidatorMustDiffer(DomainError):
     code = "VALIDATOR_MUST_DIFFER"
     http_status = 409
+
+
+class ModelConsentRequiredError(DomainError):
+    code = "MODEL_CONSENT_REQUIRED"
+    http_status = 409
+
+
+class ModelOutputInvalidError(DomainError):
+    code = "MODEL_OUTPUT_INVALID"
+    http_status = 422

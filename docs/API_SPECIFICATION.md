@@ -42,6 +42,8 @@ explains intent; the generated schema is normative. Any divergence is a bug.
 | `EVIDENCE_DANGLING` | 500 | Integrity violation; should be impossible, surfaced loudly |
 | `IDEMPOTENCY_CONFLICT` | 409 | Same key, different body |
 | `CODE_INDEX_FAILED` | 422 | The APK has no readable `classes.dex`, or androguard could not parse it |
+| `MODEL_CONSENT_REQUIRED` | 409 | A model-backed route was called without the required per-investigation consent, gateway, or a reviewer model that differs from the producer |
+| `MODEL_OUTPUT_INVALID` | 422 | Model output failed schema/integrity validation, or review input was not usable |
 
 ## 2a. War Room
 
@@ -334,7 +336,19 @@ Includes `required_evidence` vs `satisfied_evidence` so the UI can show *why* so
 this is the most informative view in the product.
 
 #### `GET /scans/{id}/decisions?after=`
-The audit trail of choices, including rejected alternatives.
+The audit trail of choices, including rejected alternatives and full model provenance
+(provider, requested/actual model, role, prompt version, prompt/input/schema/response
+SHA-256, validated output, token usage, latency, generation parameters). Deterministic
+decisions record no provider/model. `after` takes a DecisionRow id and returns only later
+rows (creation order). Owner-scoped.
+
+#### `POST /scans/{id}/findings/{finding_id}/veritas-review?producer_model_id=`
+Runs the advisory VERITAS challenge (D-026) against one finding of this scan:
+a different, provider-resolved model reviews the finding confined to its persisted
+evidence references. Consent-gated (`PUT /scans/{id}/model-consent`), budgeted, and
+persisted with DecisionRow/event provenance. Advisory only: deterministic gates remain
+the sole verdict authority. Fails closed with `MODEL_CONSENT_REQUIRED` when no model
+gateway/consent is in place, and 404 when the finding is not part of this scan.
 
 #### `GET /scans/{id}/findings?status=&severity=`
 ```json
