@@ -1,9 +1,8 @@
-# Ready-to-enable CI smoke for the local delivery stack.
+# CI startup smoke for the local delivery stack.
 # Scope: minimal STARTUP smoke only - intake (upload/authorization/scan),
 # persistence (scan GET), and the UI shell. It does NOT run the analysis
-# pipeline; it proves the stack boots and serves, nothing more.
-# To activate: move this file to .github/workflows/local-delivery-smoke.yml
-# (requires a token with the `workflow` scope or the GitHub web UI).
+# pipeline; it proves the stack boots and serves, nothing more. The worker
+# pipeline itself is covered by worker-pipeline-smoke.yml.
 name: Local delivery startup smoke
 
 on:
