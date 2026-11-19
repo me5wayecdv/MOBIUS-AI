@@ -104,6 +104,70 @@ test("D-056: upload → investigation → evidence → graph → PoC → report;
   expect((after.items || []).map(e => e.seq)).toEqual((before.items || []).map(e => e.seq));
   await page.screenshot({ path: shots + "/d056-06-refresh-replay.png", fullPage: true });
 
+  await page.goto("/ui?scan_id=" + scanId);
+  const decisionPanel = page.locator("#d056");
+  await expect(decisionPanel).toContainText("NEXUS · enumerate_entrypoints");
+  await expect(decisionPanel).toContainText("deterministic · no model");
+  await expect(decisionPanel).toContainText("VERITAS · review_finding");
+  await expect(decisionPanel).toContainText("ADVISORY REVIEW");
+  await expect(decisionPanel).toContainText("challenge");
+  await expect(decisionPanel).toContainText("PRODUCER BINDING UNVERIFIED");
+  await expect(decisionPanel).toContainText("FIXTURE DATA · SEEDED · NOT A REAL REVIEW");
+  await expect(decisionPanel).toContainText("Fixture review summary");
+  await expect(decisionPanel).toContainText("caller-check absence");
+  await expect(decisionPanel).toContainText("mock/fixture-reviewer");
+  await expect(decisionPanel).toContainText("2 PERSISTED DECISIONS");
+  const panelOrder = await page.evaluate(() => [...document.querySelectorAll("section.panel")].map(s => s.id));
+  expect(panelOrder.indexOf("d055")).toBeLessThan(panelOrder.indexOf("d056"));
+  await decisionPanel.scrollIntoViewIfNeeded();
+  expect((await decisionPanel.boundingBox()).y).toBeGreaterThanOrEqual(60);
+
+  // Live refresh: decisions persisted after initial load must appear without a manual reload.
+  const refreshed = spawnSync("python", ["../scripts/seed_war_room_fixture.py", scanId], {
+    encoding: "utf8",
+    env: process.env,
+  });
+  if (refreshed.status !== 0) throw new Error("post-load fixture seeding failed: " + refreshed.stderr);
+  await expect(decisionPanel).toContainText("4 PERSISTED DECISIONS", { timeout: 15000 });
+  await expect(page.locator("#decision-list .event.decision")).toHaveCount(4);
+
+  // Stale-load guard: scan A decisions in flight during a switch must not land in scan B's panel.
+  const scanInfo = await apiJson(request, "/scans/" + scanId);
+  const scan2 = await apiJson(request, "/scans", { method: "POST", data: { application_id: scanInfo.application_id, authorization_id: scanInfo.authorization_id, objective: "Second investigation for async isolation testing.", intensity: 0 } });
+  await apiJson(request, "/scans/" + scan2.id + "/evidence?kind=tool-output&summary=scan2%20fixture%20evidence&content=scan2%20synthetic%20evidence", { method: "POST" });
+  const seeded2 = spawnSync("python", ["../scripts/seed_war_room_fixture.py", scan2.id], {
+    encoding: "utf8",
+    env: process.env,
+  });
+  if (seeded2.status !== 0) throw new Error("second fixture seeding failed: " + seeded2.stderr);
+  const delayedContinue = async route => {
+    await new Promise(r => setTimeout(r, 1500));
+    await route.continue().catch(() => {}); // navigation may abort an in-flight delayed request
+  };
+  await page.route("**/api/v1/scans/" + scanId + "/decisions**", delayedContinue);
+  await page.route("**/api/v1/scans/" + scan2.id + "/decisions**", delayedContinue);
+  await page.goto("/ui?scan_id=" + scanId);
+  await expect(page.locator("#scan-select")).toHaveValue(scanId);
+  await page.selectOption("#scan-select", scan2.id);
+  // Selection invalidates decision state immediately: old rows and cursor text are gone
+  // during the asynchronous base load, before any new-scan response arrives.
+  await expect(page.locator("#decision-list")).toContainText("Loading persisted decisions");
+  await expect(decisionPanel).not.toContainText(fixture.evidence_id);
+  await expect(decisionPanel).toContainText("2 PERSISTED DECISIONS");
+  await page.waitForTimeout(2500); // delayed scan-A response arrives now and must be discarded
+  await expect(page.locator("#decision-list .event.decision")).toHaveCount(2);
+  await expect(decisionPanel).not.toContainText(fixture.evidence_id);
+  // Overlapping refresh calls must not duplicate rows.
+  await page.evaluate(() => { refreshDecisions(); refreshDecisions(); refreshDecisions(); });
+  await page.waitForTimeout(500);
+  await expect(page.locator("#decision-list .event.decision")).toHaveCount(2);
+  await page.evaluate(() => { clearInterval(refreshTimer); refreshTimer = null; });
+  await page.waitForTimeout(1800); // let any delayed in-flight route handler settle
+  await page.unroute("**/api/v1/scans/" + scanId + "/decisions**");
+  await page.unroute("**/api/v1/scans/" + scan2.id + "/decisions**");
+  await page.goto("/ui?scan_id=" + scanId);
+  await expect(decisionPanel).toContainText("4 PERSISTED DECISIONS");
+
   for (const viewport of [{ width: 1280, height: 900, label: "desktop" }, { width: 390, height: 844, label: "mobile" }]) {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await page.reload();
@@ -115,6 +179,7 @@ test("D-056: upload → investigation → evidence → graph → PoC → report;
       ["d053", "d053-code-studio"],
       ["d054", "d054-attack-graph"],
       ["d055", "d055-poc-report"],
+      ["d056", "d056-decisions"],
     ]) {
       const panel = page.locator("#" + id);
       await panel.scrollIntoViewIfNeeded();
