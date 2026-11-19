@@ -104,7 +104,6 @@ jobs:
           MOBIUS_WORKSPACE_ROOT: ${{ github.workspace }}/.pipeline-data/workspaces
           MOBIUS_RECON_IMAGE: ghcr.io/me5wayecdv/mobius-recon@sha256:3874d22044f2452360e7bd94773ab9f8e4979f1fdc0adffd8f40f6fcfde9e789
           MOBIUS_DEX_IMAGE: ghcr.io/me5wayecdv/mobius-dex@sha256:3ea8feba92f374825a60e75a94c557584a29a280f2c32b8bb2ec5535929f3f02
-          MOBIUS_OCI_RUNTIME: docker
         run: |
           set -euo pipefail
           mkdir -p "$MOBIUS_ARTIFACT_ROOT" "$MOBIUS_WORKSPACE_ROOT"
@@ -112,7 +111,8 @@ jobs:
           python -m uvicorn mobius.api.app:create_app --factory --host 127.0.0.1 --port 8000 > api.log 2>&1 &
           echo $! > api.pid
           scripts/healthcheck.sh http://127.0.0.1:8000 120
-          MOBIUS_WORKER_DB_URL="$MOBIUS_DB_URL" python -m mobius.worker.runner > worker.log 2>&1 &
+          # OciBackend requires an absolute runtime path; resolve it on the runner.
+          MOBIUS_OCI_RUNTIME="$(command -v docker)" MOBIUS_WORKER_DB_URL="$MOBIUS_DB_URL" python -m mobius.worker.runner > worker.log 2>&1 &
           echo $! > worker.pid
 
       - name: Drive intake and the RECON + DEX worker jobs
