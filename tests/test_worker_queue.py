@@ -133,3 +133,45 @@ def test_worker_queue_refuses_jadx_job_without_surface_ready_state(session, stor
     scan, app = _recon_job(session, store, future_iso)
     with pytest.raises(Exception, match="requires SURFACE_READY state"):
         WorkerQueue(session).enqueue_jadx_decompile(scan.id, app.artifact_key)
+
+
+def test_worker_queue_enqueues_and_claims_provider_analysis_job(session, store, future_iso):
+    scan, app = _recon_job(session, store, future_iso)
+    session.get(InvestigationRow, scan.id).state = "SURFACE_READY"
+    session.flush()
+    queue = WorkerQueue(session)
+
+    job = queue.enqueue_provider_analysis(scan.id, app.artifact_key)
+    assert job.kind == "provider_analysis"
+    assert job.status == "queued"
+
+    claimed = queue.claim("provider-worker")
+    assert claimed is not None
+    assert claimed.id == job.id
+    assert claimed.kind == "provider_analysis"
+    assert claimed.status == "running"
+
+
+def test_worker_queue_prevents_duplicate_unapplied_provider_jobs(session, store, future_iso):
+    scan, app = _recon_job(session, store, future_iso)
+    session.get(InvestigationRow, scan.id).state = "SURFACE_READY"
+    session.flush()
+    queue = WorkerQueue(session)
+    queue.enqueue_provider_analysis(scan.id, app.artifact_key)
+
+    with pytest.raises(Exception, match="already active"):
+        queue.enqueue_provider_analysis(scan.id, app.artifact_key)
+
+
+def test_worker_queue_refuses_provider_job_without_surface_ready_state(session, store, future_iso):
+    scan, app = _recon_job(session, store, future_iso)
+    with pytest.raises(Exception, match="requires SURFACE_READY state"):
+        WorkerQueue(session).enqueue_provider_analysis(scan.id, app.artifact_key)
+
+
+def test_worker_queue_refuses_provider_job_for_a_different_artifact(session, store, future_iso):
+    scan, app = _recon_job(session, store, future_iso)
+    session.get(InvestigationRow, scan.id).state = "SURFACE_READY"
+    session.flush()
+    with pytest.raises(Exception, match="does not match the investigation APK"):
+        WorkerQueue(session).enqueue_provider_analysis(scan.id, "sha256:other")

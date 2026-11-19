@@ -5,6 +5,8 @@ queries investigations, users, authorizations, findings, evidence, or event tabl
 """
 from __future__ import annotations
 
+import hashlib
+
 import os
 import re
 import socket
@@ -15,12 +17,14 @@ from pydantic import BaseModel, ConfigDict
 
 from ..adapters.db import make_engine, make_session_factory
 from ..services.artifacts import ArtifactStore
+from ..services.errors import ScanStateConflict
 from ..services.oci_backend import OciBackend
 from ..services.tool_runner import ToolLimits, ToolRunner, ToolSpec
 from ..services.worker_queue import WorkerQueue
 
 _RECON_BINARY = "/usr/local/bin/mobius-recon-manifest"
 _DEX_BINARY = "/usr/local/bin/mobius-dex-index"
+_PROVIDER_BINARY = "/usr/local/bin/mobius-provider-analysis"
 
 
 class EmptyArgs(BaseModel):
@@ -66,6 +70,23 @@ def _tool_for(kind: str, runtime: str) -> tuple[str, str, ToolSpec]:
             limits=ToolLimits(
                 timeout_seconds=900, memory_mb=4096, cpu_seconds=600,
                 max_output_bytes=19 * 1024 * 1024, network_enabled=False,
+            ),
+        )
+        return binary, image, spec
+    if kind == "provider_analysis":
+        binary = _PROVIDER_BINARY
+        image = _required("MOBIUS_PROVIDER_IMAGE")
+        if not re.fullmatch(r"[A-Za-z0-9./:_-]+@sha256:[0-9a-f]{64}", image):
+            raise ValueError("worker images must be immutable sha256 digest references")
+        spec = ToolSpec(
+            name="provider_analysis",
+            binary=binary,
+            version="mobius-provider-analysis-v1",
+            args_model=EmptyArgs,
+            build_argv=lambda _args: (binary, "--input", "/work/input.apk"),
+            limits=ToolLimits(
+                timeout_seconds=900, memory_mb=4096, cpu_seconds=600,
+                max_output_bytes=6 * 1024 * 1024, network_enabled=False,
             ),
         )
         return binary, image, spec
@@ -119,6 +140,10 @@ def run_once() -> bool:
     input_path: Path | None = None
     try:
         payload = ArtifactStore(artifact_root).get(artifact_key)
+        # Host-side anchor: digest of the exact bytes the container will see,
+        # computed before and outside the container. Stored with the result so
+        # the API can compare it against its own anchors at apply time.
+        staged_sha256 = hashlib.sha256(payload).hexdigest()
         workspace_root.mkdir(parents=True, exist_ok=True)
         workspace = workspace_root / scan_id
         if workspace.is_symlink():
@@ -156,12 +181,23 @@ def run_once() -> bool:
                 if not isinstance(value, dict) or value.get("schema_version") != 1:
                     raise RuntimeError("isolated DEX worker returned an unsupported result schema")
                 output = value
+            elif kind == "provider_analysis":
+                # Same split as dex_index: syntax + schema marker here; the API
+                # applies full schema, bounds and artifact-digest validation.
+                import json
+                value = json.loads(result.stdout.decode("utf-8", errors="strict"))
+                if not isinstance(value, dict) or value.get("schema_version") != 1:
+                    raise RuntimeError(
+                        "isolated provider-analysis worker returned an unsupported result schema"
+                    )
+                output = value
             else:  # defensive: _tool_for is the closed registry
                 raise RuntimeError(f"unsupported worker job kind: {kind}")
 
         session = factory()
         try:
-            WorkerQueue(session).succeed(job_id, worker_id, output)
+            WorkerQueue(session).succeed(job_id, worker_id, output,
+                                         staged_sha256=staged_sha256)
             session.commit()
         except Exception:
             session.rollback()
@@ -173,6 +209,11 @@ def run_once() -> bool:
         try:
             WorkerQueue(session).fail(job_id, worker_id, type(exc).__name__, str(exc))
             session.commit()
+        except ScanStateConflict:
+            # Ownership was lost (lease expired, job reclaimed): the new owner
+            # decides this job's outcome. A late result must not crash the
+            # error path or overwrite another worker's state.
+            session.rollback()
         except Exception:
             session.rollback()
             raise

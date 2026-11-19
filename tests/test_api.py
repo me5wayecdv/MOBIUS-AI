@@ -56,7 +56,7 @@ def test_health_reports_capabilities_not_optimism(client):
 
 def test_gate_catalogue_is_exposed_before_a_scan(client):
     gates = client.get("/api/v1/gates").json()
-    assert len(gates) == 10
+    assert len(gates) == 11
     exported = next(g for g in gates if g["category"] == "exported-component-no-permission")
     assert exported["required_evidence"] == ["exported", "permission", "caller_check_absent", "sink_reachable"]
     assert exported["maswe"] == ["MASWE-0029"]
@@ -683,3 +683,481 @@ def test_isolated_dex_job_rejects_worker_result_for_different_apk(client, ctx):
     )
     assert response.status_code == 422
     assert response.json()["code"] == "CODE_INDEX_FAILED"
+
+
+def _provider_manifest() -> str:
+    return """<manifest package='com.example' xmlns:android='http://schemas.android.com/apk/res/android'>
+  <application>
+    <provider android:name='.NotesProvider' android:authorities='com.example.notes' android:exported='true'/>
+  </application>
+</manifest>"""
+
+
+def test_provider_analysis_validates_exported_provider(client):
+    app = _upload(client, data=make_apk(manifest=_provider_manifest())).json()
+    auth = _authorize(client, app["sha256"]).json()
+    scan = _scan(client, app["id"], auth["id"]).json()
+
+    resp = client.post(f"/api/v1/scans/{scan['id']}/provider-analysis")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["providers"] == 1
+    assert len(body["results"]) == 2  # one finding per operation (read + write)
+    for result in body["results"]:
+        # The fake classes.dex does not parse, so code coverage is partial:
+        # protection is evidenced (unprotected) but caller-check and sink
+        # clauses stay unknown -> manual review, never guessed either way.
+        assert result["attributes"] == {"exported": True, "permission": None}
+        assert result["verdict"] == "insufficient_evidence"
+        assert result["finding_status"] == "manual_review_required"
+
+    findings = client.get(f"/api/v1/scans/{scan['id']}/findings").json()["items"]
+    assert len(findings) == 2
+    assert {f["category"] for f in findings} == {"exported-provider-unprotected-sink"}
+
+    # the ARCHIVIST report is composed from the same findings: write it, then
+    # read it back and confirm the provider analysis is visible there.
+    written = client.post(f"/api/v1/scans/{scan['id']}/report")
+    assert written.status_code == 200, written.text
+    report = client.get(f"/api/v1/scans/{scan['id']}/report")
+    assert report.status_code == 200, report.text
+    assert "com.example.NotesProvider" in report.text
+
+
+def _provider_worker_payload(sha, package="com.example", methods=3, ledger=None,
+                             caller_check_absent=True, operations=("read",)):
+    """Hand-built worker payload: lets tests tamper with exactly one field."""
+    ops = [
+        {
+            "operation": name,
+            "protection_status": "unprotected",
+            "protection_permission": None,
+            "protection_basis": "no provider permission declared",
+            "caller_check_absent": caller_check_absent,
+            "guard_findings": [],
+            "coverage_complete": True,
+            "sink_flows": [
+                {"method": "com.example.NotesProvider.query",
+                 "sink": "SQLiteDatabase.rawQuery",
+                 "detail": "caller-controlled projection"},
+            ],
+            "flow_complete": True,
+        }
+        for name in operations
+    ]
+    return {
+        "schema_version": 1,
+        "artifact_sha256": sha,
+        "package_name": package,
+        "methods_adapted": methods,
+        "dex_coverage": ledger if ledger is not None else [
+            {"entry": "classes.dex", "status": "parsed", "size_bytes": 100, "methods": methods},
+        ],
+        "exposures": [
+            {
+                "provider": "com.example.NotesProvider",
+                "exported": True,
+                "grant_uri_permissions": False,
+                "uri_patterns": [],
+                "numeric_uri_patterns": [],
+                "operations": ops,
+            },
+        ],
+    }
+
+
+def _surface_ready_scan(client):
+    app = _upload(client, data=make_apk(manifest=_provider_manifest())).json()
+    auth = _authorize(client, app["sha256"]).json()
+    scan = _scan(client, app["id"], auth["id"]).json()
+    assert client.post(f"/api/v1/scans/{scan['id']}/recon").status_code == 200
+    return app, scan
+
+
+def _complete_provider_job(client, ctx, scan, payload):
+    from mobius.services.worker_queue import WorkerQueue
+    with ctx.session() as session:
+        queue = WorkerQueue(session)
+        claimed = queue.claim("provider-worker-test")
+        assert claimed is not None
+        queue.succeed(claimed.id, "provider-worker-test", payload,
+                      staged_sha256=payload["artifact_sha256"])
+        session.commit()
+        return claimed.id
+
+
+def test_isolated_provider_job_is_queued_succeeded_and_applied(client, ctx):
+    app, scan = _surface_ready_scan(client)
+
+    queued = client.post(f"/api/v1/scans/{scan['id']}/provider-analysis/jobs")
+    assert queued.status_code == 202, queued.text
+    assert queued.json()["kind"] == "provider_analysis"
+    job_id = queued.json()["job_id"]
+
+    payload = _provider_worker_payload(app["sha256"])
+    assert _complete_provider_job(client, ctx, scan, payload) == job_id
+
+    status = client.get(f"/api/v1/scans/{scan['id']}/provider-analysis/jobs/{job_id}")
+    assert status.status_code == 200
+    assert status.json()["status"] == "succeeded"
+    assert status.json()["applied"] is False
+
+    applied = client.post(f"/api/v1/scans/{scan['id']}/provider-analysis/jobs/{job_id}/apply")
+    assert applied.status_code == 200, applied.text
+    body = applied.json()
+    assert body["package_name"] == "com.example"
+    assert body["providers"] == 1
+    assert len(body["results"]) == 1
+    assert body["results"][0]["attributes"]["caller_check_absent"] is True
+    assert client.get(
+        f"/api/v1/scans/{scan['id']}/provider-analysis/jobs/{job_id}"
+    ).json()["applied"] is True
+
+    findings = client.get(f"/api/v1/scans/{scan['id']}/findings").json()["items"]
+    assert {f["category"] for f in findings} == {"exported-provider-unprotected-sink"}
+
+    duplicate = client.post(f"/api/v1/scans/{scan['id']}/provider-analysis/jobs/{job_id}/apply")
+    assert duplicate.status_code == 409
+
+
+def test_isolated_provider_job_rejects_result_for_different_apk(client, ctx):
+    app, scan = _surface_ready_scan(client)
+    job_id = client.post(f"/api/v1/scans/{scan['id']}/provider-analysis/jobs").json()["job_id"]
+
+    payload = _provider_worker_payload("0" * 64)  # bound to a different artifact
+    assert _complete_provider_job(client, ctx, scan, payload) == job_id
+
+    applied = client.post(f"/api/v1/scans/{scan['id']}/provider-analysis/jobs/{job_id}/apply")
+    assert applied.status_code == 422
+    assert "not bound to the authorized APK" in applied.text
+    assert client.get(f"/api/v1/scans/{scan['id']}/findings").json()["items"] == []
+
+
+def test_isolated_provider_job_rejects_wrong_target_package(client, ctx):
+    app, scan = _surface_ready_scan(client)
+    job_id = client.post(f"/api/v1/scans/{scan['id']}/provider-analysis/jobs").json()["job_id"]
+
+    payload = _provider_worker_payload(app["sha256"], package="com.other.app")
+    assert _complete_provider_job(client, ctx, scan, payload) == job_id
+
+    # The package contradicts the stored recon manifest for the same artifact:
+    # unappliable, terminally rejected, and no findings are recorded.
+    applied = client.post(f"/api/v1/scans/{scan['id']}/provider-analysis/jobs/{job_id}/apply")
+    assert applied.status_code == 422
+    assert "recon" in applied.text
+    status = client.get(f"/api/v1/scans/{scan['id']}/provider-analysis/jobs/{job_id}")
+    assert status.json()["status"] == "rejected"
+    assert client.get(f"/api/v1/scans/{scan['id']}/findings").json()["items"] == []
+
+
+def test_isolated_provider_apply_rejects_dex_job_kind_and_unfinished_jobs(client, ctx):
+    app, scan = _surface_ready_scan(client)
+
+    dex_job = client.post(f"/api/v1/scans/{scan['id']}/spectre/jobs").json()["job_id"]
+    wrong_kind = client.post(f"/api/v1/scans/{scan['id']}/provider-analysis/jobs/{dex_job}/apply")
+    assert wrong_kind.status_code == 404
+
+    job_id = client.post(f"/api/v1/scans/{scan['id']}/provider-analysis/jobs").json()["job_id"]
+    unfinished = client.post(f"/api/v1/scans/{scan['id']}/provider-analysis/jobs/{job_id}/apply")
+    assert unfinished.status_code == 409
+
+
+def test_isolated_provider_partial_dex_ledger_downgrades_caller_check(client, ctx):
+    """Unknown/sensitivity constraint over the wire: when the worker ledger
+    shows DEX bytes it could not parse, an applied caller_check_absent=True
+    must be downgraded to unknown before the gate sees it."""
+    app, scan = _surface_ready_scan(client)
+    job_id = client.post(f"/api/v1/scans/{scan['id']}/provider-analysis/jobs").json()["job_id"]
+
+    payload = _provider_worker_payload(
+        app["sha256"],
+        methods=3,
+        ledger=[
+            {"entry": "classes.dex", "status": "parsed", "size_bytes": 100, "methods": 3},
+            {"entry": "classes2.dex", "status": "failed-parse", "size_bytes": 50,
+             "error": "BadDEX"},
+        ],
+        caller_check_absent=True,
+    )
+    assert _complete_provider_job(client, ctx, scan, payload) == job_id
+
+    applied = client.post(f"/api/v1/scans/{scan['id']}/provider-analysis/jobs/{job_id}/apply")
+    assert applied.status_code == 200, applied.text
+    result = applied.json()["results"][0]
+    assert applied.json()["dex_complete"] is False
+    # downgraded to unknown: the clause carries no evidence either way
+    assert "caller_check_absent" not in result["attributes"]
+    assert result["verdict"] == "insufficient_evidence"
+
+
+def test_inline_provider_analysis_requires_test_env_or_flag(client, ctx):
+    from dataclasses import replace
+    app, scan = _surface_ready_scan(client)
+    ctx.settings = replace(ctx.settings, env="development")
+    try:
+        resp = client.post(f"/api/v1/scans/{scan['id']}/provider-analysis")
+        assert resp.status_code == 503
+        assert "isolated worker job" in resp.json()["detail"]
+    finally:
+        ctx.settings = replace(ctx.settings, env="test")
+
+
+def test_provider_inline_flag_is_ignored_in_production(client, ctx, monkeypatch):
+    """The local-development opt-in must never bypass containment in production."""
+    from dataclasses import replace
+    app, scan = _surface_ready_scan(client)
+    monkeypatch.setenv("MOBIUS_PROVIDER_INLINE", "1")
+    ctx.settings = replace(ctx.settings, env="production")
+    try:
+        resp = client.post(f"/api/v1/scans/{scan['id']}/provider-analysis")
+        assert resp.status_code == 503
+    finally:
+        ctx.settings = replace(ctx.settings, env="test")
+
+
+def test_isolated_provider_apply_fails_after_authorization_revoked(client, ctx):
+    """Revocation between queue/claim and apply must stop the application of
+    the worker result and leave zero findings."""
+    app, scan = _surface_ready_scan(client)
+    job_id = client.post(f"/api/v1/scans/{scan['id']}/provider-analysis/jobs").json()["job_id"]
+    assert _complete_provider_job(client, ctx, scan, _provider_worker_payload(app["sha256"])) == job_id
+
+    from mobius.adapters.models import AuthorizationRow
+    from mobius.adapters.events import utcnow
+    with ctx.session() as session:
+        session.get(AuthorizationRow, scan["authorization_id"]).revoked_at = utcnow()
+        session.commit()
+
+    applied = client.post(f"/api/v1/scans/{scan['id']}/provider-analysis/jobs/{job_id}/apply")
+    assert applied.status_code == 422
+    assert "revoked or expired" in applied.text
+    # truthful terminal rejection, committed despite the 422 rollback
+    assert client.get(
+        f"/api/v1/scans/{scan['id']}/provider-analysis/jobs/{job_id}"
+    ).json()["status"] == "rejected"
+    assert client.get(f"/api/v1/scans/{scan['id']}/findings").json()["items"] == []
+
+
+def test_isolated_provider_apply_fails_after_authorization_expires(client, ctx):
+    app, scan = _surface_ready_scan(client)
+    job_id = client.post(f"/api/v1/scans/{scan['id']}/provider-analysis/jobs").json()["job_id"]
+    assert _complete_provider_job(client, ctx, scan, _provider_worker_payload(app["sha256"])) == job_id
+
+    from mobius.adapters.models import AuthorizationRow
+    with ctx.session() as session:
+        session.get(AuthorizationRow, scan["authorization_id"]).expires_at = "2020-01-01T00:00:00Z"
+        session.commit()
+
+    applied = client.post(f"/api/v1/scans/{scan['id']}/provider-analysis/jobs/{job_id}/apply")
+    assert applied.status_code == 422
+    assert "revoked or expired" in applied.text
+    assert client.get(
+        f"/api/v1/scans/{scan['id']}/provider-analysis/jobs/{job_id}"
+    ).json()["status"] == "rejected"
+    assert client.get(f"/api/v1/scans/{scan['id']}/findings").json()["items"] == []
+
+
+def test_isolated_provider_apply_is_atomic_when_recording_fails(client, ctx, monkeypatch):
+    """A failure while recording the SECOND operation must roll back the first:
+    apply is all-or-nothing, never partial findings."""
+    app, scan = _surface_ready_scan(client)
+    job_id = client.post(f"/api/v1/scans/{scan['id']}/provider-analysis/jobs").json()["job_id"]
+    payload = _provider_worker_payload(app["sha256"], operations=("read", "write"))
+    assert _complete_provider_job(client, ctx, scan, payload) == job_id
+
+    from mobius.services.validation import ValidationService
+    real_validate = ValidationService.validate
+    calls = {"n": 0}
+
+    def fail_second(self, *args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise RuntimeError("simulated gate failure mid-recording")
+        return real_validate(self, *args, **kwargs)
+
+    monkeypatch.setattr(ValidationService, "validate", fail_second)
+    # TestClient re-raises server exceptions; the dependency's rollback runs
+    # during teardown before the re-raise reaches here.
+    import pytest as _pytest
+    with _pytest.raises(RuntimeError, match="simulated gate failure"):
+        client.post(f"/api/v1/scans/{scan['id']}/provider-analysis/jobs/{job_id}/apply")
+    assert calls["n"] == 2
+    assert client.get(f"/api/v1/scans/{scan['id']}/findings").json()["items"] == []
+    evidence = client.get(f"/api/v1/scans/{scan['id']}/evidence").json()["items"]
+    assert [e for e in evidence if e["kind"] == "tool-output"] == []  # recon's manifest stays
+    # the job is NOT marked applied: a fixed deployment can apply it later
+    assert client.get(
+        f"/api/v1/scans/{scan['id']}/provider-analysis/jobs/{job_id}"
+    ).json()["applied"] is False
+
+
+def test_succeeded_provider_job_is_never_reclaimed(client, ctx):
+    """Worker-side exactly-once: a succeeded job leaves the claim pool."""
+    from mobius.services.worker_queue import WorkerQueue
+    app, scan = _surface_ready_scan(client)
+    job_id = client.post(f"/api/v1/scans/{scan['id']}/provider-analysis/jobs").json()["job_id"]
+    with ctx.session() as session:
+        queue = WorkerQueue(session)
+        claimed = queue.claim("provider-worker-test")
+        assert claimed is not None and claimed.id == job_id
+        queue.succeed(job_id, "provider-worker-test", _provider_worker_payload(app["sha256"]))
+        session.commit()
+    with ctx.session() as session:
+        assert WorkerQueue(session).claim("provider-worker-test") is None
+
+
+def test_invalid_payload_job_is_terminally_rejected_and_reenqueuable(client, ctx):
+    """A succeeded job whose payload can never be applied must not deadlock the
+    investigation: apply marks it terminally rejected (committed separately
+    from the rolled-back request), the evidence stays on the row, and a fresh
+    job can be enqueued, completed and applied."""
+    app, scan = _surface_ready_scan(client)
+    job_id = client.post(f"/api/v1/scans/{scan['id']}/provider-analysis/jobs").json()["job_id"]
+
+    bad = _provider_worker_payload(app["sha256"], ledger=[
+        {"entry": "classes.dex", "status": "parsed", "size_bytes": 100, "methods": 999},
+    ])  # ledger count contradicts methods_adapted
+    assert _complete_provider_job(client, ctx, scan, bad) == job_id
+
+    applied = client.post(f"/api/v1/scans/{scan['id']}/provider-analysis/jobs/{job_id}/apply")
+    assert applied.status_code == 422
+
+    status = client.get(f"/api/v1/scans/{scan['id']}/provider-analysis/jobs/{job_id}")
+    assert status.json()["status"] == "rejected"
+    assert status.json()["error_code"] == "InvalidWorkerPayload"
+    assert "ledger" in status.json()["error_detail"]  # retained rejection evidence
+    assert status.json()["applied"] is False
+
+    # the rejection survived the rolled-back request: a new job can be queued
+    requeued = client.post(f"/api/v1/scans/{scan['id']}/provider-analysis/jobs")
+    assert requeued.status_code == 202, requeued.text
+    new_job = requeued.json()["job_id"]
+    assert new_job != job_id
+    good = _provider_worker_payload(app["sha256"])
+    assert _complete_provider_job(client, ctx, scan, good) == new_job
+    applied = client.post(f"/api/v1/scans/{scan['id']}/provider-analysis/jobs/{new_job}/apply")
+    assert applied.status_code == 200, applied.text
+
+    # and a SECOND run after an applied one is refused at ENQUEUE, before any
+    # compute is queued
+    third = client.post(f"/api/v1/scans/{scan['id']}/provider-analysis/jobs")
+    assert third.status_code == 409
+    findings = client.get(f"/api/v1/scans/{scan['id']}/findings").json()["items"]
+    provider_findings = [f for f in findings
+                         if f["category"] == "exported-provider-unprotected-sink"]
+    assert len(provider_findings) == 1  # no duplication
+
+
+def test_inline_provider_analysis_is_blocked_after_applied_job(client, ctx):
+    app, scan = _surface_ready_scan(client)
+    job_id = client.post(f"/api/v1/scans/{scan['id']}/provider-analysis/jobs").json()["job_id"]
+    payload = _provider_worker_payload(app["sha256"])
+    assert _complete_provider_job(client, ctx, scan, payload) == job_id
+    assert client.post(
+        f"/api/v1/scans/{scan['id']}/provider-analysis/jobs/{job_id}/apply"
+    ).status_code == 200
+
+    inline = client.post(f"/api/v1/scans/{scan['id']}/provider-analysis")
+    assert inline.status_code == 409  # lifecycle gate, not duplicate findings
+
+
+def test_apply_rejects_staged_digest_mismatch(client, ctx):
+    """The host-side staged digest is an independent anchor: a job whose
+    recorded staged bytes do not match the authorized artifact is unappliable
+    even when the worker payload's own digest field agrees."""
+    app, scan = _surface_ready_scan(client)
+    job_id = client.post(f"/api/v1/scans/{scan['id']}/provider-analysis/jobs").json()["job_id"]
+    payload = _provider_worker_payload(app["sha256"])
+    from mobius.services.worker_queue import WorkerQueue
+    with ctx.session() as session:
+        queue = WorkerQueue(session)
+        claimed = queue.claim("provider-worker-test")
+        queue.succeed(claimed.id, "provider-worker-test", payload,
+                      staged_sha256="f" * 64)  # host staged different bytes
+        session.commit()
+
+    applied = client.post(f"/api/v1/scans/{scan['id']}/provider-analysis/jobs/{job_id}/apply")
+    assert applied.status_code == 422
+    assert "staged-input digest" in applied.text
+    status = client.get(f"/api/v1/scans/{scan['id']}/provider-analysis/jobs/{job_id}")
+    assert status.json()["status"] == "rejected"
+    assert client.get(f"/api/v1/scans/{scan['id']}/findings").json()["items"] == []
+
+
+def test_legacy_second_job_terminalizes_safely_after_first_applied(client, ctx):
+    """A job enqueued BEFORE the first one was applied (legal then) must not
+    dead-end: applying it after the first job's apply marks it terminally
+    rejected, does not duplicate findings, and does not block or crash."""
+    app, scan = _surface_ready_scan(client)
+    job1 = client.post(f"/api/v1/scans/{scan['id']}/provider-analysis/jobs").json()["job_id"]
+    payload = _provider_worker_payload(app["sha256"])
+    assert _complete_provider_job(client, ctx, scan, payload) == job1
+    applied = client.post(f"/api/v1/scans/{scan['id']}/provider-analysis/jobs/{job1}/apply")
+    assert applied.status_code == 200
+
+    # simulate the legacy second job directly (enqueue now refuses, correctly)
+    from mobius.services.worker_queue import WorkerQueue
+    with ctx.session() as session:
+        job2 = WorkerQueue(session)._flush_new(
+            __import__("mobius.adapters.models", fromlist=["WorkerJobRow"]).WorkerJobRow(
+                id="legacy-second-job", investigation_id=scan["id"],
+                kind="provider_analysis", artifact_key=app["artifact_key"],
+                status="succeeded", attempts=1, result_json=payload,
+                created_at="2026-11-19T00:00:00.000Z",
+                staged_sha256=app["sha256"],
+            )
+        )
+        session.commit()
+
+    applied2 = client.post(f"/api/v1/scans/{scan['id']}/provider-analysis/jobs/legacy-second-job/apply")
+    assert applied2.status_code == 422
+    assert "already applied" in applied2.text
+    status = client.get(f"/api/v1/scans/{scan['id']}/provider-analysis/jobs/legacy-second-job")
+    assert status.json()["status"] == "rejected"
+    findings = client.get(f"/api/v1/scans/{scan['id']}/findings").json()["items"]
+    provider_findings = [f for f in findings
+                         if f["category"] == "exported-provider-unprotected-sink"]
+    assert len(provider_findings) == 1
+    # terminal state persisted despite the 422 rollback: still rejected on re-read
+    assert client.get(
+        f"/api/v1/scans/{scan['id']}/provider-analysis/jobs/legacy-second-job"
+    ).json()["status"] == "rejected"
+
+
+def test_partial_dex_downgrades_refutation_to_unknown(client, ctx):
+    """Blocker F: a failed-parse DEX means the analysed copy of a class may be
+    one the runtime never loads. An 'enforcing' guard found there must NOT
+    refute: caller_check_absent=False downgrades to None exactly like True."""
+    app, scan = _surface_ready_scan(client)
+    job_id = client.post(f"/api/v1/scans/{scan['id']}/provider-analysis/jobs").json()["job_id"]
+    ops = []
+    for name in ("read", "write"):
+        ops.append({
+            "operation": name,
+            "protection_status": "unprotected",
+            "protection_permission": None,
+            "protection_basis": "no provider permission declared",
+            "caller_check_absent": False,  # 'enforcing' evidence on partial code
+            "guard_findings": [{
+                "api": "Landroid/content/Context;->checkCallingPermission",
+                "outcome": "enforcing", "detail": "result gates sink"}],
+            "coverage_complete": True,
+            "sink_flows": [{"method": "com.example.NotesProvider.query",
+                            "sink": "SQLiteQueryBuilder.query",
+                            "detail": "caller-controlled selection at offset 4"}],
+            "flow_complete": True,
+        })
+    payload = _provider_worker_payload(app["sha256"], operations=("read", "write"))
+    payload["exposures"][0]["operations"] = ops
+    payload["methods_adapted"] = 1
+    payload["dex_coverage"] = [
+        {"entry": "classes.dex", "status": "failed-parse", "size_bytes": 100,
+         "error": "RuntimeError"},
+        {"entry": "classes2.dex", "status": "parsed", "size_bytes": 100, "methods": 1},
+    ]
+    assert _complete_provider_job(client, ctx, scan, payload) == job_id
+    applied = client.post(f"/api/v1/scans/{scan['id']}/provider-analysis/jobs/{job_id}/apply")
+    assert applied.status_code == 200, applied.text
+    for result in applied.json()["results"]:
+        # no caller_check_absent attribute at all: unknown stays missing
+        assert "caller_check_absent" not in result["attributes"]
