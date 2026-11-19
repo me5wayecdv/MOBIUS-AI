@@ -1,21 +1,39 @@
 name: pentagi-smoke
 
-# Manual-only experiment: PentAGI (vxcontrol/pentagi) with a fully local,
-# no-key Ollama backend on the runner. No paid provider, no external target.
+# Manual-only experiment (workflow_dispatch; nothing runs automatically).
+#
+# Runs PentAGI (github.com/vxcontrol/pentagi, commit-pinned) against OWASP
+# Juice Shop, a deliberately vulnerable TRAINING application, all inside one
+# ephemeral GitHub-hosted runner. PentAGI's own terms allow testing only
+# systems you own or are authorized to test; the target here is a local
+# container on an isolated Docker network created by this job.
+#
+# Cost/privacy shape:
+# - No paid provider: a local ollama/ollama container serves the LLM and
+#   embeddings (qwen2.5:3b, nomic-embed-text). No API keys anywhere.
+# - The runner repository is NOT checked out; no private code, data, or
+#   secrets enter the job. Session cookies are kept in files, never printed.
+# - Everything is torn down in an always() step; the runner itself is
+#   ephemeral.
+# - Services bind to 127.0.0.1 or the internal network only. PentAGI mounts
+#   the runner's docker socket (its documented tool-sandbox requirement); the
+#   ephemeral runner holds no secrets, and the socket dies with it.
 on:
   workflow_dispatch:
+
+permissions:
+  contents: none
 
 jobs:
   smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 55
     steps:
-      - name: Start local Ollama
+      - name: Start local Ollama (digest-pinned, no API keys)
         run: |
-          docker run -d --name ollama --network pentagi-network ollama/ollama:0.5.4 || {
-            docker network create pentagi-network
-            docker run -d --name ollama --network pentagi-network ollama/ollama:0.5.4
-          }
+          docker network create pentagi-network
+          docker run -d --name ollama --network pentagi-network \
+            ollama/ollama:0.5.4@sha256:18bfb1d605604fd53dcad20d0556df4c781e560ebebcd923454d627c994a0e37
           for i in $(seq 1 20); do
             docker exec ollama ollama --version >/dev/null 2>&1 && break
             sleep 3
@@ -23,32 +41,88 @@ jobs:
           docker exec ollama ollama pull qwen2.5:3b
           docker exec ollama ollama pull nomic-embed-text
           docker exec ollama ollama list
-      - name: Deploy PentAGI
+
+      - name: Start the authorized training target (OWASP Juice Shop)
         run: |
-          git clone --depth 1 https://github.com/vxcontrol/pentagi.git
+          docker run -d --name juice-shop --network pentagi-network \
+            -p 127.0.0.1:3000:3000 \
+            bkimminich/juice-shop:latest@sha256:877fc77b12d72b42e486eb09b6b1711cc56514306d92006b284e7e7cf076a809
+          for i in $(seq 1 30); do
+            curl -sf http://127.0.0.1:3000 >/dev/null && { echo "juice-shop reachable"; break; }
+            sleep 5
+          done
+          curl -sf -o /dev/null -w "juice-shop http %{http_code}\n" http://127.0.0.1:3000
+
+      - name: Deploy PentAGI (commit-pinned source, digest-pinned images)
+        run: |
+          git clone https://github.com/vxcontrol/pentagi.git
           cd pentagi
+          git checkout cffed9485aa1cca70762cd08a57ac62a80406258
           cp .env.example .env
+          openssl rand -hex 32 | xargs -I VALUE sed -E -i 's/^COOKIE_SIGNING_SALT=.*/COOKIE_SIGNING_SALT=VALUE/' .env
+          openssl rand -hex 16 | xargs -I VALUE sed -E -i 's/^PENTAGI_POSTGRES_PASSWORD=.*/PENTAGI_POSTGRES_PASSWORD=VALUE/' .env
           sed -i 's|^OLLAMA_SERVER_URL=.*|OLLAMA_SERVER_URL=http://ollama:11434|' .env
           sed -i 's|^OLLAMA_SERVER_MODEL=.*|OLLAMA_SERVER_MODEL=qwen2.5:3b|' .env
           sed -i 's|^OLLAMA_SERVER_PULL_MODELS_ENABLED=.*|OLLAMA_SERVER_PULL_MODELS_ENABLED=true|' .env
           sed -i 's|^EMBEDDING_PROVIDER=.*|EMBEDDING_PROVIDER=ollama|' .env
           sed -i 's|^EMBEDDING_MODEL=.*|EMBEDDING_MODEL=nomic-embed-text|' .env
           sed -i 's|^EMBEDDING_URL=.*|EMBEDDING_URL=http://ollama:11434|' .env
-          grep -E "^(OLLAMA|EMBEDDING)_" .env | sed 's/KEY=.*/KEY=<redacted>/'
+          printf '%s\n' \
+            'PENTAGI_IMAGE=vxcontrol/pentagi:latest@sha256:0abdf8e9e9e19839dccc5d2ec365060e5c41941588279897cabd628d29a9afd7' \
+            'PGVECTOR_IMAGE=vxcontrol/pgvector:latest@sha256:09afd689127bdb42319a133b2ef7cd4318b7ebda58412644975d6eacd2367fb0' \
+            'PGEXPORTER_IMAGE=quay.io/prometheuscommunity/postgres-exporter:v0.16.0@sha256:fe38515ba4d00fe9b4e83bc53e7ea38e1eb451d415c5447454ae1a3e043ff13d' \
+            'SCRAPER_IMAGE=vxcontrol/scraper:latest@sha256:4a3b0f179ab29003313167877ee2f6ab74c89f3fcb1ce108e648ca1ffadc51b7' \
+            >> .env
+          grep -E '^(OLLAMA|EMBEDDING|PENTAGI_IMAGE|PGVECTOR_IMAGE|SCRAPER_IMAGE|PGEXPORTER_IMAGE)' .env
           docker compose up -d
           docker compose ps
-      - name: Verify PentAGI is healthy with the local model
+
+      - name: Verify backend health and provider
         run: |
           ok=0
-          for i in $(seq 1 30); do
-            if curl -sk https://127.0.0.1:8443/api/v1/health 2>/dev/null | grep -qi "ok\|true\|healthy"; then
-              ok=1; break
-            fi
-            sleep 10
+          for i in $(seq 1 36); do
+            if curl -sk -o /dev/null -w "%{http_code}" https://127.0.0.1:8443/ | grep -q '^200$'; then ok=1; break; fi
+            sleep 5
           done
-          echo "health_ok=$ok"
-          cd pentagi
-          docker compose ps
-          docker compose logs --tail=60 pentagi || true
-          curl -sk https://127.0.0.1:8443/api/v1/health || true
+          echo "ui_ok=$ok"
+          cd pentagi && docker compose ps && docker compose logs --tail=40 pentagi
           test "$ok" = "1"
+
+      - name: Run a bounded task against the training target
+        run: |
+          BASE=https://127.0.0.1:8443/api/v1
+          code=$(curl -sk -o /tmp/login.json -w "%{http_code}" -c /tmp/cookies -X POST "$BASE/auth/login" \
+            -H 'Content-Type: application/json' \
+            -d '{"mail":"admin@pentagi.local","password":"admin"}')
+          echo "login http $code"
+          FLOW=$(curl -sk -b /tmp/cookies -X POST "$BASE/flows" -H 'Content-Type: application/json' \
+            -d '{"input":"Test http://juice-shop:3000 - a deliberately vulnerable training application (OWASP Juice Shop) running as a container on the same isolated Docker network, authorized for this test. Do a brief reconnaissance, try the most evident vulnerability classes, and report what you find. Keep it short.","provider":"ollama"}')
+          echo "$FLOW"
+          FLOW_ID=$(printf '%s' "$FLOW" | python3 -c "import json,sys; print(json.load(sys.stdin)['data']['id'])")
+          echo "flow_id=$FLOW_ID"
+          for i in $(seq 1 60); do
+            ST=$(curl -sk -b /tmp/cookies "$BASE/flows/$FLOW_ID" | python3 -c "import json,sys; print(json.load(sys.stdin)['data'].get('status'))")
+            echo "poll $i status=$ST"
+            case "$ST" in finished|failed|done|completed|stopped) break;; esac
+            sleep 15
+          done
+          curl -sk -b /tmp/cookies "$BASE/flows/$FLOW_ID" > /tmp/flow_final.json
+          python3 -c "
+          import json
+          d = json.load(open('/tmp/flow_final.json'))['data']
+          print('final status:', d.get('status'))
+          print('title:', d.get('title'))
+          "
+
+      - name: Collect evidence logs
+        if: always()
+        run: |
+          cd pentagi 2>/dev/null && docker compose logs --tail=200 pentagi || true
+          docker logs --tail=60 ollama 2>/dev/null || true
+
+      - name: Teardown
+        if: always()
+        run: |
+          cd pentagi 2>/dev/null && docker compose down -v --remove-orphans || true
+          docker rm -f ollama juice-shop 2>/dev/null || true
+          docker network rm pentagi-network 2>/dev/null || true
