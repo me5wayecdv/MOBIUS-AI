@@ -89,7 +89,7 @@ class OciBackend:
             "--ulimit", "nofile=1024:1024", "--user=65532:65532",
             f"--tmpfs=/tmp:rw,noexec,nosuid,nodev,size={self.tmpfs_mb}m",
             # In-container scratch root; discarded with the container. Parents-first order
-            # matters: the two binds below land inside this tmpfs.
+            # matters: the single input bind below lands inside this tmpfs.
             f"--tmpfs=/work:rw,noexec,nosuid,nodev,size={self.tmpfs_mb}m",
             # --mount fields must be key=value; a bare `rw` is rejected by the runtime.
             # The input is a single-file read-only bind: the runtime enforces immutability

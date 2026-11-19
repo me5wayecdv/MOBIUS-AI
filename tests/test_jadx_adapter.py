@@ -124,7 +124,13 @@ def test_cleanup_failure_is_reported_not_silent(tmp_path, monkeypatch):
     adapter = make_adapter(tmp_path, FixtureBackend())
     with pytest.raises(JadxExecutionFailed) as exc_info:
         adapter.decompile(investigation_id=SCAN, artifact=b"fixture")
-    assert exc_info.value.status == "cleanup_failed"
+    exc = exc_info.value
+    # Exception shape: the stable status drives the HTTP mapping, the detail names the
+    # residue so an operator can act, and the failure type is the execution-failure
+    # class (never a silent success or a bare OSError leaking through).
+    assert exc.status == "cleanup_failed"
+    assert "jadx-output-" in exc.detail
+    assert "residue" in exc.detail
 
 
 def test_cache_key_changes_when_jadx_version_changes(tmp_path):

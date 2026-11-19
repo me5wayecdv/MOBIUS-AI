@@ -72,6 +72,27 @@ def _tool_for(kind: str, runtime: str) -> tuple[str, str, ToolSpec]:
     raise RuntimeError(f"unsupported worker job kind: {kind}")
 
 
+#: Reason recorded on every held jadx_decompile job; asserted by regression tests.
+JADX_OUTPUT_HOLD_REASON = (
+    "JADX output-writing is held: no verified file-output mount contract "
+    "or output-tree cleanup; the stdout-only OCI contract cannot run JADX"
+)
+
+
+def _run_jadx_job() -> None:
+    """HOLD: JADX is the one file-output tool, and the OCI backend exposes no
+    writable host path at all (stdout-only contract, verified by the CI runtime
+    probe). A writable-outputs contract for JADX and the cleanup of the
+    container-uid-owned output tree are unverified, so this refuses to run instead
+    of silently writing to the ephemeral tmpfs and reporting an empty/invalid
+    output after the fact. The held implementation (writable outputs bind +
+    adapter call) is in the branch's PR history; re-enable only with a reviewed
+    file-output mount contract and a verified cleanup path. Enqueue stays gated
+    on an approved immutable JADX image reference (MOBIUS_JADX_IMAGE; image
+    unpublished)."""
+    raise RuntimeError(JADX_OUTPUT_HOLD_REASON)
+
+
 def run_once() -> bool:
     db_url = _required("MOBIUS_WORKER_DB_URL")
     artifact_root = Path(_required("MOBIUS_ARTIFACT_ROOT")).resolve()
@@ -110,20 +131,7 @@ def run_once() -> bool:
         input_path.chmod(0o444)
 
         if kind == "jadx_decompile":
-            # HOLD: JADX is the one file-output tool, and the OCI backend now exposes
-            # no writable host path at all (stdout-only contract, verified by the CI
-            # runtime probe). A writable-outputs contract for JADX and the cleanup of
-            # the container-uid-owned output tree are unverified, so this branch
-            # refuses to run instead of silently writing to the ephemeral tmpfs and
-            # reporting an empty/invalid output after the fact. The held implementation
-            # (writable outputs bind + adapter call) is in this branch's PR history;
-            # re-enable only with a reviewed file-output mount contract and a verified
-            # cleanup path. Enqueue stays gated on an approved immutable JADX image
-            # reference (MOBIUS_JADX_IMAGE; image unpublished).
-            raise RuntimeError(
-                "JADX output-writing is held: no verified file-output mount contract "
-                "or output-tree cleanup; the stdout-only OCI contract cannot run JADX"
-            )
+            _run_jadx_job()
         else:
             binary, image, spec = _tool_for(kind, runtime)
             backend = OciBackend(runtime=runtime, binary_images={binary: image})

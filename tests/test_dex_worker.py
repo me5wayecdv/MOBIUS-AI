@@ -43,3 +43,14 @@ def test_dex_dispatch_requires_an_immutable_image_reference(monkeypatch):
     monkeypatch.setenv("MOBIUS_DEX_IMAGE", "ghcr.io/example/mobius-dex:latest")
     with pytest.raises(ValueError, match="immutable sha256"):
         _tool_for("dex_index", "/usr/bin/podman")
+
+
+def test_jadx_output_path_is_held_in_code():
+    """The worker's jadx branch must refuse to run until a reviewed file-output mount
+    contract and a verified output-tree cleanup exist - the hold is code, not docs."""
+    from mobius.worker.runner import JADX_OUTPUT_HOLD_REASON, _run_jadx_job
+
+    with pytest.raises(RuntimeError) as exc_info:
+        _run_jadx_job()
+    assert str(exc_info.value) == JADX_OUTPUT_HOLD_REASON
+    assert "held" in JADX_OUTPUT_HOLD_REASON
