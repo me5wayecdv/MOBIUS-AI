@@ -1,0 +1,10 @@
+# Keep the build context small and reproducible.
+.git
+frontend/node_modules
+frontend/artifacts
+src/mobius/api/static/graph-ui
+data
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.coverage

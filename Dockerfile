@@ -18,9 +18,13 @@ COPY migrations ./migrations
 COPY corpus ./corpus
 COPY --from=ui /build/src/mobius/api/static ./src/mobius/api/static
 RUN pip install --no-cache-dir ".[worker]" \
-    && useradd --create-home --uid 10001 mobius
+    && useradd --create-home --uid 10001 mobius \
+    && mkdir -p /data/artifacts \
+    && chown -R mobius:mobius /data
 USER mobius
 EXPOSE 8000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=25s --retries=5 \
+  CMD ["python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health',timeout=4)"]
 # Migrations are idempotent; apply them before serving so a fresh compose stack
 # comes up ready without a separate step.
 CMD ["sh", "-c", "alembic upgrade head && python -m uvicorn mobius.api.app:create_app --factory --host 0.0.0.0 --port 8000"]
