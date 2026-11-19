@@ -57,7 +57,7 @@ The analysis manifest must include:
 - Java/Kotlin decompilation coverage where JADX is available, including failed classes and fidelity.
 - Native libraries and assets discovered, and whether each is analyzed or inventory-only.
 - Class/method counts, call-graph node/edge counts, truncation flags, and analysis budgets.
-- Unsupported constructs/limitations: reflection, dynamic loading, obfuscation, native boundaries, framework gaps, unresolved dispatch, and parse failures.
+- Unsupported constructs/limitations: reflection, dynamic loading, obfuscation, native boundaries, framework gaps, unresolved dispatch, and parse failures. The D-016 manifest is exposed at `GET /api/v1/scans/{scan_id}/coverage-manifest` and embedded as JSON in ARCHIVIST; it distinguishes `inventory_only`, `unsupported`, `not_run`, `partial` and `complete` rather than implying semantic coverage from file discovery.
 
 A partial or truncated analysis is never presented as complete. "No finding" is not "safe".
 
@@ -103,6 +103,7 @@ Events must describe completed or currently executing backend work. Do not emit 
 - Add JADX adapter and decompilation cache keyed by APK digest + tool version.
 - Build class/method/source-reference index and sensitive API catalogue.
 - Add method-level call graph and bounded CFG/data-flow for a small, testable set of source/sink families.
+- Initial D-015 slice: same-method register taint from potential `Intent` extras/data and `Uri` query/path sources (external caller control is not established) to selected direct `WebView.loadUrl`, `SQLiteDatabase.rawQuery`, `Runtime.exec`, `FileOutputStream` and `FileWriter` sinks. Record CFG block order/dominance and guard-before/after evidence; do not treat a guard call as proof of successful protection.
 - Persist coverage and unsupported reasons.
 - Add fixtures for multidex, overloaded methods, callbacks, guard ordering, reflection boundaries, malformed DEX, and known positive/negative flows.
 

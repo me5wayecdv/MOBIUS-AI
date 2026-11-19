@@ -1,0 +1,259 @@
+version: 1
+catalogue_id: mobius.android.source-sink
+platform: android
+sources:
+  - id: intent-string-extra
+    class_descriptor: Landroid/content/Intent;
+    method: getStringExtra
+    descriptor: (Ljava/lang/String;)Ljava/lang/String;
+    family: ipc
+    trust_boundary: external-intent
+    maswe: [MASWE-0029, MASWE-0032, MASWE-0050]
+    masvs: [MASVS-PLATFORM-1, MASVS-CODE-4]
+    confidence: medium
+    description: Reads a string extra supplied through an externally delivered Intent
+    references: [MASTG-KNOW-0025, MASTG-TEST-0375]
+  - id: intent-data-uri
+    class_descriptor: Landroid/content/Intent;
+    method: getData
+    descriptor: ()Landroid/net/Uri;
+    family: ipc
+    trust_boundary: deep-link-or-intent
+    maswe: [MASWE-0029, MASWE-0032, MASWE-0050]
+    masvs: [MASVS-PLATFORM-1, MASVS-CODE-4]
+    confidence: medium
+    description: Reads a URI supplied by an external Intent or deep link
+    references: [MASTG-KNOW-0025, MASTG-TEST-0375]
+  - id: intent-data-string
+    class_descriptor: Landroid/content/Intent;
+    method: getDataString
+    descriptor: ()Ljava/lang/String;
+    family: ipc
+    trust_boundary: deep-link-or-intent
+    maswe: [MASWE-0029, MASWE-0032, MASWE-0050]
+    masvs: [MASVS-PLATFORM-1, MASVS-CODE-4]
+    confidence: medium
+    description: Reads the string representation of an externally supplied Intent URI
+    references: [MASTG-KNOW-0025, MASTG-TEST-0375]
+  - id: bundle-string
+    class_descriptor: Landroid/os/Bundle;
+    method: getString
+    descriptor: (Ljava/lang/String;)Ljava/lang/String;
+    family: ipc
+    trust_boundary: caller-dependent
+    maswe: [MASWE-0050]
+    masvs: [MASVS-CODE-4]
+    confidence: low
+    description: Reads a string from a Bundle; origin must be established from its producer
+    references: [MASTG-KNOW-0025]
+  - id: uri-query-parameter
+    class_descriptor: Landroid/net/Uri;
+    method: getQueryParameter
+    descriptor: (Ljava/lang/String;)Ljava/lang/String;
+    family: deep-link
+    trust_boundary: uri
+    maswe: [MASWE-0029, MASWE-0050]
+    masvs: [MASVS-PLATFORM-1, MASVS-CODE-4]
+    confidence: medium
+    description: Reads a query parameter from a URI whose trust depends on its origin
+    references: [MASTG-TEST-0332]
+  - id: content-resolver-open-input
+    class_descriptor: Landroid/content/ContentResolver;
+    method: openInputStream
+    descriptor: (Landroid/net/Uri;)Ljava/io/InputStream;
+    family: content-provider
+    trust_boundary: content-uri
+    maswe: [MASWE-0050]
+    masvs: [MASVS-CODE-4]
+    confidence: low
+    description: Opens content addressed by a URI; provider and URI trust must be established
+    references: [MASTG-KNOW-0117]
+  - id: clipboard-primary-clip
+    class_descriptor: Landroid/content/ClipboardManager;
+    method: getPrimaryClip
+    descriptor: ()Landroid/content/ClipData;
+    family: clipboard
+    trust_boundary: shared-device-clipboard
+    maswe: [MASWE-0030]
+    masvs: [MASVS-PLATFORM-1]
+    confidence: low
+    description: Reads shared clipboard content which may be controlled by another app or user
+    references: [MASWE-0030]
+sinks:
+  - id: file-write
+    class_descriptor: Ljava/io/FileOutputStream;
+    method: <init>
+    family: file-write
+    maswe: [MASWE-0050]
+    masvs: [MASVS-CODE-4]
+    confidence: medium
+    impact: integrity
+    description: Writes to a path that may be externally influenced; containment and provenance are required
+    references: [MASTG-KNOW-0117]
+  - id: file-append
+    class_descriptor: Ljava/io/FileWriter;
+    method: <init>
+    family: file-write
+    maswe: [MASWE-0050]
+    masvs: [MASVS-CODE-4]
+    confidence: medium
+    impact: integrity
+    description: Writes text to a file path that may be externally influenced
+    references: [MASWE-0050]
+  - id: file-read
+    class_descriptor: Ljava/io/FileInputStream;
+    method: <init>
+    family: file-read
+    maswe: [MASWE-0050]
+    masvs: [MASVS-CODE-4]
+    confidence: low
+    impact: confidentiality
+    description: Reads a file path that may be externally influenced; sensitive-data exposure is not implied by reachability alone
+    references: [MASWE-0050]
+  - id: webview-load
+    class_descriptor: Landroid/webkit/WebView;
+    method: loadUrl
+    family: webview
+    maswe: [MASWE-0035]
+    masvs: [MASVS-PLATFORM-2, MASVS-CODE-4]
+    confidence: medium
+    impact: confidentiality
+    description: Navigates a WebView to a URL; untrusted origin and bridge context must be established
+    references: [MASTG-KNOW-0018, MASTG-TEST-0332]
+  - id: webview-js-interface
+    class_descriptor: Landroid/webkit/WebView;
+    method: addJavascriptInterface
+    family: webview
+    maswe: [MASWE-0033]
+    masvs: [MASVS-PLATFORM-2, MASVS-STORAGE-2]
+    confidence: medium
+    impact: confidentiality
+    description: Exposes a native object to WebView JavaScript; actual exposed methods and loaded origins require review
+    references: [MASTG-KNOW-0018]
+  - id: webview-file-access
+    class_descriptor: Landroid/webkit/WebSettings;
+    method: setAllowFileAccess
+    family: webview-local-resource
+    maswe: [MASWE-0034]
+    masvs: [MASVS-PLATFORM-2, MASVS-STORAGE-2, MASVS-CODE-4]
+    confidence: medium
+    impact: confidentiality
+    description: Enables WebView file access; exposure requires untrusted content to be loaded
+    references: [MASTG-KNOW-0018, MASWE-0034]
+  - id: webview-content-access
+    class_descriptor: Landroid/webkit/WebSettings;
+    method: setAllowContentAccess
+    family: webview-local-resource
+    maswe: [MASWE-0034]
+    masvs: [MASVS-PLATFORM-2, MASVS-STORAGE-2, MASVS-CODE-4]
+    confidence: medium
+    impact: confidentiality
+    description: Enables WebView content URI access; exposure depends on loaded content and URI scope
+    references: [MASTG-KNOW-0018, MASWE-0034]
+  - id: webview-file-url-access
+    class_descriptor: Landroid/webkit/WebSettings;
+    method: setAllowFileAccessFromFileURLs
+    family: webview-local-resource
+    maswe: [MASWE-0034]
+    masvs: [MASVS-PLATFORM-2, MASVS-STORAGE-2, MASVS-CODE-4]
+    confidence: medium
+    impact: confidentiality
+    description: Enables file URL access from file URLs; untrusted local content context must be established
+    references: [MASTG-KNOW-0018, MASWE-0034]
+  - id: webview-universal-access
+    class_descriptor: Landroid/webkit/WebSettings;
+    method: setAllowUniversalAccessFromFileURLs
+    family: webview-local-resource
+    maswe: [MASWE-0034]
+    masvs: [MASVS-PLATFORM-2, MASVS-STORAGE-2, MASVS-CODE-4]
+    confidence: medium
+    impact: confidentiality
+    description: Enables universal cross-origin access from file URLs; loaded content context must be established
+    references: [MASTG-KNOW-0018, MASWE-0034]
+  - id: process-exec
+    class_descriptor: Ljava/lang/Runtime;
+    method: exec
+    family: exec
+    maswe: [MASWE-0050]
+    masvs: [MASVS-CODE-4]
+    confidence: low
+    impact: integrity
+    description: Executes a command; attacker control of command arguments must be proven
+    references: [MASWE-0050]
+  - id: process-builder
+    class_descriptor: Ljava/lang/ProcessBuilder;
+    method: start
+    family: exec
+    maswe: [MASWE-0050]
+    masvs: [MASVS-CODE-4]
+    confidence: low
+    impact: integrity
+    description: Starts a process; attacker control of command arguments must be proven
+    references: [MASWE-0050]
+  - id: dynamic-load
+    class_descriptor: Ldalvik/system/DexClassLoader;
+    method: <init>
+    family: dynamic-code
+    maswe: [MASWE-0049]
+    masvs: [MASVS-CODE-4]
+    confidence: medium
+    impact: integrity
+    description: Loads DEX code from a path; trust and integrity of the loaded code must be established
+    references: [MASWE-0049]
+  - id: provider-open-file
+    class_descriptor: Landroid/os/ParcelFileDescriptor;
+    method: open
+    family: file-read
+    maswe: [MASWE-0050]
+    masvs: [MASVS-CODE-4]
+    confidence: low
+    impact: confidentiality
+    description: Opens a file descriptor for a file; path provenance and containment must be established
+    references: [MASTG-KNOW-0117]
+  - id: raw-sql
+    class_descriptor: Landroid/database/sqlite/SQLiteDatabase;
+    method: rawQuery
+    family: sql
+    maswe: [MASWE-0050]
+    masvs: [MASVS-CODE-4]
+    confidence: low
+    impact: integrity
+    description: Executes SQL; attacker influence over query construction must be proven
+    references: [MASTG-TEST-0339]
+guards:
+  - id: check-calling-permission
+    class_descriptor: Landroid/content/Context;
+    method: checkCallingPermission
+    description: Checks the caller's permission before proceeding
+  - id: check-calling-or-self-permission
+    class_descriptor: Landroid/content/Context;
+    method: checkCallingOrSelfPermission
+    description: Checks the caller's or own permission
+  - id: check-permission
+    class_descriptor: Landroid/content/Context;
+    method: checkPermission
+    description: Checks an arbitrary permission string
+  - id: enforce-calling-permission
+    class_descriptor: Landroid/content/Context;
+    method: enforceCallingPermission
+    description: Throws unless the caller holds a permission
+  - id: enforce-calling-or-self-permission
+    class_descriptor: Landroid/content/Context;
+    method: enforceCallingOrSelfPermission
+    description: Throws unless the caller or self holds a permission
+  - id: calling-uid
+    class_descriptor: Landroid/os/Binder;
+    method: getCallingUid
+    description: Identifies the calling UID; comparison logic is not inferred
+  - id: calling-pid
+    class_descriptor: Landroid/os/Binder;
+    method: getCallingPid
+    description: Identifies the calling process
+  - id: calling-package
+    class_descriptor: Landroid/app/ActivityManager;
+    method: getCallingPackage
+    description: Identifies the calling package
+  - id: signature-check
+    class_descriptor: Landroid/content/pm/PackageManager;
+    method: checkSignatures
+    description: Compares signing certificates

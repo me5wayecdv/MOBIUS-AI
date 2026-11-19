@@ -190,3 +190,34 @@ def test_method_reference_parser_keeps_names_containing_s():
         "getString",
         "()Ljava/lang/String;",
     )
+
+
+
+def test_dex_fixture_reports_selected_data_flow_scope_without_inventing_flows(index):
+    assert index.data_flows == ()
+    assert index.data_flow_methods == 0
+    assert index.data_flow_complete is True
+
+
+
+def test_androguard_cfg_extraction_uses_real_basic_blocks(dex_bytes):
+    from androguard.core.dex import DEX
+    from mobius.adapters.dex import _build_method_flow
+
+    vm = DEX(dex_bytes)
+    method = next(
+        method
+        for cls in vm.get_classes()
+        for method in cls.get_methods()
+        if method.get_code() is not None
+    )
+    flow = _build_method_flow(vm, method)
+
+    assert flow is not None
+    assert flow.blocks
+    assert flow.entry == min(block.start for block in flow.blocks)
+    assert all(
+        successor in {block.start for block in flow.blocks}
+        for block in flow.blocks
+        for successor in block.successors
+    )
