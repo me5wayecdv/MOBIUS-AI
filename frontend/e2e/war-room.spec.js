@@ -131,6 +131,34 @@ test("D-056: upload → investigation → evidence → graph → PoC → report;
   await expect(decisionPanel).toContainText("4 PERSISTED DECISIONS", { timeout: 15000 });
   await expect(page.locator("#decision-list .event.decision")).toHaveCount(4);
 
+  // Stale-load guard: scan A decisions in flight during a switch must not land in scan B's panel.
+  const scanInfo = await apiJson(request, "/scans/" + scanId);
+  const scan2 = await apiJson(request, "/scans", { method: "POST", data: { application_id: scanInfo.application_id, authorization_id: scanInfo.authorization_id, objective: "Second investigation for async isolation testing.", intensity: 0 } });
+  await apiJson(request, "/scans/" + scan2.id + "/evidence?kind=tool-output&summary=scan2%20fixture%20evidence&content=scan2%20synthetic%20evidence", { method: "POST" });
+  const seeded2 = spawnSync("python", ["../scripts/seed_war_room_fixture.py", scan2.id], {
+    encoding: "utf8",
+    env: process.env,
+  });
+  if (seeded2.status !== 0) throw new Error("second fixture seeding failed: " + seeded2.stderr);
+  await page.route("**/api/v1/scans/" + scanId + "/decisions**", async route => {
+    await new Promise(r => setTimeout(r, 1500));
+    await route.continue();
+  });
+  await page.goto("/ui?scan_id=" + scanId);
+  await expect(page.locator("#scan-select")).toHaveValue(scanId);
+  await page.selectOption("#scan-select", scan2.id);
+  await expect(decisionPanel).toContainText("2 PERSISTED DECISIONS");
+  await page.waitForTimeout(2500); // delayed scan-A response arrives now and must be discarded
+  await expect(page.locator("#decision-list .event.decision")).toHaveCount(2);
+  await expect(decisionPanel).not.toContainText(fixture.evidence_id);
+  // Overlapping refresh calls must not duplicate rows.
+  await page.evaluate(() => { refreshDecisions(); refreshDecisions(); refreshDecisions(); });
+  await page.waitForTimeout(500);
+  await expect(page.locator("#decision-list .event.decision")).toHaveCount(2);
+  await page.unroute("**/api/v1/scans/" + scanId + "/decisions**");
+  await page.goto("/ui?scan_id=" + scanId);
+  await expect(decisionPanel).toContainText("4 PERSISTED DECISIONS");
+
   for (const viewport of [{ width: 1280, height: 900, label: "desktop" }, { width: 390, height: 844, label: "mobile" }]) {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await page.reload();
