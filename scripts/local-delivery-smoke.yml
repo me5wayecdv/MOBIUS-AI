@@ -1,7 +1,10 @@
 # Ready-to-enable CI smoke for the local delivery stack.
+# Scope: minimal STARTUP smoke only - intake (upload/authorization/scan),
+# persistence (scan GET), and the UI shell. It does NOT run the analysis
+# pipeline; it proves the stack boots and serves, nothing more.
 # To activate: move this file to .github/workflows/local-delivery-smoke.yml
 # (requires a token with the `workflow` scope or the GitHub web UI).
-name: Local delivery smoke
+name: Local delivery startup smoke
 
 on:
   push:
@@ -26,7 +29,7 @@ concurrency:
 
 jobs:
   compose-smoke:
-    name: docker compose stack serves a real scan
+    name: docker compose stack boots and serves intake + UI
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -38,14 +41,14 @@ jobs:
       - name: Wait for the API healthcheck
         run: scripts/healthcheck.sh http://127.0.0.1:8000 120
 
-      - name: Run the minimal real journey
+      - name: Run the minimal startup smoke (intake + persistence + UI shell)
         run: |
           set -euo pipefail
           python scripts/seed_demo_apk.py
           APK=frontend/e2e/fixtures/demo-lab.apk
           SHA=$(sha256sum "$APK" | cut -d' ' -f1)
           APP=$(curl -fsS -F "file=@$APK;type=application/vnd.android.package-archive" http://127.0.0.1:8000/api/v1/applications)
-          APP_ID=$(printf '%s' "$APP" | jq -r .id)
+          APP_ID=$(printf '%s' "$APP" | jq -er .id)
           AUTH=$(curl -fsS -X POST -H 'Content-Type: application/json' http://127.0.0.1:8000/api/v1/authorizations -d "{
             \"apk_sha256\": \"$SHA\",
             \"target_package\": \"com.example.lab\",
@@ -53,15 +56,17 @@ jobs:
             \"statement\": \"Compose smoke test.\",
             \"max_intensity\": 0,
             \"expires_at\": \"2030-01-01T00:00:00Z\"}")
-          AUTH_ID=$(printf '%s' "$AUTH" | jq -r .id)
+          AUTH_ID=$(printf '%s' "$AUTH" | jq -er .id)
           SCAN=$(curl -fsS -X POST -H 'Content-Type: application/json' http://127.0.0.1:8000/api/v1/scans -d "{
             \"application_id\": \"$APP_ID\",
             \"authorization_id\": \"$AUTH_ID\",
             \"objective\": \"compose smoke\",
             \"intensity\": 0}")
-          SCAN_ID=$(printf '%s' "$SCAN" | jq -r .id)
-          curl -fsS "http://127.0.0.1:8000/api/v1/scans/$SCAN_ID" | jq '{id, status}'
-          curl -fsS http://127.0.0.1:8000/ | grep -qi 'war room\|MOBIUS'
+          SCAN_ID=$(printf '%s' "$SCAN" | jq -er .id)
+          # Persistence: the scan must be retrievable with the same id.
+          curl -fsS "http://127.0.0.1:8000/api/v1/scans/$SCAN_ID" | jq -e --arg id "$SCAN_ID" '.id == $id' >/dev/null
+          # UI shell serves (/ redirects to /ui).
+          curl -fsS http://127.0.0.1:8000/ui | grep -qi 'war room\|MOBIUS'
 
       - name: Show container logs on failure
         if: failure()

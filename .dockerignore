@@ -1,5 +1,18 @@
-# Keep the build context small and reproducible.
+# Keep the build context small, reproducible, and free of local secrets.
+# Example/reference configs stay; real credential material never enters the context.
 .git
+.env
+.env.*
+!.env.example
+.venv
+venv
+**/*.pem
+**/*.key
+**/*.keystore
+**/*.jks
+**/*.p12
+**/id_rsa*
+**/secrets/
 frontend/node_modules
 frontend/artifacts
 src/mobius/api/static/graph-ui

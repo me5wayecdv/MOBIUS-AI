@@ -1,23 +1,22 @@
 # Local self-host run
 
-Two supported ways to run the full War Room stack on one machine. The
-no-Docker path below was verified end to end on 2026-11-19 (real pinned APK,
-upload to report). The Compose stack is new: its definition follows the same
-verified steps, but run `docker compose up --build` once locally to validate
-it before demo day. A ready CI smoke workflow is included at
-`scripts/local-delivery-smoke.yml`; moving it into `.github/workflows/` makes
-the stack CI-verified (the current automation token has no `workflow` scope,
-so that move is a one-time owner step).
+Two ways to run the full War Room stack on one machine:
+
+- **Option B (no Docker)** is the verified path: run end to end on
+  2026-11-19 on Python 3.12 / PostgreSQL 16 (real pinned APK, upload to
+  report; see "Verification status" at the bottom).
+- **Option A (Docker Compose)** is a candidate, not yet validated: the
+  definition follows the same verified steps, but no Docker host was
+  available where this was prepared. Run `docker compose up --build` once
+  locally before relying on it; treat it as unverified until then.
 
 What you get: APK upload, RECON manifest/surface analysis, inline multi-DEX
 indexing, SPECTRE reachability, NEXUS investigation, attack graph, PoC lab
 (local harnesses only), Markdown report, War Room UI.
 
-## Option A: Docker Compose (recommended)
+## Option A: Docker Compose (candidate - unverified)
 
 Prerequisites: Docker with the Compose plugin (`docker compose version`).
-Status: definition reviewed, not yet executed end to end (no Docker host was
-available where this was prepared). Validate once before the demo.
 
 ```sh
 docker compose up --build
@@ -32,62 +31,110 @@ The stack binds 127.0.0.1 only. The API's analyst identity is a development
 stub (`analyst-1`, see docs/INVESTIGATION_OWNERSHIP.md): this delivery is
 single-user local use, not multi-user hosting.
 
-## Option B: no Docker (Python + PostgreSQL + Node)
+## Option B: no Docker (Python + PostgreSQL + Node) - verified
 
-Verified on Python 3.12, PostgreSQL 16, Node 22:
+Verified on Python 3.12, PostgreSQL 16, Node 22. The database role/database
+steps need a PostgreSQL account with CREATEDB/CREATEROLE authority (usually
+the `postgres` superuser, e.g. via `sudo -u postgres ...`); everything after
+that runs as the `mobius` role.
 
 ```sh
+# 1. Database (as a PostgreSQL account with CREATEDB/CREATEROLE):
+createuser mobius --pwprompt        # set password: mobius_local_only
+createdb -O mobius mobius
+
+# 2. Application (as your normal user):
 python -m venv .venv && . .venv/bin/activate
 pip install -e ".[dev]" && pip install "psycopg[binary]>=3.1"
-createdb mobius                       # or any empty PostgreSQL 14+ database
 export MOBIUS_DB_URL="postgresql+psycopg://mobius:mobius_local_only@localhost:5432/mobius"
 export MOBIUS_ARTIFACT_ROOT="$PWD/data/artifacts"
 alembic upgrade head
 cd frontend && npm install --no-audit --no-fund && npm run build && cd ..
-python -m uvicorn mobius.api.app:create_app --factory --host 127.0.0.1 --port 8000
-scripts/healthcheck.sh
+
+# 3. Start the server in the background (foreground blocks this terminal):
+python -m uvicorn mobius.api.app:create_app --factory --host 127.0.0.1 --port 8000 &
+scripts/healthcheck.sh            # waits, then prints /api/v1/health
 ```
+
+Run the server in the background as shown, or open a second terminal for
+`scripts/healthcheck.sh`.
 
 ## Optional: local model integration (Ollama)
 
 Model use is off by default, consent-gated per investigation, and budgeted.
-With Ollama running on the same machine:
+The model environment variables are read when the server starts, so set them
+BEFORE starting uvicorn (exporting them afterwards has no effect):
 
 ```sh
 ollama pull qwen2.5:1.5b            # any local tag; small models have limits, see below
 export MOBIUS_MODEL_PROVIDER=ollama
 export MOBIUS_MODEL_BASE_URL=http://127.0.0.1:11434
 export MOBIUS_MODEL_NAME=qwen2.5:1.5b
+# (re)start uvicorn AFTER these exports
 ```
 
-Then grant consent per scan (`PUT /api/v1/scans/{id}/model-consent` with
-`{"enabled": true, "provider": "ollama"}`) and call
-`POST /api/v1/scans/{id}/nexus/hypotheses`. Without consent the pipeline uses
-the explicitly labelled deterministic fallback.
+Then grant consent per scan and request hypotheses:
 
-Measured on a 1-CPU/2 GB sandbox (2026-11-19): models up to ~1.5B parameters
-load and answer, but their output was rejected by MOBIUS's integrity guards
-(fabricated or wrong-kind evidence citations). Expect to need a larger local
-model and more RAM/CPU than that sandbox had before model output passes the
-citation and evidence-type contracts; the deterministic fallback is the
-honest default until then.
+```sh
+curl -fsS -X PUT -H 'Content-Type: application/json' \
+  http://127.0.0.1:8000/api/v1/scans/<scan_id>/model-consent \
+  -d '{"enabled": true, "provider": "ollama"}'
+curl -fsS -X POST http://127.0.0.1:8000/api/v1/scans/<scan_id>/nexus/hypotheses
+```
+
+Budget: every scan carries a default budget of 400,000 model tokens
+(`budget.max_model_tokens` on `POST /scans`), so no extra budget field is
+needed for a first run; lower it there if you want a tighter cap. Without
+consent the pipeline uses the explicitly labelled deterministic fallback.
+
+Measured on a 1-CPU/2 GB sandbox (2026-11-19): `qwen2.5:0.5b`,
+`qwen2.5:1.5b` and `qwen2.5-coder:1.5b` load and produce schema-valid JSON,
+but every output was rejected by MOBIUS's integrity guards (fabricated or
+wrong-kind evidence citations) and the deterministic fallback took over.
+Whether a larger or different local model passes those guards is unknown -
+it has not been tried. The deterministic fallback is the honest default
+until a model is measured to pass.
 
 ## Optional: constrained workers and JADX source
 
 The API enqueues DEX/RECON/JADX jobs only when immutable image digests are
-configured (docs/OCI_WORKER_BACKEND.md). Build the worker images locally -
-no registry publication is needed:
+configured (docs/OCI_WORKER_BACKEND.md). This is a separate deployment: the
+Compose stack above does NOT wire workers, and the API container has no
+access to the host's Docker socket. Running workers means running the worker
+process on a host with a container runtime (outside the Compose app
+container), with the cache directory shared between that host and wherever
+the API reads it (`MOBIUS_JADX_CACHE_ROOT`; see
+docs/ISOLATED_JADX_WORKER.md).
+
+On a host with Docker, build the worker image locally - no registry
+publication is needed:
 
 ```sh
 docker build -f workers/jadx-image/Dockerfile -t mobius-jadx:local workers/jadx-image
-docker inspect --format='mobius-jadx@{{index .RepoDigests 0}}' mobius-jadx:local  # or pin by image ID
-export MOBIUS_JADX_IMAGE=<immutable reference>
+# Local images have no registry digest; reference them by image ID, which is
+# a content hash and satisfies the immutable-reference validator
+# (worker/runner.py requires <name>@sha256:<64 hex>):
+docker image inspect --format='mobius-jadx@{{.Id}}' mobius-jadx:local
+export MOBIUS_JADX_IMAGE=mobius-jadx@sha256:<id from the command above>
 ```
 
-The JADX worker additionally needs a shared writable cache volume
-(`MOBIUS_JADX_CACHE_ROOT`) between worker and API; see
-docs/ISOLATED_JADX_WORKER.md. GHCR publication of the JADX image remains a
-manual, owner-gated workflow and is not part of local delivery.
+GHCR publication of the JADX image remains a manual, owner-gated workflow
+and is not part of local delivery.
+
+## Verification status (2026-11-19)
+
+- Option B verified end to end on clean `main` (commit c6f0b82): PostgreSQL
+  16 over TCP with the exact `mobius` role/password above, `alembic upgrade
+  head`, background uvicorn, `scripts/healthcheck.sh`, upload of the pinned
+  Allsafe APK, scan, investigation, report. Earlier adapter-level runs:
+  92,817-method multi-DEX index, JADX adapter decompilation of 2 target
+  classes with jadx 1.5.6.
+- Option A (Compose) and the Docker `Dockerfile`: reviewed only, never
+  executed. No Docker host was available; validate before demo.
+- CI smoke workflow: `scripts/local-delivery-smoke.yml` is a minimal
+  startup smoke (intake + persistence + UI shell), not a pipeline run.
+  Moving it into `.github/workflows/` requires a token with the `workflow`
+  scope (a one-time owner step; the automation token used here lacks it).
 
 ## Known limits (unchanged by this delivery)
 
