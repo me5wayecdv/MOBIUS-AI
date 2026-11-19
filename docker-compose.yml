@@ -23,7 +23,10 @@ services:
     environment:
       MOBIUS_DB_URL: postgresql+psycopg://mobius:mobius_local_only@db:5432/mobius
       MOBIUS_ARTIFACT_ROOT: /data/artifacts
-      MOBIUS_ENV: production
+      # Local delivery runs the development environment: analyst identity is a
+      # development stub, and the app refuses to boot with stub auth under
+      # MOBIUS_ENV=production by design.
+      MOBIUS_ENV: development
       # Optional local model integration (see docs/LOCAL_RUN.md):
       # MOBIUS_MODEL_PROVIDER: ollama
       # MOBIUS_MODEL_BASE_URL: http://host.docker.internal:11434
