@@ -169,3 +169,107 @@ def test_a_decisive_failure_is_not_described_as_a_deferral(session, scan_id):
     assert "could not be decided" not in row.rationale
     # ...and it still admits what was never established.
     assert "never established" in row.rationale
+
+
+def _derived_secret_attrs(secret="00112233445566778899aabbccddeeff"):
+    """Real detector output for a synthetic literal -> pure return-transform ->
+    cross-class sink route (same shape as the uncrack1 key route). The default
+    literal FAILS the format screen; pass a format-passing literal for the
+    derived-only never-confirm guarantee."""
+    from mobius.core.reachability import MethodRef
+    from mobius.core.secrets import (
+        FlowBlock, SInstruction, detect_hardcoded_secrets, gate_attributes,
+    )
+
+    class Idx:
+        def __init__(self, strings): self.strings = strings
+
+    caller = MethodRef("com.example.Foo", "check", "()V")
+    decode = MethodRef("com.example.Foo", "decode", "(Ljava/lang/String;)[B")
+    sink = MethodRef("com.example.Crypto", "a", "([B[B)[B")
+    caller_flow = [FlowBlock(0, (
+        SInstruction(0, "const-string", (1,), literal=secret),
+        SInstruction(2, "invoke-static", (1,), invoke_class="Lcom/example/Foo;",
+                     invoke_method="decode", invoke_descriptor="(Ljava/lang/String;)[B",
+                     is_static=True),
+        SInstruction(4, "move-result-object", (2,)),
+        SInstruction(6, "invoke-static", (2, 3), invoke_class="Lcom/example/Crypto;",
+                     invoke_method="a", invoke_descriptor="([B[B)[B", is_static=True),
+        SInstruction(8, "move-result-object", (4,)),
+    ), ())]
+    decode_flow = [FlowBlock(0, (
+        SInstruction(0, "invoke-virtual", (7,), invoke_class="Ljava/lang/String;",
+                     invoke_method="length", invoke_descriptor="()I"),
+        SInstruction(2, "move-result", (0,)),
+        SInstruction(4, "new-array", (1, 0)),
+        SInstruction(6, "invoke-virtual", (7,), invoke_class="Ljava/lang/String;",
+                     invoke_method="charAt", invoke_descriptor="(I)C"),
+        SInstruction(8, "move-result", (2,)),
+        SInstruction(10, "aput-byte", (2, 1, 0)),
+        SInstruction(12, "return-object", (1,)),
+    ), ())]
+    sink_flow = [FlowBlock(0, (
+        SInstruction(0, "new-instance", (0,)),
+        SInstruction(2, "const-string", (1,), literal="AES"),
+        SInstruction(4, "invoke-direct", (0, 2, 1),
+                     invoke_class="Ljavax/crypto/spec/SecretKeySpec;",
+                     invoke_method="<init>", invoke_descriptor="([BLjava/lang/String;)V"),
+        SInstruction(6, "return-object", (2,)),
+    ), ())]
+    cands = detect_hardcoded_secrets(
+        Idx({caller: (secret,)}),
+        {caller: caller_flow, decode: decode_flow, sink: sink_flow},
+        frame_info={decode: (8, True), sink: (4, True)},
+        dex_complete=True)
+    hit = [c for c in cands if c.value == secret]
+    assert len(hit) == 1, cands
+    return gate_attributes(hit[0])
+
+
+def test_derived_secret_route_maps_to_manual_review_not_confirmed(session, scan_id):
+    attrs = _derived_secret_attrs()
+    assert "format_and_entropy_ok" not in attrs          # inapplicable, left missing
+    finding, record = _validate(
+        session, scan_id, category="hardcoded-secret", attributes=attrs,
+        title="Hardcoded key reaches SecretKeySpec via pure transform",
+        description="Derived key-material route; decoded bytes not modelled.")
+    assert record.verdict is Verdict.INSUFFICIENT_EVIDENCE
+    assert record.gate_passed is False
+    assert finding.status is FindingStatus.MANUAL_REVIEW_REQUIRED
+    assert finding.gate_evidence["format_and_entropy_ok"] is None   # never established
+    assert finding.gate_evidence["used_in_security_context"] is True
+    assert finding.gate_evidence["located"] is True
+    assert 0.0 < finding.confidence < 1.0
+
+
+def test_secret_format_refutation_would_reject(session, scan_id):
+    """The contrast case: had the detector written format_and_entropy_ok=False
+    for the same role-proven material, the report model REJECTS the weakness -
+    which is exactly what the inapplicability rule prevents."""
+    attrs = _derived_secret_attrs()
+    attrs["format_and_entropy_ok"] = False
+    finding, record = _validate(
+        session, scan_id, category="hardcoded-secret", attributes=attrs,
+        title="Hardcoded key reaches SecretKeySpec via pure transform",
+        description="Contrast case: shape-based refutation of role-proven key material.")
+    assert record.verdict is Verdict.REJECTED
+    assert finding.status is FindingStatus.REJECTED
+
+
+def test_derived_only_format_passing_literal_never_confirms(session, scan_id):
+    """Whole report path: a derived-route candidate whose literal PASSES the
+    format screen still lands MANUAL_REVIEW_REQUIRED - the format clause is
+    missing (never True), so CONFIRMED is unreachable for derived-only
+    evidence regardless of string shape."""
+    attrs = _derived_secret_attrs(secret="kX9mZ2vB8qW4nR6pL0sT3yU7aC5dF1")
+    assert "format_and_entropy_ok" not in attrs          # missing, not True
+    assert attrs["used_in_security_context"] is True
+    finding, record = _validate(
+        session, scan_id, category="hardcoded-secret", attributes=attrs,
+        title="Derived key route, format-passing literal",
+        description="String shape passes; route evidence is may-depend only.")
+    assert record.verdict is Verdict.INSUFFICIENT_EVIDENCE
+    assert record.gate_passed is False
+    assert finding.status is FindingStatus.MANUAL_REVIEW_REQUIRED
+    assert finding.gate_evidence["format_and_entropy_ok"] is None
+    assert 0.0 < finding.confidence < 1.0
