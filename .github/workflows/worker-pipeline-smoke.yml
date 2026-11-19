@@ -30,6 +30,7 @@ on:
       - "tests/fixtures/dex/**"
       - "scripts/seed_pipeline_apk.py"
       - "scripts/healthcheck.sh"
+      - "scripts/oci_contract_probe.py"
       - ".github/workflows/worker-pipeline-smoke.yml"
   pull_request:
     paths:
@@ -49,6 +50,7 @@ on:
       - "tests/fixtures/dex/**"
       - "scripts/seed_pipeline_apk.py"
       - "scripts/healthcheck.sh"
+      - "scripts/oci_contract_probe.py"
       - ".github/workflows/worker-pipeline-smoke.yml"
 
 concurrency:
@@ -95,6 +97,13 @@ jobs:
           set -euo pipefail
           docker pull ghcr.io/me5wayecdv/mobius-recon@sha256:3874d22044f2452360e7bd94773ab9f8e4979f1fdc0adffd8f40f6fcfde9e789
           docker pull ghcr.io/me5wayecdv/mobius-dex@sha256:3ea8feba92f374825a60e75a94c557584a29a280f2c32b8bb2ec5535929f3f02
+
+      - name: Probe the worker container mount contract at runtime
+        env:
+          MOBIUS_RECON_IMAGE: ghcr.io/me5wayecdv/mobius-recon@sha256:3874d22044f2452360e7bd94773ab9f8e4979f1fdc0adffd8f40f6fcfde9e789
+        run: |
+          set -euo pipefail
+          MOBIUS_OCI_RUNTIME="$(command -v docker)" python3 scripts/oci_contract_probe.py
 
       - name: Migrate, then start the API and the queue worker
         env:
