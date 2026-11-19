@@ -1,6 +1,9 @@
 # Demonstration scenarios (D-002)
 
-Three demonstration scenarios. Every target is a public artefact pinned by
+Three functional demonstration scenarios (component review, persisted
+source capture, and the soundness boundary). These are functional
+demonstrations of the pipeline on pinned targets; they are not a proof that
+the system detects specific vulnerability classes. Every target is a public artefact pinned by
 SHA-256 in `corpus/corpus.json` (nothing is redistributed; hashes are
 verified before use). Expected evidence below is stated from measured runs on
 main, not from aspiration.
@@ -15,8 +18,10 @@ main, not from aspiration.
 - **Expected evidence:** 5 components close at manual review with persisted
   review evidence records (measured on clean-tree main, 2026-11-19).
 - **Positive control:** the InsecureBankv2 run produces those 5 review hits.
-- **Negative control:** benign corpus samples produce zero findings
-  (clean-tree benchmark: precision 1.0, specificity 1.0).
+- **Negative control:** the named pinned benign samples
+  `androguard-test-debug`, `androguard-testactivity` and `a2dp-volume`
+  produced zero findings in the clean-tree benchmark (aggregate precision
+  1.0, specificity 1.0 across all 7 samples).
 
 ## Scenario B - Source-backed investigation with persisted code evidence
 
@@ -40,7 +45,8 @@ main, not from aspiration.
 
 ## Scenario C - Soundness boundary on insufficient evidence
 
-- **Target:** Allsafe (pinned in the corpus); live journey scan
+- **Target:** the Allsafe training APK (Apache-2.0, security education),
+  SHA-256 `d6792d6634a033f048f935f1269179d3c27b859c4c34b1e9e5b008a88375efd9`; live journey scan
   `scn_01M7RW55B200GZ5KGC8HKSR5Z7` on main `c6f0b82`, 2026-11-19.
 - **Source location:** 7 DEX entries, 92,817 methods indexed; 5 components
   investigated end to end (upload to report).
@@ -48,8 +54,9 @@ main, not from aspiration.
   `manual_review_required`, never at "refuted" (merged PR #61 policy); the
   coverage manifest discloses the analysis bounds.
 - **Positive control:** the recorded live journey outcome above.
-- **Negative control:** clean-tree benchmark precision 1.0 and specificity
-  1.0 - no fabricated confirmations.
+- **Negative control:** none matched per-scenario; the aggregate
+  clean-tree benchmark (precision 1.0, specificity 1.0 over 7 samples) is
+  the supporting evidence that confirmations are not fabricated.
 
 ## Out of the demo path
 

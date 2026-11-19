@@ -18,7 +18,7 @@
 | # | Task | Owner | State | Acceptance |
 |---|---|---|---|---|
 | D-001 | Select one intentionally vulnerable Android APK owned by the team | Director + Android team | [~] | 7 public samples are pinned by SHA-256 with source URLs in `corpus/corpus.json` and Allsafe is the working demo target (journey of 2026-11-19). Remaining: record the team's formal target acceptance; pinning alone does not prove it. |
-| D-002 | Define 2–3 demonstration vulnerability scenarios | Director + M2 + M5 | [x] | `docs/DEMO_SCENARIOS.md` defines three scenarios, each with pinned target, source location, expected evidence, and positive and negative controls measured on main (exported-component review; source-backed persisted evidence with 404 fail-closed controls; soundness boundary on insufficient evidence). |
+| D-002 | Define 2–3 demonstration vulnerability scenarios | Director + M2 + M5 | [~] | `docs/DEMO_SCENARIOS.md` defines three functional demonstration scenarios (component review, persisted source capture, soundness boundary), each with pinned target, source location, expected evidence, and positive and negative controls measured on main. Remaining: demonstrated vulnerability-detection scenarios; these functional demos are not that. |
 | D-003 | Confirm host capabilities: JDK/JADX, Android SDK, emulator/KVM, Docker | Director | [ ] | Owner/demo-host step: record tool availability on the actual demo machine. Cannot be done from the build sandbox; no capabilities assumed. |
 | D-004 | Freeze demo-only scope and fallback recording | All | [x] | Reproducible live run on main `c6f0b82` (2026-11-19, Allsafe scan `scn_01M7RW55B200GZ5KGC8HKSR5Z7`) plus a labelled recorded War Room replay prepared as the fallback (prepared internally; not yet shown to the owner). |
 
