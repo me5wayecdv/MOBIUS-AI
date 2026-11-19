@@ -79,7 +79,9 @@ class OciBackend:
             "--ulimit", f"fsize={limits.max_output_bytes}:{limits.max_output_bytes}",
             "--ulimit", "nofile=1024:1024", "--user=65532:65532",
             f"--tmpfs=/tmp:rw,noexec,nosuid,nodev,size={self.tmpfs_mb}m",
-            "--mount", f"type=bind,src={root},dst=/work,rw",
+            # --mount fields must be key=value; a bare `rw` is rejected by the runtime.
+            # Bind mounts are read-write by default, which is what the workspace needs.
+            "--mount", f"type=bind,src={root},dst=/work",
             "--workdir=/work", "--hostname=mobius-tool",
             "--env=HOME=/tmp", "--env=TMPDIR=/tmp", image, *argv,
         )

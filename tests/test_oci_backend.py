@@ -42,6 +42,22 @@ def test_container_command_enforces_security_flags(tmp_path):
     assert IMAGE in command
 
 
+def test_mount_flag_uses_only_valid_key_value_fields(tmp_path):
+    """Regression: docker rejects bare fields in --mount (a `,rw` suffix shipped once and
+    every job failed with 'invalid field rw must be a key=value pair')."""
+    backend = make_backend(tmp_path)
+    workspace = tmp_path / "work"
+    workspace.mkdir()
+    command = backend._container_argv(
+        argv=(BINARY, "--version"), workspace=workspace,
+        limits=ToolLimits(timeout_seconds=30, memory_mb=512, cpu_seconds=20),
+    )
+    mount = command[command.index("--mount") + 1]
+    assert mount == f"type=bind,src={workspace.resolve()},dst=/work"
+    for field in mount.split(","):
+        assert "=" in field, field
+
+
 def test_unregistered_binary_rejected(tmp_path):
     backend = make_backend(tmp_path)
     workspace = tmp_path / "work"
