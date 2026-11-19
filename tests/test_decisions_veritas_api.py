@@ -58,12 +58,12 @@ def _make_scan(client):
     return _scan(client, app_id, auth_id).json()["id"]
 
 
-def _add_decision(session, scan_id, suffix, created_at, *, model_id=None, action_args=None, output_json=None):
+def _add_decision(session, scan_id, suffix, created_at, *, model_id=None, action="callers_of", agent="nexus", action_args=None, output_json=None):
     row = DecisionRow(
         id=f"dec_{suffix}",
         investigation_id=scan_id,
-        agent="nexus",
-        action="callers_of",
+        agent=agent,
+        action=action,
         action_args=action_args or {"method": "a"},
         output_json=output_json,
         model_id=model_id,
@@ -418,47 +418,57 @@ def test_veritas_review_http_malformed_model_output_is_422(client, session, ctx)
     assert response.json()["code"] == "MODEL_OUTPUT_INVALID"
 
 
-def test_veritas_review_http_conflicting_claimed_producer_is_422(client, session, ctx):
+def _register_producer_actions(monkeypatch, *actions):
+    from mobius.services import veritas as veritas_module
+
+    monkeypatch.setattr(
+        veritas_module, "_FINDING_PRODUCER_ACTIONS", frozenset(actions)
+    )
+
+
+def _seed_producer(session, scan_id, suffix, model_id, finding_id, action="propose_finding", agent="nexus", action_args=None, output_json=None):
+    return _add_decision(
+        session,
+        scan_id,
+        suffix,
+        "2026-11-19T04:00:00.000Z",
+        model_id=model_id,
+        action=action,
+        agent=agent,
+        action_args=action_args if action_args is not None else {"finding_id": finding_id},
+        output_json=output_json if output_json is not None else {"finding_id": finding_id},
+    )
+
+
+def test_veritas_review_http_conflicting_claimed_producer_is_422(client, session, ctx, monkeypatch):
     _configure_gateway(ctx, _VALID_REPLY)
+    _register_producer_actions(monkeypatch, "propose_finding")
     scan_id = _make_scan(client)
     evidence_id = _add_evidence(session, scan_id)
     finding_id = _add_finding(session, scan_id, evidence_refs=[evidence_id])
     _enable_consent(session, scan_id)
     # Persisted provenance: producer-v1 produced this finding.
-    _add_decision(
-        session,
-        scan_id,
-        "41",
-        "2026-11-19T04:00:00.000Z",
-        model_id="producer-v1",
-        action_args={"finding_id": finding_id},
-        output_json={"finding_id": finding_id},
-    )
+    _seed_producer(session, scan_id, "41", "producer-v1", finding_id)
     response = client.post(
         f"/api/v1/scans/{scan_id}/findings/{finding_id}/veritas-review",
         params={"producer_model_id": "producer-v2"},  # lies about the producer
     )
     assert response.status_code == 422
     assert response.json()["code"] == "MODEL_OUTPUT_INVALID"
+    # Stable client-facing message; no model/transport internals leak.
+    assert "producer-v2" not in response.json().get("detail", "")
 
 
 def test_veritas_review_http_matching_persisted_producer_proves_independence(
-    client, session, ctx
+    client, session, ctx, monkeypatch
 ):
     _configure_gateway(ctx, _VALID_REPLY)
+    _register_producer_actions(monkeypatch, "propose_finding")
     scan_id = _make_scan(client)
     evidence_id = _add_evidence(session, scan_id)
     finding_id = _add_finding(session, scan_id, evidence_refs=[evidence_id])
     _enable_consent(session, scan_id)
-    _add_decision(
-        session,
-        scan_id,
-        "42",
-        "2026-11-19T04:00:00.000Z",
-        model_id="producer-v1",
-        action_args={"finding_id": finding_id},
-        output_json={"finding_id": finding_id},
-    )
+    _seed_producer(session, scan_id, "42", "producer-v1", finding_id)
     response = client.post(
         f"/api/v1/scans/{scan_id}/findings/{finding_id}/veritas-review",
         params={"producer_model_id": "producer-v1"},
@@ -468,3 +478,88 @@ def test_veritas_review_http_matching_persisted_producer_proves_independence(
     assert body["producer_model_id"] == "producer-v1"
     assert body["producer_model_verified"] is True
     assert body["independence_assured"] is True
+
+
+def test_veritas_review_repeated_never_self_resolves_producer(client, session, ctx):
+    """A prior VERITAS review decision references the finding and carries a
+    model_id; it must NEVER be treated as the finding's producer, so repeated
+    reviews behave identically."""
+    _configure_gateway(ctx, _VALID_REPLY)
+    scan_id = _make_scan(client)
+    evidence_id = _add_evidence(session, scan_id)
+    finding_id = _add_finding(session, scan_id, evidence_refs=[evidence_id])
+    _enable_consent(session, scan_id)
+
+    url = f"/api/v1/scans/{scan_id}/findings/{finding_id}/veritas-review"
+    first = client.post(url, params={"producer_model_id": "producer-v1"})
+    second = client.post(url, params={"producer_model_id": "producer-v1"})
+    assert first.status_code == 200 and second.status_code == 200
+    for body in (first.json(), second.json()):
+        assert body["producer_model_verified"] is False
+        assert body["independence_assured"] is False
+
+
+def test_veritas_review_rows_excluded_even_under_registered_action(
+    client, session, ctx, monkeypatch
+):
+    """Defense in depth: even if a review action name were ever registered,
+    decisions written by VERITAS itself are structurally excluded."""
+    _configure_gateway(ctx, _VALID_REPLY)
+    _register_producer_actions(monkeypatch, "review_finding")
+    scan_id = _make_scan(client)
+    evidence_id = _add_evidence(session, scan_id)
+    finding_id = _add_finding(session, scan_id, evidence_refs=[evidence_id])
+    _enable_consent(session, scan_id)
+
+    url = f"/api/v1/scans/{scan_id}/findings/{finding_id}/veritas-review"
+    first = client.post(url, params={"producer_model_id": "producer-v1"})
+    second = client.post(url, params={"producer_model_id": "producer-v1"})
+    assert first.status_code == 200 and second.status_code == 200
+    assert second.json()["producer_model_verified"] is False
+
+
+def test_veritas_review_ambiguous_producer_candidates_fail_closed(
+    client, session, ctx, monkeypatch
+):
+    _configure_gateway(ctx, _VALID_REPLY)
+    _register_producer_actions(monkeypatch, "propose_finding")
+    scan_id = _make_scan(client)
+    evidence_id = _add_evidence(session, scan_id)
+    finding_id = _add_finding(session, scan_id, evidence_refs=[evidence_id])
+    _enable_consent(session, scan_id)
+    _seed_producer(session, scan_id, "43", "producer-v1", finding_id)
+    _seed_producer(session, scan_id, "44", "producer-v9", finding_id)
+    response = client.post(
+        f"/api/v1/scans/{scan_id}/findings/{finding_id}/veritas-review",
+        params={"producer_model_id": "producer-v1"},
+    )
+    assert response.status_code == 422
+    assert response.json()["code"] == "MODEL_OUTPUT_INVALID"
+
+
+def test_veritas_review_malformed_decision_json_never_crashes(
+    client, session, ctx, monkeypatch
+):
+    """Unhashable/nested JSON shapes in decision fields must not raise; the
+    producer simply stays unresolved."""
+    _configure_gateway(ctx, _VALID_REPLY)
+    _register_producer_actions(monkeypatch, "propose_finding")
+    scan_id = _make_scan(client)
+    evidence_id = _add_evidence(session, scan_id)
+    finding_id = _add_finding(session, scan_id, evidence_refs=[evidence_id])
+    _enable_consent(session, scan_id)
+    _seed_producer(
+        session,
+        scan_id,
+        "45",
+        "producer-v1",
+        finding_id,
+        action_args={"finding_id": {"unexpected": ["nested", "structure"]}},
+        output_json="not-an-object",
+    )
+    response = client.post(
+        f"/api/v1/scans/{scan_id}/findings/{finding_id}/veritas-review",
+        params={"producer_model_id": "producer-v1"},
+    )
+    assert response.status_code == 200
+    assert response.json()["producer_model_verified"] is False

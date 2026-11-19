@@ -67,6 +67,25 @@ class VeritasReviewReply(BaseModel):
     challenges: list[ReviewChallenge] = Field(max_length=8)
 
 
+# Decision actions that may actually PRODUCE a finding. Advisory/review actions
+# (VERITAS's own "review_finding" above all) never qualify. v1 has no
+# model-backed finding producer - findings come from deterministic gates - so
+# this registry is intentionally EMPTY: producer independence stays unverified
+# until a real production action is introduced and registered here.
+_FINDING_PRODUCER_ACTIONS: frozenset[str] = frozenset()
+
+
+def _decision_references_finding(row: DecisionRow, finding_id: str) -> bool:
+    """Hash-safe, type-guarded reference check over arbitrary persisted JSON."""
+    args = row.action_args if isinstance(row.action_args, dict) else {}
+    output = row.output_json if isinstance(row.output_json, dict) else {}
+    for value in (args.get("finding_id"), output.get("finding_id")):
+        if isinstance(value, str) and value == finding_id:
+            return True
+    produced = output.get("produced_finding_ids")
+    return isinstance(produced, list) and finding_id in produced
+
+
 class VeritasReviewService:
     """Run a different model as an advisory reviewer without changing gate verdicts."""
 
@@ -272,22 +291,32 @@ class VeritasReviewService:
         }
 
     def _producer_decision(self, finding: FindingRow) -> DecisionRow | None:
-        """Persisted model decision that produced this finding, when one exists."""
+        """Persisted model decision that PRODUCED this finding, when one exists.
+
+        Only decisions whose action is an explicitly registered finding-production
+        action qualify - a model-bearing decision that merely mentions the finding
+        (including this service's own advisory ``review_finding`` rows) is never a
+        producer. Selection is deterministic ((created_at, id) order); more than
+        one candidate means ambiguous provenance and fails closed.
+        """
+        if not _FINDING_PRODUCER_ACTIONS:
+            return None
         rows = self.session.execute(
-            select(DecisionRow).where(
+            select(DecisionRow)
+            .where(
                 DecisionRow.investigation_id == finding.investigation_id,
+                DecisionRow.agent != AGENT,
+                DecisionRow.action.in_(sorted(_FINDING_PRODUCER_ACTIONS)),
                 DecisionRow.model_id.is_not(None),
             )
+            .order_by(DecisionRow.created_at.asc(), DecisionRow.id.asc())
         ).scalars().all()
-        for row in rows:
-            args = row.action_args or {}
-            output = row.output_json or {}
-            if finding.id in {args.get("finding_id"), output.get("finding_id")}:
-                return row
-            produced = output.get("produced_finding_ids")
-            if isinstance(produced, list) and finding.id in produced:
-                return row
-        return None
+        matches = [row for row in rows if _decision_references_finding(row, finding.id)]
+        if len(matches) > 1:
+            raise ModelOutputInvalid(
+                "ambiguous producer provenance: multiple production decisions reference this finding"
+            )
+        return matches[0] if matches else None
 
 
 def _compact_json(value: dict[str, Any]) -> str:

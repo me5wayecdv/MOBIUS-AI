@@ -542,7 +542,11 @@ def run_veritas_review(
     except ModelConsentRequired as exc:
         raise ModelConsentRequiredError(str(exc)) from exc
     except (ModelOutputInvalid, ValueError) as exc:
-        raise ModelOutputInvalidError(str(exc)) from exc
+        # Stable client-facing message: raw validation/parse details can carry
+        # model output content and never leave the server.
+        raise ModelOutputInvalidError(
+            "reviewer model output failed validation or review input was not usable"
+        ) from exc
     except ModelBudgetExceeded as exc:
         raise BudgetExhausted(str(exc)) from exc
     except ModelProviderError as exc:
