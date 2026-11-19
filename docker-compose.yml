@@ -1,0 +1,41 @@
+# Local self-host delivery: API + War Room + PostgreSQL in two containers.
+# Scope: single-user local use on 127.0.0.1 (the API's analyst identity is a
+# development stub - see docs/INVESTIGATION_OWNERSHIP.md). The constrained OCI
+# worker path needs a container runtime on the host and is documented in
+# docs/LOCAL_RUN.md; it is intentionally not wired here.
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: mobius
+      POSTGRES_PASSWORD: mobius_local_only
+      POSTGRES_DB: mobius
+    volumes:
+      - mobius-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mobius -d mobius"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  app:
+    build: .
+    environment:
+      MOBIUS_DB_URL: postgresql+psycopg://mobius:mobius_local_only@db:5432/mobius
+      MOBIUS_ARTIFACT_ROOT: /data/artifacts
+      MOBIUS_ENV: production
+      # Optional local model integration (see docs/LOCAL_RUN.md):
+      # MOBIUS_MODEL_PROVIDER: ollama
+      # MOBIUS_MODEL_BASE_URL: http://host.docker.internal:11434
+      # MOBIUS_MODEL_NAME: qwen2.5:1.5b
+    volumes:
+      - mobius-artifacts:/data/artifacts
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  mobius-pgdata:
+  mobius-artifacts:
