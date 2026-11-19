@@ -133,3 +133,164 @@ def test_worker_queue_refuses_jadx_job_without_surface_ready_state(session, stor
     scan, app = _recon_job(session, store, future_iso)
     with pytest.raises(Exception, match="requires SURFACE_READY state"):
         WorkerQueue(session).enqueue_jadx_decompile(scan.id, app.artifact_key)
+
+
+def test_worker_queue_enqueues_and_claims_provider_analysis_job(session, store, future_iso):
+    scan, app = _recon_job(session, store, future_iso)
+    session.get(InvestigationRow, scan.id).state = "SURFACE_READY"
+    session.flush()
+    queue = WorkerQueue(session)
+
+    job = queue.enqueue_provider_analysis(scan.id, app.artifact_key)
+    assert job.kind == "provider_analysis"
+    assert job.status == "queued"
+
+    claimed = queue.claim("provider-worker")
+    assert claimed is not None
+    assert claimed.id == job.id
+    assert claimed.kind == "provider_analysis"
+    assert claimed.status == "running"
+
+
+def test_worker_queue_prevents_duplicate_unapplied_provider_jobs(session, store, future_iso):
+    scan, app = _recon_job(session, store, future_iso)
+    session.get(InvestigationRow, scan.id).state = "SURFACE_READY"
+    session.flush()
+    queue = WorkerQueue(session)
+    queue.enqueue_provider_analysis(scan.id, app.artifact_key)
+
+    with pytest.raises(Exception, match="already active"):
+        queue.enqueue_provider_analysis(scan.id, app.artifact_key)
+
+
+def test_worker_queue_refuses_provider_job_without_surface_ready_state(session, store, future_iso):
+    scan, app = _recon_job(session, store, future_iso)
+    with pytest.raises(Exception, match="requires SURFACE_READY state"):
+        WorkerQueue(session).enqueue_provider_analysis(scan.id, app.artifact_key)
+
+
+def test_worker_queue_refuses_provider_job_for_a_different_artifact(session, store, future_iso):
+    scan, app = _recon_job(session, store, future_iso)
+    session.get(InvestigationRow, scan.id).state = "SURFACE_READY"
+    session.flush()
+    with pytest.raises(Exception, match="does not match the investigation APK"):
+        WorkerQueue(session).enqueue_provider_analysis(scan.id, "sha256:other")
+
+
+def test_worker_queue_enqueues_and_claims_secrets_analysis_job(session, store, future_iso):
+    scan, app = _recon_job(session, store, future_iso)
+    session.get(InvestigationRow, scan.id).state = "SURFACE_READY"
+    session.flush()
+    queue = WorkerQueue(session)
+
+    job = queue.enqueue_secrets_analysis(scan.id, app.artifact_key)
+    assert job.kind == "secrets_analysis"
+    assert job.status == "queued"
+
+    claimed = queue.claim("secrets-worker")
+    assert claimed is not None
+    assert claimed.id == job.id
+    assert claimed.kind == "secrets_analysis"
+    assert claimed.status == "running"
+    # The lease must outlive the 900s tool timeout (claim() comment): this
+    # kind is mapped to 20 minutes, same as provider analysis.
+    from datetime import datetime, timedelta, timezone
+    lease = datetime.fromisoformat(claimed.lease_until.replace("Z", "+00:00"))
+    assert lease >= datetime.now(timezone.utc) + timedelta(minutes=19)
+
+
+def test_worker_queue_prevents_duplicate_unapplied_secrets_jobs(session, store, future_iso):
+    scan, app = _recon_job(session, store, future_iso)
+    session.get(InvestigationRow, scan.id).state = "SURFACE_READY"
+    session.flush()
+    queue = WorkerQueue(session)
+    queue.enqueue_secrets_analysis(scan.id, app.artifact_key)
+
+    with pytest.raises(Exception, match="already active"):
+        queue.enqueue_secrets_analysis(scan.id, app.artifact_key)
+
+
+def test_worker_queue_refuses_secrets_job_without_surface_ready_state(session, store, future_iso):
+    scan, app = _recon_job(session, store, future_iso)
+    with pytest.raises(Exception, match="requires SURFACE_READY state"):
+        WorkerQueue(session).enqueue_secrets_analysis(scan.id, app.artifact_key)
+
+
+def test_worker_queue_refuses_secrets_job_for_a_different_artifact(session, store, future_iso):
+    scan, app = _recon_job(session, store, future_iso)
+    session.get(InvestigationRow, scan.id).state = "SURFACE_READY"
+    session.flush()
+    with pytest.raises(Exception, match="does not match the investigation APK"):
+        WorkerQueue(session).enqueue_secrets_analysis(scan.id, "sha256:other")
+
+
+def test_worker_queue_refuses_secrets_job_for_a_revoked_authorization(session, store, future_iso):
+    from mobius.adapters.models import AuthorizationRow
+    scan, app = _recon_job(session, store, future_iso)
+    row = session.get(InvestigationRow, scan.id)
+    row.state = "SURFACE_READY"
+    auth = session.get(AuthorizationRow, row.authorization_id)
+    auth.revoked_at = future_iso
+    session.flush()
+    with pytest.raises(Exception, match="no longer valid"):
+        WorkerQueue(session).enqueue_secrets_analysis(scan.id, app.artifact_key)
+
+
+def test_worker_queue_refuses_secrets_job_for_an_expired_authorization(session, store, future_iso):
+    from mobius.adapters.models import AuthorizationRow
+    scan, app = _recon_job(session, store, future_iso)
+    row = session.get(InvestigationRow, scan.id)
+    row.state = "SURFACE_READY"
+    auth = session.get(AuthorizationRow, row.authorization_id)
+    auth.expires_at = "2000-01-01T00:00:00Z"
+    session.flush()
+    with pytest.raises(Exception, match="no longer valid"):
+        WorkerQueue(session).enqueue_secrets_analysis(scan.id, app.artifact_key)
+
+
+def test_worker_queue_claims_mixed_kinds_in_creation_order(session, store, future_iso):
+    """Shared-kind claim regression: adding secrets_analysis to the claimable
+    set must not starve or reorder the existing kinds."""
+    scan, app = _recon_job(session, store, future_iso)
+    queue = WorkerQueue(session)
+    recon = queue.enqueue_recon(scan.id, app.artifact_key)
+    session.get(InvestigationRow, scan.id).state = "SURFACE_READY"
+    session.flush()
+    secrets = queue.enqueue_secrets_analysis(scan.id, app.artifact_key)
+
+    first = queue.claim("worker-a")
+    second = queue.claim("worker-b")
+    assert first is not None and first.id == recon.id
+    assert second is not None and second.id == secrets.id
+    assert queue.claim("worker-c") is None
+
+
+# ---------------------------------------------------------------------------
+# PG DSN selection (test_worker_queue_pg.resolve_pg_dsn): the CI-exported
+# MOBIUS_TEST_PG_URL must actually reach the PG tests, without breaking the
+# pre-existing MOBIUS_TEST_PG_DSN name.
+# ---------------------------------------------------------------------------
+
+def test_pg_dsn_prefers_explicit_dsn_over_ci_url():
+    from pg_dsn import resolve_pg_dsn
+    env = {"MOBIUS_TEST_PG_DSN": "postgresql+psycopg://a/x",
+           "MOBIUS_TEST_PG_URL": "postgresql+psycopg://b/y"}
+    assert resolve_pg_dsn(env) == "postgresql+psycopg://a/x"
+
+
+def test_pg_dsn_falls_back_to_ci_url():
+    from pg_dsn import resolve_pg_dsn
+    assert resolve_pg_dsn({"MOBIUS_TEST_PG_URL": "postgresql+psycopg://b/y"}) == \
+        "postgresql+psycopg://b/y"
+
+
+def test_pg_dsn_empty_dsn_does_not_shadow_ci_url():
+    from pg_dsn import resolve_pg_dsn
+    assert resolve_pg_dsn({"MOBIUS_TEST_PG_DSN": "",
+                           "MOBIUS_TEST_PG_URL": "postgresql+psycopg://b/y"}) == \
+        "postgresql+psycopg://b/y"
+
+
+def test_pg_dsn_missing_returns_none_so_tests_skip():
+    from pg_dsn import resolve_pg_dsn
+    assert resolve_pg_dsn({}) is None

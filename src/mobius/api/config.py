@@ -21,6 +21,11 @@ class Settings:
     model_timeout_seconds: int = 120
     jadx_cache_root: Path | None = None
     jadx_image: str | None = None
+    # Explicit opt-in for the secrets-analysis enqueue route. Defaults OFF:
+    # until a digest-pinned worker image is published and deployed, a queued
+    # job would be claimed and terminally failed by an unconfigured worker.
+    # Image digest presence alone is NOT treated as fleet capability.
+    secrets_enqueue_enabled: bool = False
 
     @property
     def is_production(self) -> bool:
@@ -43,4 +48,5 @@ class Settings:
                 )
             ).expanduser().resolve(),
             jadx_image=os.environ.get("MOBIUS_JADX_IMAGE") or None,
+            secrets_enqueue_enabled=os.environ.get("MOBIUS_SECRETS_ENQUEUE_ENABLED") == "1",
         )

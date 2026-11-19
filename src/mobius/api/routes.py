@@ -24,6 +24,7 @@ from ..services.validation import ValidationService
 from ..services.worker_queue import WorkerQueue
 from ..core.schemas import PoCTestPlan
 from ..services.poc_approval import PoCApprovalService
+from ..services.provider_analysis import ProviderAnalysisService
 from ..services.poc_execution import PoCExecutionService, request_poc_cancel
 from .deps import analyst_id, get_context
 from .schemas import (
@@ -857,6 +858,444 @@ def post_evidence(
         produced_by=who,
     )
     return {"id": ev.id, "sha256": ev.sha256, "byte_size": ev.byte_size}
+
+
+@router.post("/scans/{scan_id}/provider-analysis", tags=["scans"])
+def provider_analysis(scan_id: str, session=SessionDep, who: str = Depends(analyst_id)):
+    """Run the static provider detector on this scan's APK and validate the results.
+
+    Deterministic: the detector emits attributes and an evidence document per
+    exported provider operation, the exported-component-no-permission gate
+    decides every finding. Unknown evidence stays missing, never guessed.
+    """
+    _require_scan_owner(session, scan_id, who)
+    ctx = get_context()
+    # The opt-in flag is a local-development escape hatch only: it is ignored
+    # in production, where untrusted APK bytes never run through this process.
+    inline_allowed = ctx.settings.env.lower() == "test" or (
+        os.environ.get("MOBIUS_PROVIDER_INLINE") == "1" and not ctx.settings.is_production
+    )
+    if not inline_allowed:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "in-process provider analysis is disabled because it parses untrusted APK bytes; "
+                "enqueue an isolated worker job (MOBIUS_PROVIDER_INLINE=1 is local-development-only)"
+            ),
+        )
+    return ProviderAnalysisService(session, ctx.store).run(scan_id, validated_by=who)
+
+
+@router.post("/scans/{scan_id}/provider-analysis/jobs", status_code=202, tags=["scans"])
+def enqueue_provider_analysis_job(scan_id: str, session=SessionDep, who: str = Depends(analyst_id)):
+    """Queue provider-exposure analysis in the separately deployed, networkless OCI worker."""
+    scan = _require_scan_owner(session, scan_id, who)
+    app = session.get(ApplicationRow, scan.application_id)
+    if app is None:
+        from ..services.errors import NotFound
+        raise NotFound(f"application {scan.application_id} not found")
+    job = WorkerQueue(session).enqueue_provider_analysis(scan_id, app.artifact_key)
+    SqlEventStore(session).emit(
+        scan_id, "worker_job_queued",
+        {"job_id": job.id, "kind": job.kind, "status": job.status},
+        actor="NEXUS",
+    )
+    return {
+        "job_id": job.id,
+        "investigation_id": scan_id,
+        "kind": job.kind,
+        "status": job.status,
+        "created_at": job.created_at,
+    }
+
+
+@router.post("/scans/{scan_id}/secrets-analysis/jobs", status_code=202, tags=["scans"])
+def enqueue_secrets_analysis_job(scan_id: str, session=SessionDep, who: str = Depends(analyst_id)):
+    """Queue isolated secrets candidate analysis in the networkless OCI worker.
+
+    Disabled by default (MOBIUS_SECRETS_ENQUEUE_ENABLED != "1" -> 503 before
+    any job row is created). While no digest-pinned worker image is
+    published, an ENABLED route still does not yield analysis: claim() is
+    kind-blind, so a running worker without MOBIUS_SECRETS_IMAGE claims the
+    job and _tool_for raises, failing it terminally with a bounded config
+    error (no execution, no crash, re-enqueue possible). No in-process
+    escape hatch exists for this analysis: untrusted APK bytes never parse
+    in the API process."""
+    ctx = get_context()
+    if not ctx.settings.secrets_enqueue_enabled:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "secrets-analysis enqueue is disabled: no digest-pinned worker image "
+                "is published, and a queued job would be claimed and terminally "
+                "failed by an unconfigured worker"
+            ),
+        )
+    scan = _require_scan_owner(session, scan_id, who)
+    app = session.get(ApplicationRow, scan.application_id)
+    if app is None:
+        from ..services.errors import NotFound
+        raise NotFound(f"application {scan.application_id} not found")
+    job = WorkerQueue(session).enqueue_secrets_analysis(scan_id, app.artifact_key)
+    SqlEventStore(session).emit(
+        scan_id, "worker_job_queued",
+        {"job_id": job.id, "kind": job.kind, "status": job.status},
+        actor="NEXUS",
+    )
+    return {
+        "job_id": job.id,
+        "investigation_id": scan_id,
+        "kind": job.kind,
+        "status": job.status,
+        "created_at": job.created_at,
+    }
+
+
+@router.get("/scans/{scan_id}/provider-analysis/jobs/{job_id}", tags=["scans"])
+def get_provider_analysis_job(scan_id: str, job_id: str, session=SessionDep, who: str = Depends(analyst_id)):
+    _require_scan_owner(session, scan_id, who)
+    job = WorkerQueue(session).get(job_id)
+    if job.investigation_id != scan_id or job.kind != "provider_analysis":
+        from ..services.errors import NotFound
+        raise NotFound(f"provider-analysis worker job {job_id} not found")
+    return {
+        "job_id": job.id,
+        "kind": job.kind,
+        "status": job.status,
+        "attempts": job.attempts,
+        "worker_id": job.worker_id,
+        "error_code": job.error_code,
+        "error_detail": job.error_detail,
+        "created_at": job.created_at,
+        "started_at": job.started_at,
+        "finished_at": job.finished_at,
+        "applied": job.applied_at is not None,
+    }
+
+
+def _reject_unappliable_provider_job(scan_id: str, job, reason: str):
+    """An unappliable payload must not deadlock the investigation. The
+    rejection is committed in its OWN session because the rejecting request's
+    transaction rolls back with the HTTP error; the reason stays on the job
+    row (error_code/error_detail) as retained evidence."""
+    ctx = get_context()
+    mark = ctx.session()
+    try:
+        WorkerQueue(mark).terminal_reject(job.id, "InvalidWorkerPayload", reason)
+        SqlEventStore(mark).emit(
+            scan_id, "worker_job_rejected",
+            {"job_id": job.id, "kind": job.kind, "reason": "unappliable result"},
+            actor="NEXUS",
+        )
+        mark.commit()
+    finally:
+        mark.close()
+    from ..services.errors import CodeIndexFailed
+    raise CodeIndexFailed(reason)
+
+
+@router.post("/scans/{scan_id}/provider-analysis/jobs/{job_id}/apply", tags=["scans"])
+def apply_provider_analysis_job(scan_id: str, job_id: str, session=SessionDep, who: str = Depends(analyst_id)):
+    scan = _require_scan_owner(session, scan_id, who)
+    job = WorkerQueue(session).get(job_id)
+    if job.investigation_id != scan_id or job.kind != "provider_analysis":
+        from ..services.errors import NotFound
+        raise NotFound(f"provider-analysis worker job {job_id} not found")
+    if job.status != "succeeded" or not job.result_json:
+        from ..services.errors import ScanStateConflict
+        raise ScanStateConflict(f"provider-analysis worker job is not ready to apply (status={job.status})")
+    if job.applied_at is not None:
+        from ..services.errors import ScanStateConflict
+        raise ScanStateConflict("provider-analysis worker result has already been applied")
+    app = session.get(ApplicationRow, scan.application_id)
+    if app is None:
+        from ..services.errors import NotFound
+        raise NotFound(f"application {scan.application_id} not found")
+    try:
+        from ..adapters.provider_payload import validate_provider_analysis_payload
+        result = validate_provider_analysis_payload(
+            json.dumps(job.result_json, separators=(",", ":")).encode("utf-8"),
+            app.sha256,
+        )
+    except ValueError as exc:
+        _reject_unappliable_provider_job(scan_id, job, str(exc))
+
+    # Anchor comparison before apply. Anchors: the intake digest (app.sha256),
+    # a FRESH rehash of the stored artifact bytes by this API process, the
+    # host-side staged digest the runner stored (computed outside the
+    # container), and the worker payload's own digest (already checked against
+    # app.sha256 by the validator). The worker's self-report is never the only
+    # proof of which bytes were analyzed.
+    from hashlib import sha256 as _sha256
+    rehashed = _sha256(get_context().store.get(app.artifact_key)).hexdigest()
+    if rehashed != app.sha256:
+        _reject_unappliable_provider_job(
+            scan_id, job, "stored artifact bytes no longer match the intake digest")
+    if not job.staged_sha256 or job.staged_sha256 != app.sha256:
+        _reject_unappliable_provider_job(
+            scan_id, job,
+            "worker staged-input digest is missing or does not match the "
+            "authorized artifact digest")
+    # Package consistency against the stored recon result when one exists:
+    # the surface_ready event recorded the package the recon pipeline parsed
+    # from the same artifact. (Consistency check, not an independent parse.)
+    from ..adapters.models import EventRow as _EventRow
+    from sqlalchemy import select as _select
+    recon_event = session.execute(
+        _select(_EventRow)
+        .where(_EventRow.investigation_id == scan_id,
+               _EventRow.type == "surface_ready")
+        .order_by(_EventRow.seq.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    recon_package = (recon_event.payload or {}).get("package") if recon_event else None
+    if recon_package and recon_package != result.package_name:
+        _reject_unappliable_provider_job(
+            scan_id, job,
+            "worker-reported package contradicts the stored recon manifest package")
+
+    # Authorization revalidated at apply time, BEFORE the claim: a revoked,
+    # expired, rebinding or wrong-package authorization makes this payload
+    # unappliable, so the job is terminally rejected (committed separately)
+    # instead of failing after the claim and rolling back into a dead end.
+    from ..services.intake import is_expired as _is_expired
+    authorization = (
+        session.get(AuthorizationRow, scan.authorization_id)
+        if scan.authorization_id else None
+    )
+    if authorization is None:
+        _reject_unappliable_provider_job(
+            scan_id, job, "investigation has no active APK authorization at apply time")
+    if authorization.revoked_at is not None or _is_expired(authorization.expires_at):
+        _reject_unappliable_provider_job(
+            scan_id, job, "APK authorization is revoked or expired at apply time")
+    if authorization.apk_sha256 != app.sha256:
+        _reject_unappliable_provider_job(
+            scan_id, job, "APK authorization is bound to a different artifact")
+    if authorization.target_package != result.package_name:
+        _reject_unappliable_provider_job(
+            scan_id, job,
+            "authorized target package does not match the package in the worker result")
+
+    # Legacy or raced second job: if another provider job was already applied
+    # for this investigation, this one terminalizes truthfully (rejected, not
+    # blocking) instead of looping on a conflict after the claim.
+    from ..adapters.models import WorkerJobRow as _WJR
+    other_applied = session.execute(
+        _select(_WJR)
+        .where(_WJR.investigation_id == scan_id,
+               _WJR.kind == "provider_analysis",
+               _WJR.applied_at.is_not(None),
+               _WJR.id != job.id)
+        .limit(1)
+    ).scalar_one_or_none()
+    if other_applied is not None:
+        _reject_unappliable_provider_job(
+            scan_id, job,
+            f"provider analysis was already applied by worker job {other_applied.id}")
+
+    # Atomic apply claim: exactly one concurrent applier wins; the loser gets
+    # 409. A failure later in this request rolls the claim back with it.
+    WorkerQueue(session).claim_apply(job_id)
+
+    outcome = ProviderAnalysisService(session, get_context().store).run_from_payload(
+        scan_id, result, validated_by=who, applied_job_id=job.id
+    )
+    SqlEventStore(session).emit(
+        scan_id, "worker_job_applied",
+        {"job_id": job.id, "kind": job.kind, "status": job.status},
+        actor="NEXUS",
+    )
+    return outcome
+
+
+@router.get("/scans/{scan_id}/secrets-analysis/jobs/{job_id}", tags=["scans"])
+def get_secrets_analysis_job(scan_id: str, job_id: str, session=SessionDep, who: str = Depends(analyst_id)):
+    _require_scan_owner(session, scan_id, who)
+    job = WorkerQueue(session).get(job_id)
+    if job.investigation_id != scan_id or job.kind != "secrets_analysis":
+        from ..services.errors import NotFound
+        raise NotFound(f"secrets-analysis worker job {job_id} not found")
+    return {
+        "job_id": job.id,
+        "kind": job.kind,
+        "status": job.status,
+        "attempts": job.attempts,
+        "worker_id": job.worker_id,
+        "error_code": job.error_code,
+        "error_detail": job.error_detail,
+        "created_at": job.created_at,
+        "started_at": job.started_at,
+        "finished_at": job.finished_at,
+        "applied": job.applied_at is not None,
+    }
+
+
+def _reject_unappliable_secrets_job(scan_id: str, job, reason: str):
+    """Same contract as the provider twin: an unappliable payload must not
+    deadlock the investigation. The rejection is committed in its OWN session
+    because the rejecting request's transaction rolls back with the HTTP
+    error; the reason stays on the job row as retained evidence."""
+    ctx = get_context()
+    mark = ctx.session()
+    try:
+        WorkerQueue(mark).terminal_reject(job.id, "InvalidWorkerPayload", reason)
+        SqlEventStore(mark).emit(
+            scan_id, "worker_job_rejected",
+            {"job_id": job.id, "kind": job.kind, "reason": "unappliable result"},
+            actor="NEXUS",
+        )
+        mark.commit()
+    finally:
+        mark.close()
+    from ..services.errors import CodeIndexFailed
+    raise CodeIndexFailed(reason)
+
+
+@router.post("/scans/{scan_id}/secrets-analysis/jobs/{job_id}/apply", tags=["scans"])
+def apply_secrets_analysis_job(scan_id: str, job_id: str, session=SessionDep, who: str = Depends(analyst_id)):
+    """Apply a validated isolated secrets-analysis worker payload.
+
+    Same anchor, authorization and lifecycle gates as the provider apply
+    route, plus a bounded zip-metadata cross-check of the worker's DEX
+    ledger: entry names and sizes only, never a parse. Queueing exists
+    (POST .../secrets-analysis/jobs) but a queued job only executes where
+    a worker runs with a digest-pinned MOBIUS_SECRETS_IMAGE; the image is
+    not yet published through the reviewed deployment path.
+    """
+    scan = _require_scan_owner(session, scan_id, who)
+    job = WorkerQueue(session).get(job_id)
+    if job.investigation_id != scan_id or job.kind != "secrets_analysis":
+        from ..services.errors import NotFound
+        raise NotFound(f"secrets-analysis worker job {job_id} not found")
+    if job.status != "succeeded" or not job.result_json:
+        from ..services.errors import ScanStateConflict
+        raise ScanStateConflict(f"secrets-analysis worker job is not ready to apply (status={job.status})")
+    if job.applied_at is not None:
+        from ..services.errors import ScanStateConflict
+        raise ScanStateConflict("secrets-analysis worker result has already been applied")
+    app = session.get(ApplicationRow, scan.application_id)
+    if app is None:
+        from ..services.errors import NotFound
+        raise NotFound(f"application {scan.application_id} not found")
+    try:
+        from ..adapters.secrets_payload import validate_secrets_analysis_payload
+        result = validate_secrets_analysis_payload(
+            json.dumps(job.result_json, separators=(",", ":")).encode("utf-8"),
+            app.sha256,
+        )
+    except ValueError as exc:
+        _reject_unappliable_secrets_job(scan_id, job, str(exc))
+
+    # Anchor comparison before apply, identical to the provider route: the
+    # intake digest, a FRESH rehash of the stored artifact bytes by this API
+    # process, and the host-side staged digest the runner stored. The
+    # worker's self-report is never the only proof of which bytes were
+    # analysed.
+    from hashlib import sha256 as _sha256
+    artifact_bytes = get_context().store.get(app.artifact_key)
+    if _sha256(artifact_bytes).hexdigest() != app.sha256:
+        _reject_unappliable_secrets_job(
+            scan_id, job, "stored artifact bytes no longer match the intake digest")
+    if not job.staged_sha256 or job.staged_sha256 != app.sha256:
+        _reject_unappliable_secrets_job(
+            scan_id, job,
+            "worker staged-input digest is missing or does not match the "
+            "authorized artifact digest")
+
+    # Bounded zip-metadata cross-check of the worker-asserted DEX ledger:
+    # the multiset of classes*.dex entry (name, size) pairs in the stored
+    # artifact must equal the ledger's. Names and sizes only - the API never
+    # parses APK or DEX content.
+    import io as _io
+    import re as _re
+    import zipfile as _zipfile
+    from collections import Counter as _Counter
+    try:
+        with _zipfile.ZipFile(_io.BytesIO(artifact_bytes)) as archive:
+            actual = _Counter(
+                (info.filename, info.file_size)
+                for info in archive.infolist()
+                if _re.fullmatch(r"classes\d*\.dex", info.filename)
+            )
+    except _zipfile.BadZipFile:
+        # Fail closed with a bounded reason, not an unhandled 500: the ledger
+        # cross-check could not run, so the payload is unappliable.
+        _reject_unappliable_secrets_job(
+            scan_id, job,
+            "stored artifact is not a readable zip archive; "
+            "the DEX ledger cross-check could not run")
+    reported = _Counter((b.entry, b.size_bytes) for b in result.ledger)
+    if actual != reported:
+        _reject_unappliable_secrets_job(
+            scan_id, job,
+            "worker-reported DEX ledger contradicts the stored artifact's zip metadata")
+
+    from ..adapters.models import EventRow as _EventRow
+    from sqlalchemy import select as _select
+    recon_event = session.execute(
+        _select(_EventRow)
+        .where(_EventRow.investigation_id == scan_id,
+               _EventRow.type == "surface_ready")
+        .order_by(_EventRow.seq.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    recon_package = (recon_event.payload or {}).get("package") if recon_event else None
+    if recon_package and recon_package != result.package_name:
+        _reject_unappliable_secrets_job(
+            scan_id, job,
+            "worker-reported package contradicts the stored recon manifest package")
+
+    # Authorization revalidated at apply time, BEFORE the claim (same
+    # contract as the provider route).
+    from ..services.intake import is_expired as _is_expired
+    authorization = (
+        session.get(AuthorizationRow, scan.authorization_id)
+        if scan.authorization_id else None
+    )
+    if authorization is None:
+        _reject_unappliable_secrets_job(
+            scan_id, job, "investigation has no active APK authorization at apply time")
+    if authorization.revoked_at is not None or _is_expired(authorization.expires_at):
+        _reject_unappliable_secrets_job(
+            scan_id, job, "APK authorization is revoked or expired at apply time")
+    if authorization.apk_sha256 != app.sha256:
+        _reject_unappliable_secrets_job(
+            scan_id, job, "APK authorization is bound to a different artifact")
+    if authorization.target_package != result.package_name:
+        _reject_unappliable_secrets_job(
+            scan_id, job,
+            "authorized target package does not match the package in the worker result")
+
+    # Legacy or raced second job, same as the provider route.
+    from ..adapters.models import WorkerJobRow as _WJR
+    other_applied = session.execute(
+        _select(_WJR)
+        .where(_WJR.investigation_id == scan_id,
+               _WJR.kind == "secrets_analysis",
+               _WJR.applied_at.is_not(None),
+               _WJR.id != job.id)
+        .limit(1)
+    ).scalar_one_or_none()
+    if other_applied is not None:
+        _reject_unappliable_secrets_job(
+            scan_id, job,
+            f"secrets analysis was already applied by worker job {other_applied.id}")
+
+    # Atomic apply claim: exactly one concurrent applier wins; the loser gets
+    # 409. A failure later in this request rolls the claim back with it.
+    WorkerQueue(session).claim_apply(job_id)
+
+    from ..services.secrets_analysis import SecretsAnalysisService
+    outcome = SecretsAnalysisService(session, get_context().store).run_from_payload(
+        scan_id, result, validated_by=who, applied_job_id=job.id
+    )
+    SqlEventStore(session).emit(
+        scan_id, "worker_job_applied",
+        {"job_id": job.id, "kind": job.kind, "status": job.status},
+        actor="NEXUS",
+    )
+    return outcome
 
 
 @router.post("/scans/{scan_id}/validate", tags=["validation"])

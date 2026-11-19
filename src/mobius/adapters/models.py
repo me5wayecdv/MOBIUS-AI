@@ -30,6 +30,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -368,9 +369,23 @@ class ReportRow(Base):
 class WorkerJobRow(Base):
     __tablename__ = "worker_jobs"
     __table_args__ = (
-        CheckConstraint("status IN ('queued','running','succeeded','failed','cancelled')", name="worker_job_status_known"),
+        CheckConstraint("status IN ('queued','running','succeeded','failed','cancelled','rejected')", name="worker_job_status_known"),
         Index("ix_worker_jobs_claim", "status", "created_at"),
         Index("ix_worker_jobs_investigation", "investigation_id", "created_at"),
+        # At most one ACTIVE job per (investigation, kind): queued, running, or
+        # succeeded-and-unapplied. Terminal states (failed, cancelled, rejected,
+        # applied) never block a fresh enqueue. This is the race-safe form of
+        # the read-then-insert check in WorkerQueue.enqueue_*.
+        Index(
+            "uq_worker_jobs_active", "investigation_id", "kind",
+            unique=True,
+            sqlite_where=text(
+                "status IN ('queued','running') OR (status='succeeded' AND applied_at IS NULL)"
+            ),
+            postgresql_where=text(
+                "status IN ('queued','running') OR (status='succeeded' AND applied_at IS NULL)"
+            ),
+        ),
     )
     id: Mapped[str] = mapped_column(String(36), primary_key=True)
     investigation_id: Mapped[str] = mapped_column(
@@ -389,6 +404,11 @@ class WorkerJobRow(Base):
     lease_until: Mapped[str | None] = mapped_column(String(40))
     finished_at: Mapped[str | None] = mapped_column(String(40))
     applied_at: Mapped[str | None] = mapped_column(String(40))
+    # Host-side SHA-256 of the bytes the runner staged for the container,
+    # computed OUTSIDE the container and stored by the queue at completion.
+    # The API compares it against the intake digest and a fresh rehash at
+    # apply time: the worker's own payload digest is never the only anchor.
+    staged_sha256: Mapped[str | None] = mapped_column(String(64))
 
 
 class GraphNodeRow(Base):

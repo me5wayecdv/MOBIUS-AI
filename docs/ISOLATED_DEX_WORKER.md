@@ -46,7 +46,7 @@ The worker must use a dedicated DB role with SELECT/UPDATE only on `worker_jobs`
 
 ## Publication
 
-`.github/workflows/dex-worker-image.yml` is now `workflow_dispatch`-only and requires `owner_approval=APPROVED`; it has no automatic push trigger. Do not run it or publish a replacement image until the project owner explicitly approves. The existing digest below is a historical publication from earlier work, not authorization for a new push. Do not set `MOBIUS_DEX_IMAGE` to a mutable tag.
+`.github/workflows/dex-worker-image.yml` publishes on push to `main` when its watched paths change (`workers/dex-image/**`, `src/mobius/adapters/dex.py`, `src/mobius/adapters/dex_payload.py`, `src/mobius/worker/dex_index.py`, `pyproject.toml`) and via `workflow_dispatch`; the push trigger was deliberately restored in PR #55. The digest below is the current published image. Publishing a REPLACEMENT image, re-pinning `MOBIUS_DEX_IMAGE`, or setting it to a mutable tag still requires an explicit project-owner decision; a routine push-triggered rebuild under the same publishing contract is not that decision.
 
 Latest successful image build and real-DEX smoke test:
 

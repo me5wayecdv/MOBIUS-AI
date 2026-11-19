@@ -494,6 +494,87 @@ class ArchivistService:
         ]
         return "\n".join(lines) + "\n"
 
+    def _secrets_analysis_summary(self, row: InvestigationRow) -> list[str]:
+        """Render the stored secrets-analysis scan summary, when one exists.
+
+        Reads the latest ``secrets_analysis_completed`` event payload - the
+        only place the accounting, transport state, DEX ledger state,
+        flow-incomplete count and detector coverage limits persist - so a
+        scan whose secrets run transported ZERO candidates still says so in
+        the report instead of reading like "nothing found"."""
+        event = (
+            self._session.execute(
+                select(EventRow)
+                .where(EventRow.investigation_id == row.id,
+                       EventRow.type == "secrets_analysis_completed")
+                .order_by(EventRow.seq.desc())
+                .limit(1)
+            )
+            .scalar_one_or_none()
+        )
+        if event is None:
+            return []
+        payload = event.payload or {}
+        acc = payload.get("accounting") or {}
+        lines = ["### Secrets analysis (candidate scan)", ""]
+        if acc.get("truncated"):
+            transport = ("TRUNCATED by the worker: unreported candidates may "
+                         "exist; this is not a no-evidence result")
+        elif acc.get("conversion_failed"):
+            transport = (f"INCOMPLETE: {acc['conversion_failed']} candidate(s) "
+                         "with detector evidence could not be converted; this "
+                         "is not a complete scan")
+        else:
+            transport = "complete (payload transport only - see below)"
+        lines.append(f"- **Transport:** {transport}")
+        lines.append(
+            "- **Accounting:** "
+            f"screened {acc.get('screened_total', 0)} · "
+            f"evidence-less {acc.get('evidence_less', 0)} · "
+            f"conversion-failed {acc.get('conversion_failed', 0)} · "
+            f"merged {acc.get('merged', 0)} · "
+            f"transported {acc.get('transported', 0)} · "
+            f"placeholder-dropped {acc.get('placeholder_dropped', 0)}"
+        )
+        dex_state = ("complete (consistent ledger)"
+                     if payload.get("dex_complete") else "INCOMPLETE or ambiguous")
+        lines.append(f"- **DEX ledger (worker-asserted):** {dex_state}")
+        for entry in payload.get("dex_coverage") or []:
+            if isinstance(entry, dict):
+                lines.append(
+                    "  - %s: %s, %s bytes, %s method(s), %s duplicate(s)%s" % (
+                        entry.get("entry"), entry.get("status"),
+                        entry.get("size_bytes"), entry.get("methods"),
+                        entry.get("duplicates"),
+                        ", AMBIGUOUS" if entry.get("ambiguous") else ""))
+            else:
+                lines.append(f"  - {entry}")
+        lines.append(
+            "- **Flow-incomplete candidates:** "
+            f"{payload.get('flow_incomplete_candidates', 0)} "
+            "(absence of evidence not established)"
+        )
+        # API-owned constants, rendered from source - never strings read
+        # back from a payload: the only unrestricted prose in the event is
+        # what this service itself wrote, and the report does not re-trust
+        # it. Every other rendered value is an int, a bool, or a
+        # schema-bounded enumeration (ledger entry names are
+        # ``classes*.dex``-shaped, statuses enumerated).
+        from .secrets_analysis import DETECTOR_COVERAGE_LIMITS
+        lines.append("- **Detector coverage limits:**")
+        lines += [f"  - {limit}" for limit in DETECTOR_COVERAGE_LIMITS]
+        if not acc.get("transported"):
+            lines += [
+                "",
+                "No secrets candidates were transported. This is **not** a "
+                "no-secrets result: it says nothing about secrets outside the "
+                "detector's coverage.",
+            ]
+        # The transport_complete disclaimer is part of the rendered
+        # API-owned coverage limits above; no separate closing line.
+        lines.append("")
+        return lines
+
     def _coverage_manifest(self, row: InvestigationRow) -> str:
         """Embed the same structured manifest exposed by the read-only API route."""
         from .coverage_manifest import CoverageManifestBuilder
@@ -524,6 +605,7 @@ class ArchivistService:
             f"| Native libraries | {manifest['apk_inventory'].get('native_libraries', {}).get('count', 0)} inventoried; not analyzed |",
             f"| Assets / resources | {manifest['apk_inventory'].get('assets', {}).get('count', 0)} asset(s), {manifest['apk_inventory'].get('resources', {}).get('count', 0)} resource(s); inventory only |",
             "",
+            *self._secrets_analysis_summary(row),
             "### Unsupported or inventory-only capabilities",
             "",
             "| Capability | Status | Limitation |",

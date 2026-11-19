@@ -21,11 +21,18 @@ import zipfile
 from typing import Final
 
 from ..core.manifest import (
+    DeclaredPermission,
     COMPONENT_KINDS,
+    PATTERN_ADVANCED_GLOB,
+    PATTERN_LITERAL,
+    PATTERN_PREFIX,
+    PATTERN_SIMPLE_GLOB,
+    PATTERN_SUFFIX,
     Component,
     ExportSource,
     IntentFilter,
     ManifestSurface,
+    PathPermission,
 )
 
 ANDROID_NS: Final = "http://schemas.android.com/apk/res/android"
@@ -206,6 +213,38 @@ def _component(element: ET.Element, kind: str, package: str, target_sdk: int | N
     else:
         exported, source = False, ExportSource.INFERRED_ABSENT
 
+    path_permissions: list[PathPermission] = []
+    grant_uri = _as_bool(_android(element, "grantUriPermissions")) or False
+    if kind == "provider":
+        for child in element:
+            tag = _tagname(child)
+            if tag == "path-permission":
+                # ParsedProviderUtils.parsePathPermission: op-specific attrs fall
+                # back to the element's general permission; pattern priority is
+                # advanced > pattern > prefix > suffix > literal path.
+                general = _android(child, "permission")
+                read_perm = _android(child, "readPermission") or general
+                write_perm = _android(child, "writePermission") or general
+                pattern = _android(child, "pathAdvancedPattern")
+                ptype = PATTERN_ADVANCED_GLOB
+                if pattern is None:
+                    pattern, ptype = _android(child, "pathPattern"), PATTERN_SIMPLE_GLOB
+                if pattern is None:
+                    pattern, ptype = _android(child, "pathPrefix"), PATTERN_PREFIX
+                if pattern is None:
+                    pattern, ptype = _android(child, "pathSuffix"), PATTERN_SUFFIX
+                if pattern is None:
+                    pattern, ptype = _android(child, "path"), PATTERN_LITERAL
+                if pattern is not None:
+                    path_permissions.append(PathPermission(
+                        pattern=pattern,
+                        pattern_type=ptype,
+                        read_permission=read_perm,
+                        write_permission=write_perm,
+                    ))
+            elif tag == "grant-uri-permission":
+                grant_uri = True
+
     return Component(
         kind=kind,
         name=_qualify(raw_name, package),
@@ -214,10 +253,45 @@ def _component(element: ET.Element, kind: str, package: str, target_sdk: int | N
         permission=_android(element, "permission"),
         intent_filters=filters,
         enabled=True if enabled is None else enabled,
+        read_permission=_android(element, "readPermission"),
+        write_permission=_android(element, "writePermission"),
+        path_permissions=tuple(path_permissions),
+        grant_uri_permissions=grant_uri,
     )
 
 
 # -- main entry points -----------------------------------------------------------------
+
+
+# android:protectionLevel base values (ProtectionInfo constants). Binary AXML
+# renders the attribute numerically - aapt emits a decimal string in the XML
+# dump, but hex renderings ("0x00000002") occur across tooling, so both exact
+# numeric forms of the proven base values 0-3 are accepted. Flag bits (e.g.
+# 0x10 privileged) are NOT masked off: an unrecognized value stays raw and
+# never equals a known level downstream, so the verdict stays UNKNOWN.
+_PROTECTION_LEVEL_BASE = {
+    0: "normal",
+    1: "dangerous",
+    2: "signature",
+    3: "signatureOrSystem",
+}
+
+
+def _normalize_protection_level(value: str | None) -> str | None:
+    if value is None:
+        return None
+    v = value.strip()
+    number: int | None = None
+    if v.isascii() and v.isdigit():  # isdigit() alone admits non-ASCII digits ("²")
+        number = int(v)
+    elif v.lower().startswith("0x"):
+        try:
+            number = int(v, 16)
+        except ValueError:
+            number = None
+    if number is not None and number in _PROTECTION_LEVEL_BASE:
+        return _PROTECTION_LEVEL_BASE[number]
+    return v
 
 
 def parse_surface(xml_bytes: bytes, *, decoded_from_binary: bool = True) -> ManifestSurface:
@@ -237,12 +311,20 @@ def parse_surface(xml_bytes: bytes, *, decoded_from_binary: bool = True) -> Mani
     min_sdk: int | None = None
     target_sdk: int | None = None
     permissions: list[str] = []
+    declared: list[DeclaredPermission] = []
     components: list[Component] = []
     application: ET.Element | None = None
 
     for child in root:
         tag = _tagname(child)
-        if tag == "uses-sdk":
+        if tag == "permission":
+            name = _android(child, "name")
+            if name:
+                declared.append(DeclaredPermission(
+                    name=name,
+                    protection_level=_normalize_protection_level(
+                        _android(child, "protectionLevel"))))
+        elif tag == "uses-sdk":
             min_sdk = _as_int(_android(child, "minSdkVersion"))
             target_sdk = _as_int(_android(child, "targetSdkVersion"))
         elif tag in {"uses-permission", "uses-permission-sdk-23"}:
@@ -271,11 +353,13 @@ def parse_surface(xml_bytes: bytes, *, decoded_from_binary: bool = True) -> Mani
 
     return ManifestSurface(
         package_name=package,
+        declared_permissions=tuple(declared),
         version_name=_android(root, "versionName"),
         version_code=_as_int(_android(root, "versionCode")),
         min_sdk=min_sdk,
         target_sdk=target_sdk,
         permissions=tuple(permissions),
+        application_permission=_android(application, "permission") if application is not None else None,
         components=tuple(components),
         allow_backup=allow_backup,
         debuggable=debuggable,
