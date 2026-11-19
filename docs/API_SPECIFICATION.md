@@ -356,7 +356,11 @@ the sole verdict authority. If the finding has a persisted producer model decisi
 response reports `producer_model_verified: true` with `independence_assured: true`;
 otherwise the caller-supplied producer is unverified and the response says so
 (`producer_model_verified: false`, `independence_assured: false`) - reviewer distinctness
-is then checked against the claim but not proven. Fails closed with
+is then checked against the claim but not proven. In the shipped version the
+finding-producer action registry is EMPTY (no model-backed finding producer exists;
+findings come from deterministic gates), so independence is ALWAYS unverified in
+practice - the verified path is a documented future capability, exercised today only
+by tests with a registered mock production action. Fails closed with
 `MODEL_CONSENT_REQUIRED` when no model gateway/consent is in place, `BUDGET_EXHAUSTED`
 409 when the investigation token budget is spent, `MODEL_PROVIDER_UNAVAILABLE` 503 when
 the provider call fails (stable message; transport details never leave the server),
