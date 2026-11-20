@@ -375,18 +375,28 @@ def _mock_report() -> Report:
             set_context(None)
 
 
-def _live_report() -> Report:
-    """Live probes against a local Ollama model. Operator action only."""
+def _live_report(mode: str = "ollama") -> Report:
+    """Live probes against a real model. Operator action only.
+
+    ``ollama`` drives a local Ollama model; ``opencode`` drives an OpenCode
+    free-tier model through the official CLI (eval-only adapter, see
+    mobius.tools.opencode_provider). Both measure the same acceptance floor.
+    """
     import os
 
     from ..api.config import Settings
     from ..api.deps import AppContext, set_context
+    from .opencode_provider import OpenCodeCliProvider
 
-    base_url = os.environ.get("MOBIUS_MODEL_BASE_URL", "http://127.0.0.1:11434")
     model = os.environ.get("MOBIUS_MODEL_NAME", "")
     if not model.strip():
-        raise SystemExit("MOBIUS_MODEL_NAME is required for live mode; the model must already be installed")
+        raise SystemExit("MOBIUS_MODEL_NAME is required for live mode; the model must already be available")
     timeout = int(os.environ.get("MOBIUS_MODEL_TIMEOUT_SECONDS", "120"))
+    if mode == "opencode":
+        provider = OpenCodeCliProvider()
+    else:
+        base_url = os.environ.get("MOBIUS_MODEL_BASE_URL", "http://127.0.0.1:11434")
+        provider = OllamaProvider(base_url)
 
     with tempfile.TemporaryDirectory() as tmp:
         settings = Settings(
@@ -402,12 +412,11 @@ def _live_report() -> Report:
             try:
                 fx = build_fixture(session, store)
                 row = session.get(InvestigationRow, fx.investigation_id)
-                row.llm_data_sharing = {"enabled": True, "provider": "ollama"}
+                row.llm_data_sharing = {"enabled": True, "provider": mode}
                 session.commit()
-                provider = OllamaProvider(base_url)
                 gateway = StructuredModelGateway(provider, model=model, timeout_seconds=timeout)
                 factory = sessionmaker(bind=session.get_bind(), expire_on_commit=False, future=True)
-                report = Report(mode="ollama")
+                report = Report(mode=mode)
                 started = time.monotonic()
                 try:
                     result = VeritasReviewService(
@@ -445,9 +454,9 @@ def _live_report() -> Report:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    parser.add_argument("--mode", choices=["mock", "ollama"], default="mock")
+    parser.add_argument("--mode", choices=["mock", "ollama", "opencode"], default="mock")
     args = parser.parse_args(argv)
-    report = _mock_report() if args.mode == "mock" else _live_report()
+    report = _mock_report() if args.mode == "mock" else _live_report(args.mode)
     print(report.render())
     return 0 if report.ok else 1
 

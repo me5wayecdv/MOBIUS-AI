@@ -363,16 +363,28 @@ def _mock_report() -> Report:
             set_context(None)
 
 
-def _live_report() -> Report:
-    """Live probe: one seeded fixture, measured against the acceptance floor."""
+def _live_report(mode: str = "ollama") -> Report:
+    """Live probe: one seeded fixture, measured against the acceptance floor.
+
+    ``ollama`` drives a local Ollama model; ``opencode`` drives an OpenCode
+    free-tier model through the official CLI (eval-only adapter, see
+    mobius.tools.opencode_provider). Both measure the same acceptance floor.
+    """
     from ..api.config import Settings
     from ..api.deps import AppContext, set_context
+    from .opencode_provider import OpenCodeCliProvider
 
-    base_url = os.environ.get("MOBIUS_MODEL_BASE_URL", "http://127.0.0.1:11434")
     model = os.environ.get("MOBIUS_MODEL_NAME", "")
     if not model.strip():
-        raise SystemExit("MOBIUS_MODEL_NAME is required for live mode; the model must already be installed")
+        raise SystemExit("MOBIUS_MODEL_NAME is required for live mode; the model must already be available")
     timeout = int(os.environ.get("MOBIUS_MODEL_TIMEOUT_SECONDS", "120"))
+    if mode == "opencode":
+        provider = OpenCodeCliProvider()
+        fx_provider = "opencode"
+    else:
+        base_url = os.environ.get("MOBIUS_MODEL_BASE_URL", "http://127.0.0.1:11434")
+        provider = OllamaProvider(base_url)
+        fx_provider = "ollama"
 
     with tempfile.TemporaryDirectory() as tmp:
         settings = Settings(
@@ -386,28 +398,38 @@ def _live_report() -> Report:
             store = ArtifactStore(Path(tmp) / "artifacts")
             session = context.session()
             try:
-                fx = build_fixture(session, store, provider="ollama")
-                provider = OllamaProvider(base_url)
+                fx = build_fixture(session, store, provider=fx_provider)
                 gateway = StructuredModelGateway(provider, model=model, timeout_seconds=timeout)
                 factory = sessionmaker(bind=session.get_bind(), expire_on_commit=False, future=True)
-                report = Report(mode="ollama")
+                report = Report(mode=mode)
                 started = time.monotonic()
                 try:
                     result = NexusHypothesisService(
                         session, gateway=gateway, session_factory=factory, store=store
                     ).generate(fx.investigation_id)
                     elapsed = time.monotonic() - started
-                    accepted = result["mode"] == "model_gateway"
+                    # The floor requires at least one hypothesis: a schema-valid
+                    # but EMPTY reply is a quality failure, not an accept.
+                    accepted = result["mode"] == "model_gateway" and len(result["hypotheses"]) >= 1
+                    grounded = sum(
+                        1 for h in result["hypotheses"] if h.get("derived_from")
+                    )
+                    claims = " | ".join(
+                        str(h.get("claim", ""))[:80] for h in result["hypotheses"][:5]
+                    )
                     report.results.append(CaseResult(
                         case=Case("live-seeded-fixture", "quality-floor", [],
                                   "accepted:model_gateway", 1),
                         ok=accepted,
-                        observed=f"accepted:{result['mode']}",
+                        observed=(f"accepted:{result['mode']}, "
+                                  f"hypotheses={len(result['hypotheses'])}"),
                         detail=(f"measured {elapsed:.1f}s (timeout budget {timeout}s); "
                                 f"repair_attempts={result['repair_attempts']}; "
                                 f"tokens in/out: {result['token_usage'].get('input_tokens')}"
                                 f"/{result['token_usage'].get('output_tokens')}; "
-                                f"hypotheses={len(result['hypotheses'])}"),
+                                f"hypotheses={len(result['hypotheses'])} "
+                                f"({grounded} with evidence refs); "
+                                f"claims: {claims}"),
                     ))
                 except (ModelConsentRequired, ModelOutputInvalid, ModelBudgetExceeded) as exc:
                     elapsed = time.monotonic() - started
@@ -432,9 +454,9 @@ def _live_report() -> Report:
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mode", choices=["mock", "ollama"], default="mock")
+    parser.add_argument("--mode", choices=["mock", "ollama", "opencode"], default="mock")
     args = parser.parse_args(argv)
-    report = _mock_report() if args.mode == "mock" else _live_report()
+    report = _mock_report() if args.mode == "mock" else _live_report(args.mode)
     print(report.render())
     return 0 if report.ok else 1
 
