@@ -116,6 +116,18 @@ def _tool_for(kind: str, runtime: str) -> tuple[str, str, ToolSpec]:
     raise RuntimeError(f"unsupported worker job kind: {kind}")
 
 
+class WorkerServiceLimitExceeded(RuntimeError):
+    """Worker exit 4: the input exceeded the service's explicit limits.
+
+    Every registered worker kind documents exit 4 as its explicit bound or
+    budget refusal (method bound or output budget); the generic wording is
+    deliberate - the specific cause is never asserted from the exit code
+    alone. Stored as the job's error_code through the existing class-name
+    mechanism; the job outcome stays failed. A new worker kind MUST keep
+    this exit-4 meaning for the mapping to stay truthful.
+    """
+
+
 def _output_from_tool_result(kind: str, result) -> dict:
     """Bounded output handling for every isolated job kind.
 
@@ -126,6 +138,18 @@ def _output_from_tool_result(kind: str, result) -> dict:
     the full schema, bounds and artifact-digest validation at apply time.
     """
     if result.status != "ok" or result.exit_code != 0 or result.truncated:
+        # Exit 4 is the worker-documented explicit service-limit refusal, but
+        # only when the container genuinely ran and exited on its own
+        # (status "error" = nonzero exit) with UNTRUNCATED output: a timeout,
+        # kill, truncation or any other code can never be reclassified as a
+        # benign limit refusal. Fixed message only - no stderr tail, so the
+        # stored outcome carries no worker prose.
+        if (result.status == "error" and result.exit_code == 4
+                and not result.truncated):
+            raise WorkerServiceLimitExceeded(
+                f"isolated {kind} reported an explicit service limit (exit 4); "
+                "the job stays failed - bound or budget refusal, never a verdict"
+            )
         raise RuntimeError(
             f"isolated {kind} failed: {result.status}; output_truncated={result.truncated}; "
             f"{result.stderr_tail}"

@@ -283,3 +283,49 @@ def test_provider_output_still_requires_schema_marker():
 def test_unknown_kind_still_rejected_after_extraction():
     with pytest.raises(RuntimeError, match="unsupported worker job kind"):
         _output_from_tool_result("arbitrary", _result(tool="arbitrary"))
+
+
+# -- exit-4 explicit service-limit mapping (shared runner, all kinds) ---------
+
+def test_exit_4_maps_to_fixed_service_limit_token_for_every_kind():
+    from mobius.worker.runner import WorkerServiceLimitExceeded
+
+    for kind in ("recon_manifest", "dex_index", "provider_analysis",
+                 "secrets_analysis"):
+        res = _result(tool=kind, status="error", exit_code=4,
+                      stderr_tail="SENSITIVE-WORKER-PROSE")
+        with pytest.raises(WorkerServiceLimitExceeded) as excinfo:
+            _output_from_tool_result(kind, res)
+        # fixed non-sensitive token: class name is the stored error_code
+        assert type(excinfo.value).__name__ == "WorkerServiceLimitExceeded"
+        assert "SENSITIVE-WORKER-PROSE" not in str(excinfo.value)
+        assert "service limit" in str(excinfo.value)
+
+
+def test_exit_4_is_not_a_limit_token_when_output_truncated():
+    from mobius.worker.runner import WorkerServiceLimitExceeded
+
+    res = _result(status="error", exit_code=4, truncated=True)
+    with pytest.raises(RuntimeError, match="isolated secrets_analysis failed") as e:
+        _output_from_tool_result("secrets_analysis", res)
+    assert not isinstance(e.value, WorkerServiceLimitExceeded)
+
+
+def test_exit_4_is_not_a_limit_token_when_status_not_error():
+    from mobius.worker.runner import WorkerServiceLimitExceeded
+
+    for status in ("ok", "timeout", "killed", "unavailable"):
+        res = _result(status=status, exit_code=4)
+        with pytest.raises(RuntimeError) as e:
+            _output_from_tool_result("secrets_analysis", res)
+        assert not isinstance(e.value, WorkerServiceLimitExceeded)
+
+
+def test_non_4_and_missing_exit_codes_are_not_limit_tokens():
+    from mobius.worker.runner import WorkerServiceLimitExceeded
+
+    for code in (None, 1, 2, 3, 5, -4):
+        res = _result(status="error", exit_code=code)
+        with pytest.raises(RuntimeError) as e:
+            _output_from_tool_result("secrets_analysis", res)
+        assert not isinstance(e.value, WorkerServiceLimitExceeded)
