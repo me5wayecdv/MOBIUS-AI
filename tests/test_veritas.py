@@ -9,7 +9,7 @@ import pytest
 from mobius.adapters.models import (
     DecisionRow,
     EvidenceRow,
-    FindingRow,
+    FindingRow, ObservationRow,
     InvestigationRow,
     VerdictRow,
 )
@@ -432,3 +432,60 @@ def test_veritas_conflicting_payloads_are_never_silently_chosen(session, reviewe
 
     assert result["status"] == "needs_review"
     assert "multiple_conflicting_payloads" in result["failure_class"]
+
+
+def test_review_package_includes_component_observations(session, reviewed_finding):
+    """The review package must carry the per-component facts the investigation
+    established (export state, permission guard), whitelisted and bounded, so
+    the reviewer challenges only what is genuinely unestablished."""
+    finding_id, investigation_id, _, evidence_id = reviewed_finding
+    finding = session.get(FindingRow, finding_id)
+    finding.component_ref = "com.example.Entry"
+    session.add(ObservationRow(
+        id="obs_veritas_component",
+        investigation_id=investigation_id,
+        agent="RECON",
+        kind="fact",
+        fidelity="binary-xml",
+        subject_type="component",
+        subject_ref="com.example.Entry",
+        statement="Entry is exported with no permission guard",
+        attributes={
+            "kind": "provider", "exported": True, "export_source": "declared",
+            "permission": None, "internal_note": "must-not-leak",
+        },
+        maswe=[],
+        confidence=1.0,
+        evidence_refs=[evidence_id],
+        created_at="2026-11-16T00:00:00Z",
+    ))
+    session.commit()
+
+    captured: list[dict] = []
+
+    class CapturingProvider(CountingProvider):
+        def complete_json(self, **kwargs):
+            captured.append(kwargs)
+            return super().complete_json(**kwargs)
+
+    provider = CapturingProvider(json.dumps({
+        "disposition": "no_material_challenge", "summary": "s", "challenges": [],
+    }), model_id="reviewer-v2")
+    gateway = StructuredModelGateway(provider, model="reviewer-v2")
+    factory = sessionmaker(bind=session.get_bind(), expire_on_commit=False, future=True)
+
+    VeritasReviewService(
+        session, gateway=gateway, session_factory=factory
+    ).review(finding_id, producer_model_id="producer-v1")
+
+    assert len(captured) == 1
+    payload = json.loads(captured[0]["user_payload"]["input"])
+    observations = payload["component_observations"]
+    assert len(observations) == 1
+    obs = observations[0]
+    assert obs["attributes"]["exported"] is True
+    assert obs["attributes"]["export_source"] == "declared"
+    assert obs["attributes"]["kind"] == "provider"
+    assert "internal_note" not in obs["attributes"]
+    assert obs["evidence_refs"] == [evidence_id]
+    assert obs["produced_by"] == "RECON"

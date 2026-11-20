@@ -12,7 +12,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..adapters.events import SqlEventStore, utcnow
-from ..adapters.models import DecisionRow, EvidenceRow, FindingRow, InvestigationRow
+from ..adapters.models import (
+    DecisionRow,
+    EvidenceRow,
+    FindingRow,
+    InvestigationRow,
+    ObservationRow,
+)
 from ..core.ids import IdPrefix, new_id
 from .errors import NotFound
 from .model_skills import VERITAS_REVIEW_SKILLS
@@ -175,6 +181,39 @@ class VeritasReviewService:
             }
             for ref in refs
         ]
+        # The finding's evidence summaries are aggregates (e.g. "manifest decoded:
+        # N components"); the per-component facts RECON established (exported,
+        # permission guard, export source) and SPECTRE's reachability inference
+        # live on observation rows. Without them a reviewer can only challenge
+        # facts the investigation already knows - include them, bounded.
+        _OBS_ATTR_KEYS = (
+            "kind", "exported", "export_source", "permission",
+            "reachability", "sink", "exhaustive", "index_truncated",
+        )
+        component_observations = [
+            {
+                "id": obs.id,
+                "kind": obs.kind,
+                "fidelity": obs.fidelity,
+                "produced_by": obs.agent,
+                "statement": (obs.statement or "")[:1000],
+                "attributes": {
+                    key: (obs.attributes or {}).get(key)
+                    for key in _OBS_ATTR_KEYS
+                    if (obs.attributes or {}).get(key) is not None
+                },
+                "evidence_refs": list(obs.evidence_refs or []),
+            }
+            for obs in self.session.execute(
+                select(ObservationRow)
+                .where(
+                    ObservationRow.investigation_id == finding.investigation_id,
+                    ObservationRow.subject_type == "component",
+                    ObservationRow.subject_ref == finding.component_ref,
+                )
+                .order_by(ObservationRow.created_at)
+            ).scalars().all()
+        ]
         user_payload = {
             "finding": {
                 "id": finding.id,
@@ -191,6 +230,7 @@ class VeritasReviewService:
                 "gate_evidence": finding.gate_evidence,
             },
             "evidence": evidence,
+            "component_observations": component_observations,
             "review_contract": {
                 "evidence_ids": refs,
                 "challenge_types": sorted(CHALLENGE_TYPES),
