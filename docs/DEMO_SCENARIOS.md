@@ -6,7 +6,9 @@ demonstrations of the pipeline on pinned targets; they are not a proof that
 the system detects specific vulnerability classes. Every target is a public artefact pinned by
 SHA-256 in `corpus/corpus.json` (nothing is redistributed; hashes are
 verified before use). Expected evidence below is stated from measured runs on
-main, not from aspiration.
+main, not from aspiration. Live main at last measurement: `40bf0b8`
+(2026-11-19). Each measurement names its scan or harness run and revision;
+figures from ancestor revisions are marked historical.
 
 ## Scenario A - Exported-component review on a vulnerable training app
 
@@ -15,13 +17,32 @@ main, not from aspiration.
   (corpus sample `insecurebankv2`, label: vulnerable training app).
 - **Source location:** exported components declared in the binary
   `AndroidManifest.xml` (RECON), code indexed from the multi-DEX entries.
-- **Expected evidence:** 5 components close at manual review with persisted
-  review evidence records (measured on clean-tree main, 2026-11-19).
-- **Positive control:** the InsecureBankv2 run produces those 5 review hits.
-- **Negative control:** the named pinned benign samples
-  `androguard-test-debug`, `androguard-testactivity` and `a2dp-volume`
-  produced zero findings in the clean-tree benchmark (aggregate precision
-  1.0, specificity 1.0 across all 7 samples).
+- **Expected evidence:** 6 findings on the exported-component-no-permission
+  gate: 1 confirmed by the gate (`ViewStatement`, confidence 0.9, gate
+  clauses exported/permission/caller_check_absent/sink_reachable all
+  established; a gate pass is not an exploited weakness) and 5 closed at
+  `manual_review_required` with persisted review evidence records.
+  Measured on live main `40bf0b8`, 2026-11-19: scan
+  `scn_01M7T16D7G1CCWCSFKGR2YN0PM` (upload to ARCHIVIST report) and the
+  repo benchmark harness (confirmed=1, manual_review=5, flagged=true).
+  Here and below, "flagged" is the benchmark's term for confirmed > 0;
+  manual-review hits alone do not flag a sample.
+  The earlier "5 components close at manual review" figure was measured on
+  ancestor revisions earlier the same day and is historical.
+- **Positive control:** the InsecureBankv2 run produces the confirmed
+  `ViewStatement` finding plus the 5 review hits above.
+- **Negative control:** the named pinned benign samples produced no
+  confirmed findings and were not flagged. Measured on live main
+  `40bf0b8`, 2026-11-19: `a2dp-volume` 0 confirmed / 2 manual review,
+  flagged=false (benchmark harness). `androguard-test-debug` and
+  `androguard-testactivity`: 0 confirmed in the historical 7-sample
+  clean-tree run (morning 2026-11-19, ancestor revision). Historical
+  7-sample aggregate from that run, with exact denominators: precision 1.0
+  (CI95 0.21-1.0, 1 flagged), recall 0.25 (CI95 0.05-0.70, 4 vulnerable),
+  specificity 1.0 (CI95 0.44-1.0, 3 benign); TP 1, FP 0, FN 3, TN 3. Seven
+  samples are too few to establish reliability; these figures are historical
+  provenance from an ancestor revision, not a current-main recall or
+  accuracy measurement.
 
 ## Scenario B - Source-backed investigation with persisted code evidence
 
@@ -47,16 +68,22 @@ main, not from aspiration.
 
 - **Target:** the Allsafe training APK (Apache-2.0, security education),
   SHA-256 `d6792d6634a033f048f935f1269179d3c27b859c4c34b1e9e5b008a88375efd9`; live journey scan
-  `scn_01M7RW55B200GZ5KGC8HKSR5Z7` on main `c6f0b82`, 2026-11-19.
-- **Source location:** 7 DEX entries, 92,817 methods indexed; 5 components
-  investigated end to end (upload to report).
+  `scn_01M7RW55B200GZ5KGC8HKSR5Z7` recorded on main `c6f0b82`, 2026-11-19
+  (historical: `c6f0b82` is an ancestor of the current live main
+  `40bf0b8`; not re-run on the current head).
+- **Source location:** 7 DEX entries; the historical run's recorded index
+  count was 92,817 methods (reported figure from that run's record, not
+  re-derived for this document); 5 components investigated end to end
+  (upload to report).
 - **Expected evidence:** every component closes at `insufficient_evidence` /
   `manual_review_required`, never at "refuted" (merged PR #61 policy); the
   coverage manifest discloses the analysis bounds.
 - **Positive control:** the recorded live journey outcome above.
-- **Negative control:** none matched per-scenario; the aggregate
-  clean-tree benchmark (precision 1.0, specificity 1.0 over 7 samples) is
-  the supporting evidence that confirmations are not fabricated.
+- **Negative control:** none matched per-scenario. The historical
+  7-sample clean-tree benchmark (morning 2026-11-19, ancestor revision;
+  precision 1.0 CI95 0.21-1.0 on 1 flagged sample, specificity 1.0
+  CI95 0.44-1.0 on 3 benign) is too small to establish reliability and is
+  cited for provenance only, not as evidence of accuracy.
 
 ## Out of the demo path
 

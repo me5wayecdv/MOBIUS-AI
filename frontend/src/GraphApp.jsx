@@ -7,13 +7,23 @@ function layout(raw){
  const types=[...new Set(raw.map(n=>n.data?.node_type||"other"))]
   .sort((a,b)=>(columns[a]??8)-(columns[b]??8));
  const rank=new Map(types.map((type,index)=>[type,index]));
- const counts=new Map(),narrow=window.matchMedia("(max-width: 520px)").matches;
- return raw.map(n=>{
-  const type=n.data?.node_type||"other",i=counts.get(type)||0;counts.set(type,i+1);
-  const position=narrow
-   ?{x:24,y:(rank.get(type)||0)*150+i*105}
-   :{x:(rank.get(type)||0)*320,y:i*155};
-  return {...n,position,style:{background:colors[n.data?.assertion]||"#1c2734",color:"#e6edf3",border:"1px solid #42536a",borderRadius:9,width:narrow?300:270,fontSize:16,padding:14}};
+ const narrow=window.matchMedia("(max-width: 520px)").matches;
+ // Wrapped labels make node heights content-dependent; fixed spacing overlapped
+ // tall nodes (measured on the demo graph). Stack each column cumulatively with
+ // a conservative per-node height estimate from label length; columns and rank
+ // order are unchanged.
+ const charsPerLine=narrow?26:23;
+ const estH=n=>{const label=String(n.data?.label??"");const lines=label.split("\n").reduce((a,s)=>a+Math.max(1,Math.ceil(s.length/charsPerLine)),0);return lines*22+56;};
+ // API node order is insertion order (created_at, id), not grouped by type;
+ // stably sort by rank so the cumulative stacks keep the rank grouping.
+ const ordered=[...raw].sort((a,b)=>((columns[a.data?.node_type]??8)-(columns[b.data?.node_type]??8)));
+ const colY=new Map();let ny=0;
+ return ordered.map(n=>{
+  const type=n.data?.node_type||"other";
+  let position;
+  if(narrow){position={x:24,y:ny};ny+=estH(n);}
+  else{const y=colY.get(type)||0;position={x:(rank.get(type)||0)*320,y};colY.set(type,y+estH(n));}
+  return {...n,position,style:{background:colors[n.data?.assertion]||"#1c2734",color:"#e6edf3",border:"1px solid #42536a",borderRadius:9,width:narrow?300:270,fontSize:16,padding:14,lineHeight:"1.35",overflowWrap:"anywhere",wordBreak:"break-word"}};
  }); 
 }
 export default function GraphApp(){
@@ -44,6 +54,6 @@ export default function GraphApp(){
    {paths.length?paths.map(p=><button className="path-card" key={p.id} onClick={()=>setSelected(p.id)}><strong>{p.label}</strong><span>{p.missing_proof?.length||0} proof gaps</span><small>{(p.missing_proof||[]).join(" · ")}</small></button>):<p className="muted">No persisted candidate paths.</p>}
    {selectedEdge&&<div className="inspector"><h2>SELECTED EDGE</h2><strong>{selectedEdge.data?.relation}</strong><div className="meta">{selectedEdge.data?.assertion}</div><p>{selectedEdge.data?.rationale||"No rationale stored."}</p><h3>EVIDENCE REFERENCES</h3>{(selectedEdge.data?.evidence_refs||[]).map(ref=><code key={ref}>{ref}</code>)}</div>}{selectedNode&&<div className="inspector"><h2>SELECTED NODE</h2><strong>{selectedNode.data?.label}</strong><div className="meta">{selectedNode.data?.node_type} · {selectedNode.data?.assertion}</div><div className="meta">{selectedNode.data?.ref||"no ref"}</div><h3>EVIDENCE REFERENCES</h3>{(selectedNode.data?.evidence_refs||[]).map(ref=><code key={ref}>{ref}</code>)}<pre>{JSON.stringify(selectedNode.data?.attributes||{},null,2)}</pre></div>}
   </aside><section className="graph-area"><div className="graph-note">Edges preserve relation, assertion level and evidence provenance. A candidate path is not a confirmed vulnerability.</div>
-   <div className="flow-wrap"><ReactFlow nodes={nodes} edges={edges} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onNodeClick={(_,n)=>{setSelected(n.id);setSelectedEdge(null);}} onEdgeClick={(_,e)=>{setSelectedEdge(e);setSelected(null);}} fitView fitViewOptions={{padding:.05,maxZoom:1.35}} minZoom={.25} maxZoom={1.35} ><Background color="#263445" gap={22}/><MiniMap nodeColor={n=>colors[n.data?.assertion]||"#334155"}/><Controls/></ReactFlow>{!nodes.length&&<div className="empty-state">No graph data. Load an investigation, then rebuild its graph.</div>}</div>
+   <div className="flow-wrap"><ReactFlow nodes={nodes} edges={edges} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onNodeClick={(_,n)=>{setSelected(n.id);setSelectedEdge(null);}} onEdgeClick={(_,e)=>{setSelectedEdge(e);setSelected(null);}} fitView fitViewOptions={{padding:.05,maxZoom:1.35}} minZoom={.1} maxZoom={1.35} ><Background color="#263445" gap={22}/><MiniMap nodeColor={n=>colors[n.data?.assertion]||"#334155"}/><Controls/></ReactFlow>{!nodes.length&&<div className="empty-state">No graph data. Load an investigation, then rebuild its graph.</div>}</div>
   </section></main></div>;
 }
