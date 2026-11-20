@@ -36,9 +36,14 @@ clause stayed unresolved for all 5, and sink reachability was established only f
     figure is this APK's measurement, not a general guarantee. The full pipeline completes:
     all 5 exported components are investigated and close at `manual_review_required`.
   - *Worker path.* The dex-index worker job uses the same bounded index and succeeds with the
-    truncation disclosed. The provider-analysis worker job adapts all discovered methods without
-    a budget and refuses this APK outright: `provider_analysis.py` exits "too large for this
-    service's explicit limits" once the adapted count exceeds 50,000.
+    truncation disclosed. The provider-analysis worker job now adapts bounded app-first at the
+    same 50,000-method cap instead of refusing oversized APKs (changed 2026-11-20, PR #84;
+    previously it adapted unbounded and exited "too large"). Measured 2026-11-20 on the pinned
+    APK through the real worker entrypoint: exit 0, valid payload, exactly 50,000 methods
+    adapted, ledger `parsed` for `classes.dex` and `classes2`-`classes6` (all app entries fully
+    adapted) with `classes7.dex` `truncated-budget` at 2,262, `dex_complete` False, so every
+    caller-check claim downgrades to unknown at apply time; 4 provider exposures detected,
+    including the exported `challenges.DataProvider` with read and write operations.
   Either way the result is a disclosed boundary, never a full-index verdict.
 - **Static only.** Nothing is executed. Runtime, dynamic-instrumentation and network behaviours
   are outside the analysis by design.
@@ -72,10 +77,10 @@ clause stayed unresolved for all 5, and sink reachability was established only f
 covers it, measure bounded reachability. It does not mean the challenge is detectable end to end:
 both measured journeys closed all five investigated components undetermined. On the current head
 the inline path investigates the full app surface under the bound (truncation falls on a
-library-only entry for this APK); the provider-analysis worker job refuses the APK outright.
-Raising the bound, changing the provider-analysis refusal stance, or loosening the soundness
-policy to change these outcomes is out of scope for this document and is a product decision,
-not a repair.
+library-only entry for this APK); the provider-analysis worker job analyzes within the same
+bound instead of refusing, with coverage downgraded for the truncated entry. Raising the bound
+or loosening the soundness policy to change these outcomes is out of scope for this document
+and is a product decision, not a repair.
 
 ## Sources
 

@@ -28,7 +28,8 @@ _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 MAX_PROVIDER_JSON_BYTES = 4 * 1024 * 1024
 
 _ALLOWED_LEDGER_STATUS = {"parsed", "failed-parse", "skipped-oversized",
-                         "skipped-aggregate", "duplicate-entry"}
+                         "skipped-aggregate", "duplicate-entry",
+                         "truncated-budget", "skipped-budget"}
 _ALLOWED_PROTECTION = {"protected", "unprotected", "unknown"}
 _ALLOWED_OPERATION = {"read", "write"}
 # Verbatim from core.providers guard classification; a worker emitting anything
@@ -200,7 +201,8 @@ def validate_provider_analysis_payload(
         raise ValueError("duplicate DEX coverage entry in provider analysis payload")
     if any(b.status == "duplicate-entry" and b.entry not in counted for b in ledger):
         raise ValueError("duplicate-entry ledger row without a counted original")
-    if sum(b.methods for b in ledger if b.status == "parsed") != dto.methods_adapted:
+    adapted = sum(b.methods for b in ledger if b.status in {"parsed", "truncated-budget"})
+    if adapted != dto.methods_adapted:
         raise ValueError("provider analysis methods-adapted count contradicts the DEX ledger")
 
     if len({e.provider for e in dto.exposures}) != len(dto.exposures):
