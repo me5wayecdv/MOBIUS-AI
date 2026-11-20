@@ -506,7 +506,7 @@ def run(apk: bytes) -> dict:
     """Full pipeline: APK bytes to validated wire payload."""
     digest = hashlib.sha256(apk).hexdigest()
     surface = parse_apk(apk)
-    flows, registers_sizes, superclasses, try_regions, ledger = adapt_code(apk)
+    flows, registers_sizes, superclasses, try_regions, ledger, _origins = adapt_code(apk)
     # Truthful bounds reporting, mirroring the provider worker: refuse an
     # over-bounds APK explicitly and BEFORE spending detection time on it,
     # so it can never die late as a schema-validation failure that reads as

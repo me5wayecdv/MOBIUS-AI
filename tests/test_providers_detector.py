@@ -629,3 +629,35 @@ def test_open_method_with_partial_global_flags_emits_unknown_not_true():
     # app code, so the operation-level coverage flag is partial.
     assert not write.coverage_complete
     assert write.caller_check_absent is None  # UNKNOWN, never a rejected True
+
+
+def test_evidence_classes_name_provider_and_helper_classes():
+    # A resolved guard helper in ANOTHER app class: both classes' adapted
+    # bytecode backs the operation's claims, so both are named.
+    helper_ref = MethodRef("com.example.Guard", "check", "()V")
+    helper = (FlowBlock(0, (
+        inv(0, ENFORCE_PERM[0], ENFORCE_PERM[1], (2, 3), ENFORCE_PERM[2]),
+    ), ()),)
+    query = (FlowBlock(0, (
+        inv(0, "Lcom/example/Guard;", "check", (0,), "()V"),
+        inv(2, "Landroid/database/sqlite/SQLiteQueryBuilder;", "setTables", (0, 1)),
+        inv(4, QBUILDER_QUERY[0], QBUILDER_QUERY[1], (0, 4, 5, 11, 6, 7, 8),
+            QBUILDER_QUERY[2]),
+    ), ()),)
+    e = detect_provider_exposures(
+        surface(provider("com.example.NotesProvider")),
+        {QUERY_REF: query, helper_ref: helper}, {QUERY_REF: 14, helper_ref: 4},
+    )[0]
+    read = op(e, "read")
+    assert set(read.evidence_classes) == {"com.example.NotesProvider", "com.example.Guard"}
+
+
+def test_evidence_classes_empty_without_adapted_crud():
+    # No adapted provider methods: nothing backs a claim, no classes named,
+    # and no caller-check claim is made in either direction.
+    e = detect_provider_exposures(
+        surface(provider("com.example.NotesProvider")), {}, None,
+    )[0]
+    for operation in e.operations:
+        assert operation.evidence_classes == ()
+        assert operation.caller_check_absent is None

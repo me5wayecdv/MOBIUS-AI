@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import re
 import zipfile
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from io import BytesIO
 
 from ..core.flow import flow_scan_from_androguard
@@ -51,6 +51,24 @@ class DexBlobCoverage:
 
     def describe(self) -> dict[str, object]:
         return {k: v for k, v in asdict(self).items() if v is not None}
+
+
+@dataclass(frozen=True, slots=True)
+class ClassOrigin:
+    """Runtime-loading provenance for one adapted class.
+
+    entry / entry_position identify the classes*.dex that supplied the class
+    under first-wins resolution (numeric runtime order, resolved BEFORE the
+    app-first budget order, so reordering never changes it). duplicated marks
+    a class body also present in a LATER entry: first-wins is then a
+    classpath-order assumption (DexPathList element order), not a
+    verification of what a device runtime loads, and claims resting on this
+    copy stay unknown.
+    """
+
+    entry: str
+    entry_position: int
+    duplicated: bool = False
 
 
 def _dex_sort_key(name: str) -> int:
@@ -123,6 +141,8 @@ def adapt_code(apk_bytes: bytes, *, max_methods: int = MAX_METHODS, app_package:
     parsed: list[tuple[int, str, int, object, bool, list, int, bool]] = []
     seen_classes: dict[str, set[tuple[str, str]]] = {}
     superclasses: dict[str, str] = {}
+    origins: dict[str, ClassOrigin] = {}
+    duplicated_classes: set[str] = set()
     prefix = app_package + "." if app_package else None
     for position, (entry, size, raw, skip_reason) in enumerate(selected):
         if raw is None:
@@ -157,8 +177,10 @@ def adapt_code(apk_bytes: bytes, *, max_methods: int = MAX_METHODS, app_package:
                 # different code, different guards.
                 entry_duplicates += len(class_methods)
                 entry_ambiguous = True
+                duplicated_classes.add(dotted)
                 continue
             seen_classes[dotted] = {(m.get_name(), m.get_descriptor()) for m in class_methods}
+            origins[dotted] = ClassOrigin(entry, position)
             sup = cls.get_superclassname()
             if sup:
                 superclasses[dotted] = sup[1:-1].replace("/", ".")
@@ -220,4 +242,9 @@ def adapt_code(apk_bytes: bytes, *, max_methods: int = MAX_METHODS, app_package:
     # The ledger reports every discovered entry in runtime order, whatever the
     # adaptation order was.
     ledger = [ledger_by_entry[position] for position in range(len(selected))]
-    return methods, registers_sizes, superclasses, try_regions, ledger
+    if duplicated_classes:
+        origins = {
+            dotted: (replace(o, duplicated=True) if dotted in duplicated_classes else o)
+            for dotted, o in origins.items()
+        }
+    return methods, registers_sizes, superclasses, try_regions, ledger, origins

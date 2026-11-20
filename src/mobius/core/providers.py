@@ -133,6 +133,9 @@ class OperationExposure:
     coverage_complete: bool
     sink_flows: tuple[SinkFlowEvidence, ...]
     flow_complete: bool
+    evidence_classes: tuple[str, ...] = ()  # provider class + guard-helper classes
+                                           # whose adapted bytecode backs this
+                                           # operation's claims
 
     def gate_attributes(self) -> dict[str, object]:
         """Missing evidence stays missing: None is never written."""
@@ -436,17 +439,20 @@ def _coverage_complete(
     methods: Mapping[MethodRef, Sequence[FlowBlock]],
     class_name: str,
     superclasses: Mapping[str, str] | None = None,
-) -> tuple[bool, tuple[FlowBlock, ...]]:
+) -> tuple[bool, tuple[FlowBlock, ...], tuple[str, ...]]:
     """Every invoke must be framework or resolvable through the class hierarchy
     to an adapted app method or a framework ancestor.
 
-    Returns (complete, helper_blocks): resolved app helpers are returned so
-    their guard calls can count. Anything unresolved marks coverage
+    Returns (complete, helper_blocks, helper_classes): resolved app helpers
+    are returned so their guard calls can count, with the class names whose
+    adapted bytecode those blocks came from (runtime-loading provenance is
+    checked against them API-side). Anything unresolved marks coverage
     incomplete, so guard-absence stays unknown - inherited guards and
     unadapted code are never assumed away.
     """
     complete = True
     helpers: list[FlowBlock] = []
+    helper_classes: list[str] = []
     for b in blocks:
         for ins in b.instructions:
             if not ins.opcode.startswith("invoke-") or ins.invoke_class is None:
@@ -476,6 +482,8 @@ def _coverage_complete(
                 )
                 if helper is not None:
                     helpers.extend(helper)
+                    if current not in helper_classes:
+                        helper_classes.append(current)
                     resolved = True
                     break
                 if current.startswith(_FRAMEWORK_DOTTED):
@@ -484,7 +492,7 @@ def _coverage_complete(
                 current = (superclasses or {}).get(current)
             if not resolved:
                 complete = False
-    return complete, tuple(helpers)
+    return complete, tuple(helpers), tuple(helper_classes)
 
 
 def _methods_named(
@@ -530,6 +538,10 @@ def _analyze_operation(
     # about another method's sinks, so enforcement and openness are decided
     # per method first and only then aggregated.
     method_states: list[dict[str, object]] = []
+    # Only classes whose adapted bytecode actually backs a claim: with no
+    # adapted CRUD method the provider class contributed nothing (and may not
+    # exist in the adapted set at all).
+    evidence_classes: list[str] = [dotted] if crud else []
     for ref, blocks in crud.items():
         scan = scan_method_flow(
             blocks,
@@ -553,8 +565,11 @@ def _analyze_operation(
                 start = _block_of_offset(blocks, int(m.group(1)))
                 if start is not None:
                     method_sink_blocks.add(start)
-        ok, helpers = _coverage_complete(blocks, methods, dotted, superclasses)
+        ok, helpers, helper_cls = _coverage_complete(blocks, methods, dotted, superclasses)
         coverage_complete = coverage_complete and ok
+        for cls_name in helper_cls:
+            if cls_name not in evidence_classes:
+                evidence_classes.append(cls_name)
         method_findings = _analyze_guards(
             blocks, method_sink_blocks, extra_blocks=helpers,
             try_ranges=(try_regions or {}).get(ref, ()),
@@ -644,6 +659,7 @@ def _analyze_operation(
         coverage_complete=coverage_complete,
         sink_flows=tuple(sink_flows),
         flow_complete=flow_complete,
+        evidence_classes=tuple(evidence_classes),
     )
 
 

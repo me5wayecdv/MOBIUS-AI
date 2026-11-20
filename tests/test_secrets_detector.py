@@ -1138,7 +1138,7 @@ def test_derived_route_suppressed_by_adapter_duplicate_class_ledger():
         with zipfile.ZipFile(buf, "w") as z:
             for name in names:
                 z.writestr(name, raw)
-        return adapt_code(buf.getvalue())[-1]
+        return adapt_code(buf.getvalue())[-2]
 
     clean = dex_ledger_complete(ledger_for(["classes.dex"]))
     dup_ledger = ledger_for(["classes.dex", "classes2.dex"])
