@@ -82,37 +82,24 @@ def parse_ndjson_events(stdout: str) -> tuple[str, int | None, int | None]:
 
 
 def extract_json_object(text: str) -> str:
-    """Return the first balanced {...} object in text, or the text unchanged.
+    """Fail-closed transport normalization for CLI replies.
 
-    The CLI may split an answer into multiple text parts or add commentary
-    around the object; that is transport noise for this eval adapter, not
-    model-output invalidity (schema validation stays with the gateway).
+    Returns the reply only when the ENTIRE reply (ignoring surrounding
+    whitespace) is exactly one JSON value. Anything else is returned
+    unchanged so the gateway's schema validation rejects it: multiple
+    competing objects, trailing or leading payloads, commentary around the
+    object, markdown fences, and malformed/truncated structure are all
+    refused rather than rescued. This adapter never picks a nested object
+    or a commentary example over the real answer.
     """
-    start = text.find("{")
-    if start == -1:
+    stripped = text.strip()
+    if not stripped:
         return text
-    depth = 0
-    in_string = False
-    escape = False
-    for i in range(start, len(text)):
-        ch = text[i]
-        if in_string:
-            if escape:
-                escape = False
-            elif ch == "\\":
-                escape = True
-            elif ch == '"':
-                in_string = False
-            continue
-        if ch == '"':
-            in_string = True
-        elif ch == "{":
-            depth += 1
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                return text[start:i + 1]
-    return text
+    try:
+        json.loads(stripped)
+    except json.JSONDecodeError:
+        return text
+    return stripped
 
 
 class OpenCodeCliProvider:

@@ -457,11 +457,11 @@ def _live_report(mode: str = "ollama") -> Report:
                 factory = sessionmaker(bind=session.get_bind(), expire_on_commit=False, future=True)
                 report = Report(mode=mode)
                 # challengeable: the discriminating floor (must challenge).
-                # solid: grounded-completion floor (any disposition passes; the
-                # disposition is reported informationally). A strict reviewer can
-                # always argue impact materiality, so "no challenge" cannot be a
-                # floor; what this case measures is groundedness (guards reject
-                # citations outside the package) and challenge rate over repeats.
+                # solid: semantic control floor. The package fully covers every
+                # claim element, so answering insufficient_evidence is a REVIEW
+                # FAILURE (ducking a complete package). challenge vs
+                # no_material_challenge is a legitimate materiality judgment and
+                # is reported informationally, never marketed as a quality pass.
                 for variant, expected_disp in (
                     ("challengeable", "challenge"),
                     ("solid", "any"),
@@ -480,12 +480,12 @@ def _live_report(mode: str = "ollama") -> Report:
                             result["disposition"] == expected_disp
                             if expected_disp != "any"
                             else result["disposition"] in {
-                                "challenge", "no_material_challenge", "insufficient_evidence"
+                                "challenge", "no_material_challenge"
                             }
                         )
                         report.results.append(CaseResult(
                             case=Case(f"live-{variant}-fixture", "quality-floor",
-                                      {}, f"persisted:{expected_disp if expected_disp != 'any' else 'grounded-completion'}"),
+                                      {}, f"persisted:{expected_disp if expected_disp != 'any' else 'challenge-or-no_material_challenge (insufficient_evidence=review failure)'}"),
                             ok=accepted,
                             observed=f"persisted:{result['disposition']}",
                             detail=(f"measured {elapsed:.1f}s (timeout budget {timeout}s); "

@@ -46,8 +46,22 @@ def test_parse_ignores_non_json_lines_and_missing_tokens():
     assert output_tokens is None
 
 
-def test_extract_json_object_strips_commentary():
+def test_extract_json_object_accepts_single_whitespace_padded_object():
     from mobius.tools.opencode_provider import extract_json_object
-    assert extract_json_object('Here is the reply: {"a": "}"} trailing') == '{"a": "}"}'
-    assert extract_json_object("no object") == "no object"
-    assert extract_json_object('{"a": 1} {"b": 2}') == '{"a": 1}'
+    assert extract_json_object('  {"a": {"b": 2}}\n') == '{"a": {"b": 2}}'
+    assert extract_json_object('{"a": "}"}') == '{"a": "}"}'
+
+
+def test_extract_json_object_rejects_competing_or_trailing_payloads():
+    from mobius.tools.opencode_provider import extract_json_object
+    for bad in (
+        '{"a": 1} {"b": 2}',                       # two competing objects
+        '{"a": 1}\n{"contradictory": true}',      # trailing contradictory payload
+        'Here is the reply: {"a": 1}',            # leading commentary
+        '{"a": 1} trailing commentary',           # trailing commentary
+        '```json\n{"a": 1}\n```',                  # markdown fence
+        '{"a":',                                   # truncated
+        '{"a": 1',                                 # malformed
+        'no object at all',
+    ):
+        assert extract_json_object(bad) == bad, bad
