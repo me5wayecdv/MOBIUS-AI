@@ -110,3 +110,27 @@ def test_normalization_never_invents_missing_required_fields():
     norm = normalize_structured_reply('{"disposition":"insufficient_evidence","challenges":[]}', VeritasReviewReply)
     assert norm.status == "unconvertible"
     assert norm.reason and norm.reason.startswith("schema_violation:summary")
+
+
+def test_compose_prompt_measures_json_escaping_growth_at_real_scale():
+    """Regression for the Allsafe failure: the composed wire envelope grows with
+    payload escaping (newlines/quotes) and exceeds the legacy fixed-margin
+    estimate; the reservation must measure the composed bytes."""
+    from mobius.services.model_provider import OpenCodeCliProvider
+
+    system = "Return JSON only."
+    user = 'private void f() {\n    Log.d("k", "v");\n}\n' * 700  # ~28KB multiline
+    schema = {"type": "object", "properties": {"x": {"type": "string"}}}
+
+    composed = OpenCodeCliProvider.compose_prompt(
+        system_prompt=system, user_payload={"input": user}, response_schema=schema
+    )
+    envelope = len(composed.encode("utf-8"))
+    legacy_estimate = (
+        len(system.encode("utf-8"))
+        + len(user.encode("utf-8"))
+        + len(json.dumps(schema, separators=(",", ":")).encode("utf-8"))
+        + 1024
+    )
+    assert envelope > legacy_estimate
+    assert json.dumps({"input": user}) in composed
