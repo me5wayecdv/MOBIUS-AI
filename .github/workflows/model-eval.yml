@@ -1,0 +1,101 @@
+name: Model evaluation (manual)
+
+# Manual, operator-triggered live probe of candidate VERITAS reviewer models on
+# free GitHub-hosted runners (public repo: no minutes cost). Never runs on push
+# or PR. Downloads happen only here, ephemerally, and are declared in this file
+# (ollama pull below); the repository and the acceptance harness never download
+# models and never call a hosted provider. VERITAS stays advisory: deterministic
+# gates remain the sole verdict authority, and this workflow changes no product
+# code, image, or deployment. Each run proves only a minimum quality floor on
+# the seeded fixture - a pass is not a quality endorsement.
+
+on:
+  workflow_dispatch:
+    inputs:
+      models:
+        description: "Space-separated Ollama tags to probe (each is pulled in this ephemeral runner)"
+        required: true
+        default: "qwen3:8b"
+      timeout_seconds:
+        description: "Per-case model timeout budget in seconds"
+        required: true
+        default: "600"
+
+permissions:
+  contents: read
+
+jobs:
+  veritas-live-probe:
+    name: VERITAS live probe
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Install Ollama
+        run: |
+          curl -fsSL https://ollama.com/install.sh | sh
+          (ollama serve > /tmp/ollama-serve.log 2>&1 &)
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:11434/api/version > /tmp/ollama-version.json 2>/dev/null; then
+              break
+            fi
+            sleep 2
+          done
+          test -s /tmp/ollama-version.json
+
+      - name: Record runner facts (measurement provenance)
+        run: |
+          {
+            echo "runner: $(nproc) CPU, $(free -g | awk '/^Mem:/{print $2}') GB RAM, $(uname -m)"
+            echo "ollama: $(cat /tmp/ollama-version.json)"
+            echo "date-utc: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          } | tee /tmp/runner-facts.txt
+
+      - name: Pull declared candidate models
+        run: |
+          for m in ${{ github.event.inputs.models }}; do
+            echo "=== pulling $m (declared ephemeral download) ==="
+            ollama pull "$m"
+          done
+
+      - name: Record pulled model digests
+        run: |
+          for m in ${{ github.event.inputs.models }}; do
+            echo "=== $m ==="
+            ollama show "$m" | head -20
+          done | tee /tmp/model-digests.txt
+
+      - name: Run VERITAS live acceptance probe per model
+        run: |
+          mkdir -p /tmp/model-eval
+          status=0
+          for m in ${{ github.event.inputs.models }}; do
+            echo "=== probing $m ==="
+            MOBIUS_MODEL_NAME="$m" \
+            MOBIUS_MODEL_TIMEOUT_SECONDS=${{ github.event.inputs.timeout_seconds }} \
+              python -m mobius.tools.veritas_acceptance --mode ollama \
+              | tee "/tmp/model-eval/veritas-${m//[:\/]/_}.txt" || status=1
+          done
+          exit $status
+
+      - name: Upload probe reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-eval-reports
+          path: |
+            /tmp/model-eval/
+            /tmp/runner-facts.txt
+            /tmp/model-digests.txt
+          retention-days: 30
