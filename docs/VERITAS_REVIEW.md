@@ -50,3 +50,7 @@ Design constraints, all test-pinned:
 ## Verification boundaries
 
 Unit, HTTP, and PostgreSQL tests cover different-model enforcement (including provider aliases), consent, evidence-reference confinement, persisted audit provenance, the invariant that a VERITAS challenge cannot alter the stored deterministic verdict, the auto-pass skip/failure tokens, idempotency, and concurrent-pass single-review semantics under PostgreSQL. A real Ollama review and model-quality benchmark remain unverified; the auto pass has only ever run against scripted mock providers. No migration is included.
+
+## Report presentation (preview branch, not on main)
+
+On the preview branch `feat/archivist-veritas-advisory`, ARCHIVIST renders one advisory line per finding from persisted rows only: a completed review shows its disposition, summary, challenges, reviewer model, and an explicit independence statement (`producer independence was **not verified**` whenever the producer is not bound to a persisted model decision), always marked advisory-only with "a lack of challenge is not confirmation"; a failed or skipped attempt renders as **not completed** with its fixed reason token and is never presented as a review result. Findings with no recorded advisory activity show no line. The change is held for owner preview with real renders; it is not merged.

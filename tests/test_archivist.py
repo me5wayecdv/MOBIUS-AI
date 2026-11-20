@@ -479,3 +479,110 @@ def test_coverage_manifest_does_not_fall_back_to_stale_dex_evidence_on_hash_fail
         item["status"] == "evidence_unavailable"
         for item in manifest["dex_analysis"]["entries"]
     )
+
+
+# -- advisory VERITAS review lines (D-026) -----------------------------------------
+
+
+def _confirmed_finding_id(session, scan) -> str:
+    from sqlalchemy import select
+    from mobius.adapters.models import FindingRow
+
+    return session.execute(
+        select(FindingRow).where(
+            FindingRow.investigation_id == scan,
+            FindingRow.status == "confirmed",
+        )
+    ).scalars().first().id
+
+
+def _add_review_decision(session, scan_id, finding_id, *, disposition="challenge",
+                         summary="The evidence shows reachability but not attacker control.",
+                         challenges=None, verified=False):
+    from mobius.adapters.models import DecisionRow
+    from mobius.adapters.events import utcnow
+
+    decision = DecisionRow(
+        id=new_id(IdPrefix.DECISION),
+        investigation_id=scan_id,
+        agent="VERITAS",
+        action="review_finding",
+        action_args={
+            "finding_id": finding_id,
+            "producer_model_id": "deterministic-pipeline",
+            "producer_model_verified": verified,
+            "advisory_only": True,
+        },
+        considered_evidence=[],
+        alternatives=[],
+        expected_outcome="Independently challenge the finding.",
+        uncertainty=None,
+        prompt_version="veritas-independent-review-v1",
+        model_id="reviewer-v2",
+        provider="mock",
+        output_json={
+            "finding_id": finding_id,
+            "disposition": disposition,
+            "summary": summary,
+            "challenges": challenges or [],
+        },
+        created_at=utcnow(),
+    )
+    session.add(decision)
+    session.commit()
+    return decision.id
+
+
+def test_a_completed_advisory_review_is_reported_as_advisory_with_unverified_independence(
+    session, store, future_iso
+):
+    scan = _confirmed_scan(session, store, future_iso)
+    finding_id = _confirmed_finding_id(session, scan)
+    _add_review_decision(
+        session, scan, finding_id,
+        challenges=[{
+            "challenge_type": "unsupported_claim",
+            "statement": "The supplied summary does not show attacker control of the path.",
+            "evidence_refs": ["ev_x"],
+            "requested_proof": "Provide a source-level trace.",
+        }],
+    )
+
+    text = _text(session, store, scan)
+
+    assert "**Advisory review (VERITAS).** Disposition: `challenge`." in text
+    assert "advisory only" in text
+    assert "not verified" in text
+    assert "a lack of challenge is not confirmation" in text
+    assert "`unsupported_claim`: The supplied summary does not show attacker control of the path." in text
+    # The advisory line must sit inside the confirmed-findings section, never above the verdict.
+    assert text.index("## 3. Confirmed findings") < text.index("Advisory review (VERITAS)")
+
+
+def test_no_advisory_activity_adds_no_line(session, store, future_iso):
+    text = _text(session, store, _confirmed_scan(session, store, future_iso))
+    assert "Advisory review" not in text
+
+
+def test_a_failed_attempt_is_reported_as_failed_never_as_a_review_result(
+    session, store, future_iso
+):
+    from mobius.adapters.events import SqlEventStore
+
+    scan = _confirmed_scan(session, store, future_iso)
+    finding_id = _confirmed_finding_id(session, scan)
+    SqlEventStore(session).emit(
+        scan,
+        "veritas_review_failed",
+        {"finding_id": finding_id, "reason": "budget-exhausted",
+         "stage": "auto_review", "advisory_only": True},
+        actor="VERITAS",
+    )
+    session.commit()
+
+    text = _text(session, store, scan)
+
+    assert "Advisory review (VERITAS) - not completed." in text
+    assert "`budget-exhausted`" in text
+    assert "not a review result" in text
+    assert "Disposition:" not in text
