@@ -21,7 +21,7 @@ from .model_provider import (
 from .model_skills import NEXUS_HYPOTHESIS_SKILLS
 
 AGENT = "NEXUS"
-PROMPT_VERSION = "nexus-hypothesis-generation-v2"
+PROMPT_VERSION = "nexus-hypothesis-generation-v3"
 REQUIRED_EVIDENCE = frozenset({
     "source_location",
     "caller_chain",

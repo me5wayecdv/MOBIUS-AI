@@ -14,7 +14,7 @@ from mobius.services.model_skills import (
 
 
 def test_veritas_prompt_carries_the_review_skills():
-    assert veritas.PROMPT_VERSION == "veritas-independent-review-v2"
+    assert veritas.PROMPT_VERSION == "veritas-independent-review-v3"
     assert VERITAS_REVIEW_SKILLS in veritas._SYSTEM_PROMPT
     assert SKILLS_VERSION in veritas._SYSTEM_PROMPT
     # the catalogue families the build can evidence anchor the review guidance
@@ -23,7 +23,7 @@ def test_veritas_prompt_carries_the_review_skills():
 
 
 def test_nexus_prompt_carries_the_hypothesis_skills():
-    assert nexus_hypotheses.PROMPT_VERSION == "nexus-hypothesis-generation-v2"
+    assert nexus_hypotheses.PROMPT_VERSION == "nexus-hypothesis-generation-v3"
     assert NEXUS_HYPOTHESIS_SKILLS in nexus_hypotheses._SYSTEM_PROMPT
     assert SKILLS_VERSION in nexus_hypotheses._SYSTEM_PROMPT
 
@@ -39,6 +39,22 @@ def test_both_prompts_carry_the_citation_discipline():
 
 def test_skills_stay_bounded_for_token_budget():
     """Prompt bytes count toward the budget reservation ceiling; skills must not
-    balloon the prompt (system + schema + payload share the reservation)."""
-    assert len(VERITAS_REVIEW_SKILLS.encode("utf-8")) < 4096
-    assert len(NEXUS_HYPOTHESIS_SKILLS.encode("utf-8")) < 4096
+    balloon the prompt (system + schema + payload share the reservation). The
+    v2 pentest frame raised the per-stage skills budget from 4 KiB to 6 KiB;
+    the full system prompts remain under 6 KiB each."""
+    assert len(VERITAS_REVIEW_SKILLS.encode("utf-8")) < 6 * 1024
+    assert len(NEXUS_HYPOTHESIS_SKILLS.encode("utf-8")) < 6 * 1024
+    assert len(veritas._SYSTEM_PROMPT.encode("utf-8")) < 6 * 1024
+    assert len(nexus_hypotheses._SYSTEM_PROMPT.encode("utf-8")) < 6 * 1024
+
+
+def test_pentest_frame_is_present_and_capability_bounded():
+    """The general pentest frame names the phases and states the boundary:
+    dynamic/network/resilience phases are knowledge, not executed capability."""
+    from mobius.services.model_skills import ANDROID_PENTEST_SKILLS
+    assert ANDROID_PENTEST_SKILLS in veritas._SYSTEM_PROMPT
+    assert ANDROID_PENTEST_SKILLS in nexus_hypotheses._SYSTEM_PROMPT
+    assert "does not execute" in ANDROID_PENTEST_SKILLS
+    assert "required proof for a human tester, never as a result" in ANDROID_PENTEST_SKILLS
+    for token in ("MASVS", "MASWE", "MASTG", "DexClassLoader", "TrustManager"):
+        assert token in ANDROID_PENTEST_SKILLS
