@@ -121,7 +121,7 @@ def test_confirmed_finding_is_persisted_with_its_gate_evidence(session, store, s
     # Capped, not 1.0: the gate passed, but reachability alone cannot prove exploitability.
     assert finding.confidence == 0.9
     assert finding.discovered_by == "SPECTRE"
-    assert finding.validated_by == "VERITAS"
+    assert finding.validated_by == "DETERMINISTIC_GATE"
     assert all(finding.gate_evidence.values())
     # The finding carries the gate's weakness (exported component), not the sink's - the sink
     # family is recorded on the observation. Two different claims, two different columns.

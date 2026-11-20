@@ -177,7 +177,7 @@ def test_recon_candidates_can_never_confirm(session, store, started):
             description="RECON established the declaration only.",
             evidence_refs=(evidence.id,),
             discovered_by="RECON",
-            validated_by="VERITAS",
+            validated_by="DETERMINISTIC_GATE",
         )
         assert verdict.verdict is Verdict.INSUFFICIENT_EVIDENCE
         assert verdict.rejection_reason is None, 'not refuted, so no rejection reason'

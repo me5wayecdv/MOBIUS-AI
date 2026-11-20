@@ -52,7 +52,7 @@ def _validate(session, scan_id, **kw):
         description="MainActivity is exported and forwards EXTRA_PATH to FileOutputStream.",
         evidence_refs=("ev_1",),
         discovered_by="SPECTRE",
-        validated_by="VERITAS",
+        validated_by="DETERMINISTIC_GATE",
     )
     base.update(kw)
     return ValidationService(session).validate(**base)
@@ -126,7 +126,7 @@ def test_verdict_is_persisted_with_its_gate_detail(session, scan_id):
     # would make the audit trail depend on how a caller happened to spell "absent".
     assert row.gate_detail == {"exported": True, "permission": True,
                                "caller_check_absent": True, "sink_reachable": True}
-    assert row.validated_by == "VERITAS"
+    assert row.validated_by == "DETERMINISTIC_GATE"
     assert row.finding_id == finding.id
 
 

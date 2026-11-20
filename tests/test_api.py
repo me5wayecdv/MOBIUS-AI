@@ -158,7 +158,7 @@ def test_validation_endpoint_confirms_and_rejects(client):
         "description": "MainActivity forwards EXTRA_PATH to FileOutputStream.",
         "evidence_refs": ["ev_1"],
         "discovered_by": "SPECTRE",
-        "validated_by": "VERITAS",
+        "validated_by": "DETERMINISTIC_GATE",
     }
     confirmed = client.post(
         f"/api/v1/scans/{scan['id']}/validate",

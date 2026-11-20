@@ -111,7 +111,7 @@ def test_a_confirmed_finding_is_reported_with_its_gate_evidence(session, store, 
     assert "reaches a sensitive sink" in text
     assert "| `sink_reachable` | yes |" in text
     assert "| `caller_check_absent` | yes |" in text
-    assert "**validated by** VERITAS" in text
+    assert "**validated by** DETERMINISTIC_GATE" in text
     # The confidence cap must survive into the document.
     assert "0.9" in text
 
@@ -586,3 +586,60 @@ def test_a_failed_attempt_is_reported_as_failed_never_as_a_review_result(
     assert "`budget-exhausted`" in text
     assert "not a review result" in text
     assert "Disposition:" not in text
+
+
+def test_model_authored_review_text_is_escaped_plain_text_in_the_report(
+    session, store, future_iso
+):
+    """Model text is untrusted: no HTML, links, images, emphasis or new
+    structure may survive into the report as live markdown."""
+    scan = _confirmed_scan(session, store, future_iso)
+    finding_id = _confirmed_finding_id(session, scan)
+    _add_review_decision(
+        session, scan, finding_id,
+        summary=(
+            '<script>alert(1)</script> [click](https://evil.example) '
+            '![img](https://evil.example/x.png) **fakebold**\n'
+            '## 4. Rejected hypotheses\nFake injected section'
+        ),
+        challenges=[{
+            "challenge_type": "unsupported_claim",
+            "statement": "Line one\n| injected | table |\n`code` [l](https://bad)",
+            "evidence_refs": ["ev_x"],
+            "requested_proof": "p",
+        }],
+    )
+
+    text = _text(session, store, scan)
+
+    # One physical line: no structure injection through newlines.
+    advisory = [l for l in text.splitlines() if "Advisory review (VERITAS)." in l]
+    assert len(advisory) == 1
+    assert "Fake injected section" in advisory[0]
+    # No live markup survives: HTML tags, links, images and emphasis are escaped.
+    assert "<script>" not in text
+    assert "![img]" not in text or "\\![" not in text  # '[' and ']' escaped
+    # brackets are escaped, so the parens that follow are inert in any renderer
+    assert "\[click\](https://evil.example)" in text
+    assert "**fakebold**" not in text
+    assert "\\<script\\>" in text
+    # Backticks in plain statement text are escaped so no code span can open.
+    assert "\\`code\\`" in text
+    assert "\\[click\\]" in text
+    # The report's own structure is intact: the injected heading text survives
+    # only as inert inline words inside the single advisory line.
+    headings = [l for l in text.splitlines() if l.startswith("## 4. Rejected hypotheses")]
+    assert len(headings) == 1
+    # Injected table row survives only as inline words inside the challenge
+    # bullet - no line of the report parses as a table row from it.
+    assert not any(l.strip().startswith("| injected") for l in text.splitlines())
+
+
+def test_a_confirmed_finding_names_the_deterministic_gate_as_its_validator(
+    session, store, future_iso
+):
+    """SPECTRE findings are validated by the deterministic gates; VERITAS is the
+    separate advisory reviewer and must never appear as the confirming authority."""
+    text = _text(session, store, _confirmed_scan(session, store, future_iso))
+    assert "**validated by** DETERMINISTIC_GATE" in text
+    assert "**validated by** VERITAS" not in text

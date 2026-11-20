@@ -288,7 +288,10 @@ class SpectreService:
             description=result.explain(),
             evidence_refs=(manifest_evidence_id,),
             discovered_by=AGENT,
-            validated_by="VERITAS",
+            # The deterministic ValidationService gates are the validator (ADR-010/012);
+            # VERITAS is the separate, advisory-only model reviewer (D-026) and must
+            # never be named as the authority that confirmed a finding.
+            validated_by="DETERMINISTIC_GATE",
             component_ref=component,
             confidence_cap=_CONFIDENCE[_bucket(result)],
         )

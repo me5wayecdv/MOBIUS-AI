@@ -435,11 +435,25 @@ class ArchivistService:
             .all()
         )
 
-    @staticmethod
-    def _one_line(value: Any) -> str:
-        """Persisted model-authored text joins the report as data: collapse newlines
-        so it cannot break the report's own line structure."""
-        return " ".join(str(value or "").split())
+    # Markdown special characters escaped in model-authored text, so the text
+    # stays plain data in ANY markdown renderer (the stored report is consumed
+    # beyond the War Room, whose own renderer never builds HTML from it).
+    _MD_ESCAPES = str.maketrans({c: "\\" + c for c in "\\`*_[]<>"})
+
+    @classmethod
+    def _code(cls, value: Any) -> str:
+        """Text destined for a Markdown code span: whitespace collapsed,
+        backticks neutralised (escape sequences do not apply inside code
+        spans, so backslash-escaping there would render literally)."""
+        return " ".join(str(value or "").split()).replace("`", "'")
+
+    @classmethod
+    def _plain(cls, value: Any) -> str:
+        """Persisted model-authored text joins the report as untrusted plain text:
+        newlines collapse (no fake headings/tables/sections) and markdown
+        metacharacters are escaped (no bold/code spans, links, images, or raw
+        HTML tags) in any renderer."""
+        return " ".join(str(value or "").split()).translate(cls._MD_ESCAPES)
 
     def _advisory_lines(self, row: InvestigationRow, finding_id: str) -> list[str]:
         """Advisory VERITAS line for one finding, from persisted rows only.
@@ -463,7 +477,7 @@ class ArchivistService:
         if decisions:
             latest = decisions[-1]
             out = latest.output_json or {}
-            disposition = self._one_line(out.get("disposition", "unknown"))
+            disposition = self._code(out.get("disposition", "unknown"))
             if (latest.action_args or {}).get("producer_model_verified") is True:
                 independence = (
                     "reviewer model was verified against the finding's persisted "
@@ -477,7 +491,7 @@ class ArchivistService:
             lines += [
                 "",
                 f"**Advisory review (VERITAS).** Disposition: `{disposition}`. "
-                f"{self._one_line(out.get('summary'))} "
+                f"{self._plain(out.get('summary'))} "
                 f"Reviewer model `{latest.model_id}`; {independence}. "
                 "This review is advisory only - the deterministic gates above remain "
                 "the verdict authority, and a lack of challenge is not confirmation.",
@@ -486,10 +500,13 @@ class ArchivistService:
             if challenges:
                 lines += ["", "Challenges raised (advisory):"]
                 for challenge in challenges:
+                    # evidence_refs are validated against persisted evidence IDs before
+                    # the review is ever stored, so they render unescaped; statement
+                    # and type remain untrusted model text and stay escaped.
                     refs = ", ".join(challenge.get("evidence_refs") or [])
                     lines.append(
-                        f"- `{self._one_line(challenge.get('challenge_type', 'challenge'))}`: "
-                        f"{self._one_line(challenge.get('statement'))} "
+                        f"- `{self._code(challenge.get('challenge_type', 'challenge'))}`: "
+                        f"{self._plain(challenge.get('statement'))} "
                         f"(evidence: {refs or '—'})"
                     )
             if len(decisions) > 1:
@@ -499,7 +516,7 @@ class ArchivistService:
                 ]
         if failures:
             latest_failure = failures[-1]
-            reason = self._one_line((latest_failure.payload or {}).get("reason", "unknown"))
+            reason = self._code((latest_failure.payload or {}).get("reason", "unknown"))
             count = f"{len(failures)} attempts" if len(failures) > 1 else "one attempt"
             lines += [
                 "",

@@ -56,7 +56,7 @@ class ValidationRequest(_Base):
     description: str = Field(min_length=1)
     evidence_refs: tuple[str, ...]
     discovered_by: str = "SPECTRE"
-    validated_by: str = "VERITAS"
+    validated_by: str = "DETERMINISTIC_GATE"
     component_ref: str | None = None
     rejection_reason: str | None = None
 

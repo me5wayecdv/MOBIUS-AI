@@ -172,7 +172,7 @@ Evaluates a confirmation gate over supplied attributes and persists a finding pl
 { "category": "exported-component-no-permission",
   "attributes": {"exported": true, "permission": null},
   "title": "...", "description": "...", "evidence_refs": ["ev_01J8..."],
-  "discovered_by": "RECON", "validated_by": "VERITAS" }
+  "discovered_by": "RECON", "validated_by": "DETERMINISTIC_GATE" }
 ```
 
 **Operator-asserted authority.** The attribute values here are supplied by the caller and are
@@ -386,7 +386,7 @@ and 404 when the finding is not part of this scan.
                       "class": "com.example.ExportActivity", "method": "onCreate", "lines": [42, 68] },
       "evidence_refs": ["ev_01J8ZS…", "ev_01J8ZT…"],
       "discovered_by": "SPECTRE",
-      "validated_by": "VERITAS",
+      "validated_by": "DETERMINISTIC_GATE",
       "gate_evidence": {
         "exported": true, "no_permission": true,
         "caller_check_absent": true, "sink_reachable": true

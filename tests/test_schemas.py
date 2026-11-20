@@ -43,7 +43,7 @@ def _finding(**kw):
         confidence=1.0,
         status=FindingStatus.CONFIRMED,
         discovered_by="SPECTRE",
-        validated_by="VERITAS",
+        validated_by="DETERMINISTIC_GATE",
         gate_evidence={"exported": True, "permission": True, "caller_check_absent": True,
                        "sink_reachable": True},
     )
@@ -76,10 +76,10 @@ def test_confirmed_finding_requires_every_gate_clause_true():
 def test_rejected_verdict_requires_a_reason():
     with pytest.raises(ValidationError):
         VerdictRecord(finding_id="f_1", verdict=Verdict.REJECTED, rationale="r",
-                      gate_passed=False, validated_by="VERITAS")
+                      gate_passed=False, validated_by="DETERMINISTIC_GATE")
     ok = VerdictRecord(finding_id="f_1", verdict=Verdict.REJECTED,
                        rejection_reason=RejectionReason.TEST_ONLY_VALUE, rationale="r",
-                       gate_passed=False, validated_by="VERITAS")
+                       gate_passed=False, validated_by="DETERMINISTIC_GATE")
     assert ok.rejection_reason is RejectionReason.TEST_ONLY_VALUE
 
 
