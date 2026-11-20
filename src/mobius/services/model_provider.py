@@ -232,6 +232,10 @@ class StructuredModelGateway:
             "output_tokens": result.completion_tokens,
             "latency_ms": result.duration_ms,
             "schema_valid": True,
+            # The verbatim transport reply: normalization may reshape it, so a
+            # post-conversion rejection must capture THIS, not a reserialized
+            # parse tree, when the original is what the operator needs.
+            "raw_content": result.content,
         }
 
     def generate(

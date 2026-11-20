@@ -229,10 +229,13 @@ def test_veritas_refuses_provider_alias_that_resolves_to_producer_model(
     )).scalars().all() == []
 
 
-def test_veritas_rejects_challenge_that_invents_evidence_reference(
+def test_veritas_challenge_that_invents_evidence_reference_is_captured_needs_review(
     session, reviewed_finding
 ):
-    finding_id, _, _, _ = reviewed_finding
+    # An invented citation must never become a verdict - and since the model
+    # DID reply, the reply is captured raw as an explicit needs-review record
+    # (the any-format intake contract), not dropped into a bare 422.
+    finding_id, investigation_id, _, _ = reviewed_finding
     gateway, _ = _gateway({
         "disposition": "challenge",
         "summary": "A challenge references an evidence item that was not supplied.",
@@ -245,13 +248,20 @@ def test_veritas_rejects_challenge_that_invents_evidence_reference(
     })
     factory = sessionmaker(bind=session.get_bind(), expire_on_commit=False, future=True)
 
-    with pytest.raises(ModelOutputInvalid, match="outside"):
-        VeritasReviewService(
-            session, gateway=gateway, session_factory=factory
-        ).review(finding_id, producer_model_id="producer-v1")
-    assert session.execute(select(DecisionRow).where(
-        DecisionRow.agent == "VERITAS"
-    )).scalars().all() == []
+    result = VeritasReviewService(
+        session, gateway=gateway, session_factory=factory
+    ).review(finding_id, producer_model_id="producer-v1")
+    assert result["status"] == "needs_review"
+    assert result["disposition"] is None
+    assert "outside" in result["failure_class"]
+
+    decision = session.execute(select(DecisionRow).where(
+        DecisionRow.investigation_id == investigation_id,
+        DecisionRow.id == result["decision_id"],
+    )).scalar_one()
+    assert decision.output_json["status"] == "needs_review"
+    captured = json.loads(decision.output_json["raw_response"])
+    assert captured["challenges"][0]["evidence_refs"] == ["ev_not_in_this_investigation"]
 
 
 def test_veritas_requires_explicit_investigation_consent(
@@ -489,3 +499,95 @@ def test_review_package_includes_component_observations(session, reviewed_findin
     assert "internal_note" not in obs["attributes"]
     assert obs["evidence_refs"] == [evidence_id]
     assert obs["produced_by"] == "RECON"
+
+
+def test_veritas_semantic_rejection_is_captured_needs_review_not_422(session, reviewed_finding):
+    # Well-formed reply whose CONTENT violates a review constraint: challenge
+    # disposition with an empty challenge list. The raw reply must be captured
+    # as needs_review, never dropped into a bare 422.
+    finding_id, investigation_id, _, evidence_id = reviewed_finding
+    reply = _challenge_reply(evidence_id, challenges=[])
+    provider = SequenceProvider([json.dumps(reply)])
+    gateway = StructuredModelGateway(provider, model="reviewer-v2")
+    factory = sessionmaker(bind=session.get_bind(), expire_on_commit=False, future=True)
+
+    result = VeritasReviewService(
+        session, gateway=gateway, session_factory=factory
+    ).review(finding_id, producer_model_id="producer-v1")
+
+    assert result["status"] == "needs_review"
+    assert result["disposition"] is None
+    assert "at least one challenge" in result["failure_class"]
+    decision = session.execute(select(DecisionRow).where(
+        DecisionRow.investigation_id == investigation_id,
+        DecisionRow.id == result["decision_id"],
+    )).scalar_one()
+    captured = json.loads(decision.output_json["raw_response"])
+    assert captured["disposition"] == "challenge"
+    assert captured["challenges"] == []
+
+
+def test_veritas_out_of_scope_citation_is_captured_needs_review(session, reviewed_finding):
+    # A challenge citing evidence outside the finding's persisted refs is a
+    # semantic rejection: captured with the raw reply, not converted, not 422.
+    finding_id, investigation_id, _, evidence_id = reviewed_finding
+    reply = _challenge_reply("ev_not_persisted_here")
+    provider = SequenceProvider([json.dumps(reply)])
+    gateway = StructuredModelGateway(provider, model="reviewer-v2")
+    factory = sessionmaker(bind=session.get_bind(), expire_on_commit=False, future=True)
+
+    result = VeritasReviewService(
+        session, gateway=gateway, session_factory=factory
+    ).review(finding_id, producer_model_id="producer-v1")
+
+    assert result["status"] == "needs_review"
+    assert "outside the finding's persisted evidence" in result["failure_class"]
+    decision = session.execute(select(DecisionRow).where(
+        DecisionRow.investigation_id == investigation_id,
+        DecisionRow.id == result["decision_id"],
+    )).scalar_one()
+    captured = json.loads(decision.output_json["raw_response"])
+    assert captured["challenges"][0]["evidence_refs"] == ["ev_not_persisted_here"]
+
+
+def test_veritas_semantic_needs_review_stays_untrusted_and_confined(session, reviewed_finding):
+    # Regression pin: a citation-invalid review captured as needs_review must
+    # not confirm anything, must not promote the foreign ref into any
+    # structured field, and must leave the deterministic verdict untouched.
+    from mobius.adapters.models import VerdictRow
+    finding_id, investigation_id, _, evidence_id = reviewed_finding
+    before_finding = session.get(FindingRow, finding_id)
+    status_before = before_finding.status
+    verdicts_before = session.execute(select(VerdictRow)).scalars().all()
+    reply = _challenge_reply("ev_foreign_not_persisted")
+    provider = SequenceProvider([json.dumps(reply)])
+    gateway = StructuredModelGateway(provider, model="reviewer-v2")
+    factory = sessionmaker(bind=session.get_bind(), expire_on_commit=False, future=True)
+
+    result = VeritasReviewService(
+        session, gateway=gateway, session_factory=factory
+    ).review(finding_id, producer_model_id="producer-v1")
+
+    assert result["status"] == "needs_review"
+    assert result["disposition"] is None
+    assert result["challenges"] == []
+    assert result["gate_verdict_unchanged"] is True
+    session.expire_all()
+    assert session.get(FindingRow, finding_id).status == status_before
+    assert session.execute(select(VerdictRow)).scalars().all() == verdicts_before
+
+    decision = session.execute(select(DecisionRow).where(
+        DecisionRow.investigation_id == investigation_id,
+        DecisionRow.id == result["decision_id"],
+    )).scalar_one()
+    # considered_evidence stays the finding's own persisted refs; the foreign
+    # ref exists only as opaque text inside the captured raw reply and its
+    # parsed rendering (both untrusted captures), never in a structured field.
+    structured = dict(decision.output_json)
+    structured.pop("raw_response", None)
+    structured.pop("parsed_reply", None)
+    assert list(decision.considered_evidence) == [evidence_id]
+    assert "ev_foreign_not_persisted" not in json.dumps(structured, default=str)
+    assert "ev_foreign_not_persisted" in decision.output_json["raw_response"]
+    assert json.loads(decision.output_json["parsed_reply"])["challenges"][0][
+        "evidence_refs"] == ["ev_foreign_not_persisted"]
