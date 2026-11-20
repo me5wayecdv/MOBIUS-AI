@@ -596,3 +596,89 @@ def test_settings_expose_experimental_model_knobs(monkeypatch):
     assert settings.model_max_output_tokens == 2048
     assert settings.model_max_repair_attempts == 4
     assert settings.veritas_auto_max_reviews == 25
+
+
+class _EnvelopeProvider:
+    """Provider whose wire envelope is far larger than the legacy estimate,
+    mirroring the OpenCode adapter's JSON-escaping growth at real scale."""
+
+    name = "ollama"
+
+    def __init__(self, *, envelope: int, report_prompt: int, report_completion: int = 5):
+        self.envelope = envelope
+        self.report_prompt = report_prompt
+        self.report_completion = report_completion
+        self.calls = 0
+
+    def prompt_envelope_bytes(self, *, system_prompt, user_payload, response_schema):
+        return self.envelope
+
+    def complete_json(self, **kwargs):
+        self.calls += 1
+        return ProviderResult(
+            content='{"claim":"A valid structured model response","confidence":0.7}',
+            model_id="local-test-model",
+            prompt_tokens=self.report_prompt,
+            completion_tokens=self.report_completion,
+        )
+
+
+def test_investigation_gateway_measures_provider_composed_envelope(session, store, future_iso):
+    """The reservation ceiling must cover the provider's real composed wire
+    envelope, not the pre-transformation payload plus a fixed margin."""
+    from mobius.services.model_provider import InvestigationModelGateway
+
+    scan_id, _ = _scan_with_observation(session, store, future_iso, consent=True)
+    session.commit()
+    provider = _EnvelopeProvider(envelope=5000, report_prompt=5000)
+    gateway = StructuredModelGateway(provider, model="local-test-model")
+    factory = sessionmaker(bind=session.get_bind(), expire_on_commit=False, future=True)
+    bound = InvestigationModelGateway(gateway, factory, scan_id)
+
+    import asyncio
+    result = asyncio.run(bound.complete_structured(
+        role="reasoning", system="s", user="u", schema=HypothesisReply, max_tokens=32
+    ))
+
+    assert provider.calls == 1
+    assert result["input_tokens"] + result["output_tokens"] == 5005
+    session.expire_all()
+    row = session.get(InvestigationRow, scan_id)
+    assert row.used_json["model_tokens"] == 5005
+    assert row.used_json["model_tokens_reserved"] == 0
+
+
+def test_investigation_gateway_rejection_records_true_usage(session, store, future_iso):
+    """A rejected over-ceiling call charges the full reservation conservatively
+    and the audit event retains the provider's true measured usage."""
+    from mobius.services.model_provider import InvestigationModelGateway
+
+    scan_id, _ = _scan_with_observation(session, store, future_iso, consent=True)
+    session.commit()
+    provider = _EnvelopeProvider(envelope=5000, report_prompt=99999, report_completion=17)
+    gateway = StructuredModelGateway(provider, model="local-test-model")
+    factory = sessionmaker(bind=session.get_bind(), expire_on_commit=False, future=True)
+    bound = InvestigationModelGateway(gateway, factory, scan_id)
+
+    import asyncio
+    # The settle ledger raises its own overrun error before the gateway's message.
+    with pytest.raises(ModelBudgetExceeded, match="reserved token ceiling"):
+        asyncio.run(bound.complete_structured(
+            role="reasoning", system="s", user="u", schema=HypothesisReply, max_tokens=32
+        ))
+
+    session.expire_all()
+    row = session.get(InvestigationRow, scan_id)
+    # Conservative ledger charge: the full reservation (5000 envelope + 32 output).
+    assert row.used_json["model_tokens"] == 5032
+    assert row.used_json["model_tokens_reserved"] == 0
+    event = session.query(EventRow).filter_by(
+        investigation_id=scan_id, type="model_budget_rejected"
+    ).one()
+    # True measured usage is retained alongside the sentinel.
+    assert event.payload["reported_prompt_tokens"] == 99999
+    assert event.payload["reported_completion_tokens"] == 17
+    assert event.payload["prompt_ceiling"] == 5000
+    assert event.payload["max_tokens"] == 32
+    assert event.payload["reserved_tokens"] == 5032
+    assert event.payload["reported_tokens"] == 5033

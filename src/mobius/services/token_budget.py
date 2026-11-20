@@ -79,6 +79,7 @@ class InvestigationTokenBudget:
         actual_tokens: int,
         provider: str,
         model_id: str,
+        usage: dict[str, Any] | None = None,
     ) -> None:
         if actual_tokens < 0:
             raise ValueError("actual token usage cannot be negative")
@@ -105,11 +106,17 @@ class InvestigationTokenBudget:
                 used["model_tokens_reserved"] = remaining_reserved
                 used["model_tokens"] = current_used + reservation.reserved_tokens
                 row.used_json = used
+                # The ledger charge stays the conservative full reservation; the
+                # audit event must also retain the provider's true measured usage
+                # (when supplied) so an overrun review sees reality, not the sentinel.
+                payload = {"provider": provider, "model_id": model_id,
+                           "reserved_tokens": reservation.reserved_tokens,
+                           "reported_tokens": actual_tokens}
+                if usage:
+                    payload.update(usage)
                 SqlEventStore(session).emit(
                     row.id, "model_budget_rejected",
-                    {"provider": provider, "model_id": model_id,
-                     "reserved_tokens": reservation.reserved_tokens,
-                     "reported_tokens": actual_tokens},
+                    payload,
                     actor="NEXUS",
                 )
                 session.commit()

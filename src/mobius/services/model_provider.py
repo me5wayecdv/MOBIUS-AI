@@ -320,8 +320,23 @@ class InvestigationModelGateway:
 
         # UTF-8 byte length is a conservative upper bound for tokenizer tokens; include
         # schema and protocol overhead so the reservation covers the full prompt envelope.
-        schema_bytes = json.dumps(schema.model_json_schema(), separators=(",", ":")).encode("utf-8")
-        prompt_ceiling = len(system.encode("utf-8")) + len(user.encode("utf-8")) + len(schema_bytes) + 1024
+        # Providers that transform the envelope (e.g. the OpenCode CLI adapter wraps the
+        # payload in extra JSON, whose escaping grows with payload content) expose the
+        # exact composed wire length via prompt_envelope_bytes; measuring it keeps the
+        # ceiling sound at any payload scale instead of relying on a fixed margin.
+        schema_dict = schema.model_json_schema()
+        envelope = getattr(self.gateway.provider, "prompt_envelope_bytes", None)
+        if callable(envelope):
+            prompt_ceiling = envelope(
+                system_prompt=system,
+                user_payload={"input": user},
+                response_schema=schema_dict,
+            )
+        else:
+            schema_bytes = json.dumps(schema_dict, separators=(",", ":")).encode("utf-8")
+            prompt_ceiling = (
+                len(system.encode("utf-8")) + len(user.encode("utf-8")) + len(schema_bytes) + 1024
+            )
         reservation_size = prompt_ceiling + max_tokens
         budget = InvestigationTokenBudget(self.session_factory)
         reservation = budget.reserve(self.investigation_id, reservation_size)
@@ -360,6 +375,12 @@ class InvestigationModelGateway:
             budget.settle(
                 reservation, actual_tokens=reservation.reserved_tokens + 1,
                 provider=self.gateway.provider.name, model_id=result.model_id,
+                usage={
+                    "reported_prompt_tokens": result.prompt_tokens,
+                    "reported_completion_tokens": result.completion_tokens,
+                    "prompt_ceiling": prompt_ceiling,
+                    "max_tokens": max_tokens,
+                },
             )
             raise ModelBudgetExceeded("provider usage exceeded the pre-call token ceiling")
         budget.settle(
@@ -578,13 +599,21 @@ class OpenCodeCliProvider:
     Token accounting: ``prompt_tokens`` reports the byte length of the prompt
     envelope this adapter composed (Mobius's system prompt + schema + payload),
     matching the reservation ceiling's conservative bytes-as-tokens unit. The
-    OpenCode CLI injects its own system prompt (~6k tokens of platform
-    overhead) that is not part of the Mobius envelope; reporting it would trip
-    the pre-call ceiling guard on every call. The CLI-reported totals,
-    including that overhead, are exposed on ``last_cli_input_tokens`` /
-    ``last_cli_output_tokens`` after each call so harness reports can state
-    real platform usage. ``completion_tokens`` is the CLI-reported answer
-    output, falling back to the answer's byte length when the CLI omits usage.
+    gateway sizes the reservation from :meth:`prompt_envelope_bytes`, the exact
+    composed wire envelope (including JSON escaping growth), so the ceiling
+    cannot underestimate what is actually sent. The OpenCode CLI injects its
+    own system prompt (~6k tokens of platform overhead) that is not part of
+    the Mobius envelope; reporting it would trip the pre-call ceiling guard on
+    every call. The CLI-reported totals, including that overhead, are exposed
+    on ``last_cli_input_tokens`` / ``last_cli_output_tokens`` after each call
+    so harness reports can state real platform usage. ``completion_tokens`` is
+    the CLI-reported answer output, falling back to the answer's byte length
+    when the CLI omits usage.
+
+    ``max_tokens`` is NOT forwarded to the CLI: ``opencode run`` exposes no
+    output-length flag (verified against ``opencode run --help``), so the
+    model answers at its natural length and the per-call output ceiling is
+    enforced Mobius-side at settle, never provider-side.
     """
 
     name = "opencode"
@@ -599,6 +628,43 @@ class OpenCodeCliProvider:
         self.last_cli_input_tokens: int | None = None
         self.last_cli_output_tokens: int | None = None
 
+    @staticmethod
+    def compose_prompt(
+        *,
+        system_prompt: str,
+        user_payload: dict[str, Any],
+        response_schema: dict[str, Any],
+    ) -> str:
+        """Compose the exact wire prompt sent to the CLI (single source of truth)."""
+        return (
+            f"{system_prompt}\n\n"
+            "Respond with ONLY a JSON object conforming to this JSON Schema. "
+            "No markdown fences, no commentary, no tool use:\n"
+            f"{json.dumps(response_schema)}\n\n"
+            "Input payload:\n"
+            f"{json.dumps(user_payload)}"
+        )
+
+    def prompt_envelope_bytes(
+        self,
+        *,
+        system_prompt: str,
+        user_payload: dict[str, Any],
+        response_schema: dict[str, Any],
+    ) -> int:
+        """Byte length of the composed wire prompt; the reservation ceiling unit.
+
+        Bytes are a conservative upper bound for tokens, and JSON escaping of
+        the payload (newlines, quotes, unicode) is measured, not estimated.
+        """
+        return len(
+            self.compose_prompt(
+                system_prompt=system_prompt,
+                user_payload=user_payload,
+                response_schema=response_schema,
+            ).encode("utf-8")
+        )
+
     def complete_json(
         self,
         *,
@@ -610,13 +676,10 @@ class OpenCodeCliProvider:
         temperature: float = 0.0,
         max_tokens: int = 4096,
     ) -> ProviderResult:
-        prompt = (
-            f"{system_prompt}\n\n"
-            "Respond with ONLY a JSON object conforming to this JSON Schema. "
-            "No markdown fences, no commentary, no tool use:\n"
-            f"{json.dumps(response_schema)}\n\n"
-            "Input payload:\n"
-            f"{json.dumps(user_payload)}"
+        prompt = self.compose_prompt(
+            system_prompt=system_prompt,
+            user_payload=user_payload,
+            response_schema=response_schema,
         )
         # Run in an empty directory: the agent sees no project files and has
         # nothing to act on; the prompt asks for a direct JSON answer.
