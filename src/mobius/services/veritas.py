@@ -24,7 +24,7 @@ from .model_provider import (
 )
 
 AGENT = "VERITAS"
-PROMPT_VERSION = "veritas-independent-review-v2"
+PROMPT_VERSION = "veritas-independent-review-v3"
 CHALLENGE_TYPES = frozenset({
     "unsupported_claim",
     "contradictory_evidence",

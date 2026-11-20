@@ -16,7 +16,7 @@ generic Android security knowledge that invites unsupported claims.
 """
 from __future__ import annotations
 
-SKILLS_VERSION = "android-security-skills-v1"
+SKILLS_VERSION = "android-security-skills-v2"
 
 # Shared citation discipline, stated once per stage prompt. The measured failure
 # mode on 2026-11-19 was fabricated / wrong-kind citations, so this leads.
@@ -30,6 +30,48 @@ Evidence discipline (measured failure mode: fabricated or wrong-kind citations):
   exploitability, or a confirmed vulnerability.
 - When the material cannot support the task, say so through the schema
   (empty hypothesis list / insufficient_evidence) instead of producing filler."""
+
+# General Android penetration-testing frame, grounded in the repository's own
+# methodology (docs/ANDROID_SECURITY_METHODOLOGY.md: MASVS v2.1.0 / MASWE v1.0.0 /
+# MASTG v2.0.0, ten curated common test areas, and the six-phase flow). The
+# capability boundary inside this block is load-bearing: knowing a test is not
+# running it, and phases this build does not execute must surface as required
+# proof for a human tester, never as results.
+ANDROID_PENTEST_SKILLS = f"""\
+Android penetration-testing frame ({SKILLS_VERSION}; MASVS v2.1.0, MASWE v1.0.0, MASTG v2.0.0):
+- Traceability chain: MASVS control -> MASWE weakness -> MASTG test. Name the
+  weakness (its MASWE id), not just the category, and name the test that would
+  settle it. "MASVS-STORAGE" alone is too coarse to act on.
+- Full pentest flow: reconnaissance, static analysis, dynamic analysis,
+  network analysis, resilience assessment, reporting. THIS build executes
+  reconnaissance, static analysis and reporting only. It does not execute
+  dynamic, network or resilience phases: no runtime observation, no
+  instrumentation, no traffic analysis, no tampering exercise.
+- Knowing a test is not running it. When a claim needs a phase this build
+  does not execute (Frida bypass, TLS interception, logcat capture, emulator
+  PoC), record it as required proof for a human tester, never as a result.
+- Ten common Android test areas, selected from the project methodology (a
+  curated selection, not a measured frequency ranking), with the static signal
+  and the validation that would change a verdict: exported component to
+  privileged sink (reachability plus absent caller-permission checks); deep
+  links and intents (MASWE-0029 Insecure Deep Links, MASWE-0032 Insecure
+  Intents); hardcoded secret (prove
+  security-context use, else informational); insecure storage (MASWE-0001:
+  prove the data is sensitive); weak crypto (DES/RC4/AES-ECB, MD5/SHA1 in
+  auth, static IV: establish key provenance and what it protects); cleartext/
+  TLS misconfiguration (NSC cleartext, permissive TrustManager,
+  onReceivedSslError proceed: name the endpoint and what flows); unsafe
+  WebView (addJavascriptInterface plus setJavaScriptEnabled: show an
+  attacker-influenceable content source); dynamic code loading (DexClassLoader
+  family: the byte source decides severity); intent redirection
+  (startActivity(getIntent()): prove an unprivileged app steers the inner
+  intent); unprotected provider with path traversal (caller-controlled Uri
+  reaching openFile without canonicalisation); platform misuse flags
+  (debuggable in a release build, allowBackup).
+- Verdict-changing validation is specific: reachability, absent caller checks,
+  provenance, and whether the protected asset matters. "This could allow an
+  attacker" is not analysis.
+"""
 
 VERITAS_REVIEW_SKILLS = f"""\
 Android evidence-review skills ({SKILLS_VERSION}):
@@ -49,7 +91,9 @@ Android evidence-review skills ({SKILLS_VERSION}):
   scope_or_assumption - does the finding assume caller control, intent data
   control, or a device state the evidence does not show? alternative_explanation
   - does a guard, permission check, or non-attacker caller explain the path?
-{_CITATION_DISCIPLINE}"""
+{_CITATION_DISCIPLINE}
+
+{ANDROID_PENTEST_SKILLS}"""
 
 NEXUS_HYPOTHESIS_SKILLS = f"""\
 Android hypothesis-generation skills ({SKILLS_VERSION}):
@@ -65,4 +109,6 @@ Android hypothesis-generation skills ({SKILLS_VERSION}):
   attacker-controlled input reaching the sink. If no supplied observation even
   suggests the path, do not hypothesise it.
 - One component per hypothesis; do not merge unrelated surfaces to look thorough.
-{_CITATION_DISCIPLINE}"""
+{_CITATION_DISCIPLINE}
+
+{ANDROID_PENTEST_SKILLS}"""
