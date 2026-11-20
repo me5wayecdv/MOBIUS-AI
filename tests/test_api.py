@@ -693,7 +693,7 @@ def _provider_manifest() -> str:
 </manifest>"""
 
 
-def test_provider_analysis_validates_exported_provider(client):
+def test_provider_analysis_validates_exported_provider(client, ctx):
     app = _upload(client, data=make_apk(manifest=_provider_manifest())).json()
     auth = _authorize(client, app["sha256"]).json()
     scan = _scan(client, app["id"], auth["id"]).json()
@@ -724,6 +724,23 @@ def test_provider_analysis_validates_exported_provider(client):
     for summary in provider_summaries:
         assert "exported True" in summary
         assert "protection unprotected" in summary
+
+    from mobius.adapters.models import FindingRow
+
+    # Coverage claims keep the two scopes explicit and never overclaim
+    # whole-APK completeness: the fake classes.dex does not parse, so the
+    # package scope must be stated as incomplete with the entry named, while
+    # operation-scope flags stay bounded to the analyzed operation/helpers,
+    # and the flow count is tied to the flows recorded in the evidence.
+    with ctx.session_factory() as s:
+        rows = s.query(FindingRow).filter_by(investigation_id=scan["id"]).all()
+    assert len(rows) == 2
+    for r in rows:
+        assert "operation-scope coverage complete:" in r.description
+        assert "package dex coverage: incomplete (classes.dex" in r.description
+        assert "sink flows recorded in this evidence:" in r.description
+        assert "sink kinds:" in r.description
+        assert "caller-check absent: None (scope: analyzed operation" in r.description
 
     # the ARCHIVIST report is composed from the same findings: write it, then
     # read it back and confirm the provider analysis is visible there.
