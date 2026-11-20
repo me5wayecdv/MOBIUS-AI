@@ -242,13 +242,15 @@ class SpectreService:
         investigation_id: str,
         entry: FrontierEntryRow,
         index: CodeIndex,
-        manifest_evidence_id: str,
+        index_evidence_id: str,
     ) -> dict[str, object] | None:
         component = (entry.action_args or {}).get("component")
         if not component:
             return None
 
-        kind, exported, permission = self._component_facts(investigation_id, component)
+        kind, exported, permission, manifest_refs = self._component_facts(
+            investigation_id, component
+        )
         # Matched by name, not by signature: a real onReceive has parameters (RL-006).
         roots = tuple(
             method
@@ -277,16 +279,20 @@ class SpectreService:
             attributes["caller_check_absent"] = None
 
         observation = self._record_observation(
-            investigation_id, component, kind, result, index, manifest_evidence_id
+            investigation_id, component, kind, result, index, index_evidence_id
         )
 
+        # The finding's claim rests on BOTH the manifest facts (exported, no
+        # permission guard) and the call-graph reachability; cite both evidence
+        # lines so reviewers (VERITAS included) see the manifest facts, not
+        # only the graph summary.
         finding, verdict = self._validator.validate(
             investigation_id=investigation_id,
             category="exported-component-no-permission",
             attributes=attributes,
             title=self._title(kind, component, result),
             description=result.explain(),
-            evidence_refs=(manifest_evidence_id,),
+            evidence_refs=tuple(dict.fromkeys((index_evidence_id, *manifest_refs))),
             discovered_by=AGENT,
             validated_by="VERITAS",
             component_ref=component,
@@ -405,7 +411,9 @@ class SpectreService:
             )
         return f"Exported {kind} {short} — reachability not established"
 
-    def _component_facts(self, investigation_id: str, component: str) -> tuple[str, bool, str | None]:
+    def _component_facts(
+        self, investigation_id: str, component: str
+    ) -> tuple[str, bool, str | None, tuple[str, ...]]:
         observation = (
             self._session.query(ObservationRow)
             .filter(
@@ -417,12 +425,13 @@ class SpectreService:
         )
         if observation is None:
             # The component was queued without an observation, which RECON never does.
-            return "activity", True, None
+            return "activity", True, None, ()
         attributes = observation.attributes or {}
         return (
             str(attributes.get("kind", "activity")),
             bool(attributes.get("exported", True)),
             attributes.get("permission"),
+            tuple(observation.evidence_refs or ()),
         )
 
     def _record_observation(
@@ -432,7 +441,7 @@ class SpectreService:
         kind: str,
         result: ReachabilityResult,
         index: CodeIndex,
-        manifest_evidence_id: str,
+        index_evidence_id: str,
     ) -> ObservationRow:
         bucket = _bucket(result)
 
@@ -458,7 +467,7 @@ class SpectreService:
             },
             maswe=list(result.sink.maswe) if result.sink else [],
             confidence=_CONFIDENCE[bucket],
-            evidence_refs=[manifest_evidence_id],
+            evidence_refs=[index_evidence_id],
             created_at=utcnow(),
         )
         self._session.add(row)
