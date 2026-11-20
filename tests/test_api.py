@@ -1161,3 +1161,57 @@ def test_partial_dex_downgrades_refutation_to_unknown(client, ctx):
     for result in applied.json()["results"]:
         # no caller_check_absent attribute at all: unknown stays missing
         assert "caller_check_absent" not in result["attributes"]
+
+
+def test_model_consent_endpoint_accepts_opencode_and_rejects_unknown_providers(client):
+    app = _upload(client).json()
+    auth = _authorize(client, app["sha256"]).json()
+    scan = _scan(client, app["id"], auth["id"]).json()
+
+    # Scan creation refuses to carry consent (it must be granted explicitly later).
+    refused = client.post(
+        "/api/v1/scans",
+        json={
+            "application_id": app["id"],
+            "authorization_id": auth["id"],
+            "objective": "Determine whether exported components reach a privileged sink.",
+            "intensity": 0,
+            "llm_data_sharing": True,
+        },
+    )
+    assert refused.status_code == 422
+
+    # Unknown providers are rejected by the request schema.
+    bogus = client.put(
+        f"/api/v1/scans/{scan['id']}/model-consent",
+        json={"enabled": True, "provider": "openai"},
+    )
+    assert bogus.status_code == 422
+
+    # Enabled consent must name a provider.
+    unnamed = client.put(
+        f"/api/v1/scans/{scan['id']}/model-consent",
+        json={"enabled": True},
+    )
+    assert unnamed.status_code in (409, 422)
+
+    # opencode is an explicit, revocable data-disclosure consent.
+    ok = client.put(
+        f"/api/v1/scans/{scan['id']}/model-consent",
+        json={"enabled": True, "provider": "opencode"},
+    )
+    assert ok.status_code == 200, ok.text
+    assert ok.json()["llm_data_sharing"] == {
+        "enabled": True,
+        "provider": "opencode",
+        "auto_veritas": False,
+    }
+
+    # Revocation clears the named provider.
+    off = client.put(
+        f"/api/v1/scans/{scan['id']}/model-consent",
+        json={"enabled": False},
+    )
+    assert off.status_code == 200
+    assert off.json()["llm_data_sharing"]["enabled"] is False
+    assert off.json()["llm_data_sharing"]["provider"] is None

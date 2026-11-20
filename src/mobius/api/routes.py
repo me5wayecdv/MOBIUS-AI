@@ -196,7 +196,7 @@ def create_scan(
     if payload.llm_data_sharing:
         raise HTTPException(
             status_code=422,
-            detail="model consent must be granted explicitly after scan creation via PUT /scans/{scan_id}/model-consent with provider=ollama",
+            detail="model consent must be granted explicitly after scan creation via PUT /scans/{scan_id}/model-consent naming an approved provider",
         )
     ctx = get_context()
     from ..core.schemas import Budget
@@ -380,9 +380,12 @@ def set_model_consent(
 ):
     """Record explicit, revocable per-investigation consent for local model processing."""
     scan = _require_scan_owner(session, scan_id, who)
-    if payload.enabled and payload.provider != "ollama":
+    if payload.enabled and payload.provider not in {"ollama", "opencode"}:
         from ..services.errors import ScanStateConflict
-        raise ScanStateConflict("enabled model consent must explicitly name the local ollama provider")
+        raise ScanStateConflict(
+            "enabled model consent must explicitly name an approved provider "
+            "(ollama=local, opencode=prompts leave the machine to upstream providers)"
+        )
     if not payload.enabled and payload.provider is not None:
         from ..services.errors import ScanStateConflict
         raise ScanStateConflict("disabled model consent must not name a provider")
