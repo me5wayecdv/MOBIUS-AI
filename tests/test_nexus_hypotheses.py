@@ -170,7 +170,7 @@ def test_nexus_model_generation_requires_consent_and_persists_model_decision(
     assert decision.model_role == "reasoning"
     assert decision.requested_model == "local-test-model"
     assert decision.model_id == "local-test-model"
-    assert decision.prompt_version == "nexus-hypothesis-generation-v1"
+    assert decision.prompt_version == "nexus-hypothesis-generation-v2"
     assert decision.system_prompt_sha256 and len(decision.system_prompt_sha256) == 64
     assert decision.input_sha256 and len(decision.input_sha256) == 64
     assert decision.schema_sha256 and len(decision.schema_sha256) == 64
@@ -459,7 +459,7 @@ def test_nexus_model_exhaustion_fails_closed_with_committed_rejection_evidence(
             "schema-invalid", "citation-outside-package", "schema-invalid",
         ]
         assert decision.provider == "ollama"
-        assert decision.prompt_version == "nexus-hypothesis-generation-v1"
+        assert decision.prompt_version == "nexus-hypothesis-generation-v2"
         assert events[-1].payload["decision_id"] == decision.id
     finally:
         check.close()

@@ -15,6 +15,7 @@ from ..adapters.events import SqlEventStore, utcnow
 from ..adapters.models import DecisionRow, EvidenceRow, FindingRow, InvestigationRow
 from ..core.ids import IdPrefix, new_id
 from .errors import NotFound
+from .model_skills import VERITAS_REVIEW_SKILLS
 from .model_provider import (
     InvestigationModelGateway,
     ModelConsentRequired,
@@ -23,7 +24,7 @@ from .model_provider import (
 )
 
 AGENT = "VERITAS"
-PROMPT_VERSION = "veritas-independent-review-v1"
+PROMPT_VERSION = "veritas-independent-review-v2"
 CHALLENGE_TYPES = frozenset({
     "unsupported_claim",
     "contradictory_evidence",
@@ -43,7 +44,9 @@ evidence IDs, source locations, tool results, or facts. Do not run tools or requ
 A lack of a challenge is not confirmation. Return insufficient_evidence when the supplied
 material cannot support a meaningful review. Your output is advisory only: deterministic
 confirmation gates, not this review, decide every finding verdict. Do not reveal private
-reasoning; return concise, checkable challenges only."""
+reasoning; return concise, checkable challenges only.
+
+""" + VERITAS_REVIEW_SKILLS
 
 
 class ReviewChallenge(BaseModel):
