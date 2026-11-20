@@ -448,6 +448,8 @@ def generate_nexus_hypotheses(
             gateway=ctx.model_gateway,
             session_factory=ctx.session_factory,
             store=ctx.store,
+            max_output_tokens=ctx.settings.model_max_output_tokens,
+            max_repair_attempts=ctx.settings.model_max_repair_attempts,
         ).generate(scan_id, component=component)
     except ModelConsentRequired as exc:
         raise ModelConsentRequiredError(str(exc)) from exc
@@ -580,6 +582,7 @@ def run_veritas_review(
             gateway=ctx.model_gateway,
             session_factory=ctx.session_factory,
             store=ctx.store,
+            max_output_tokens=ctx.settings.model_max_output_tokens,
         ).review(finding_id, producer_model_id=producer_model_id)
     except ModelConsentRequired as exc:
         raise ModelConsentRequiredError(str(exc)) from exc
@@ -1659,6 +1662,7 @@ def _maybe_veritas_auto_review(ctx, scan_id: str):
         gateway=ctx.model_gateway,
         investigation_id=scan_id,
         store=ctx.store,
+        max_reviews=ctx.settings.veritas_auto_max_reviews,
     )
 
 

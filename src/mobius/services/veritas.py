@@ -105,11 +105,13 @@ class VeritasReviewService:
         gateway: StructuredModelGateway | None = None,
         session_factory=None,
         store=None,
+        max_output_tokens: int = 1200,
     ) -> None:
         self.session = session
         self.gateway = gateway
         self.session_factory = session_factory
         self.store = store
+        self.max_output_tokens = max_output_tokens
 
     def review(
         self,
@@ -213,7 +215,7 @@ class VeritasReviewService:
                 user=_compact_json(user_payload),
                 schema=VeritasReviewReply,
                 temperature=0.0,
-                max_tokens=1200,
+                max_tokens=self.max_output_tokens,
             ))
         except ModelOutputInvalid as first:
             # Format/conversion failure, not a review judgment. One bounded
@@ -235,7 +237,7 @@ class VeritasReviewService:
                     user=_repair_payload(user_payload, first.raw_content, str(first)),
                     schema=VeritasReviewReply,
                     temperature=0.0,
-                    max_tokens=1200,
+                    max_tokens=self.max_output_tokens,
                 ))
             except ModelOutputInvalid as second:
                 return self._review_needs_review(

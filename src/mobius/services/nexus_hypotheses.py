@@ -140,11 +140,15 @@ class NexusHypothesisService:
         gateway: StructuredModelGateway | None = None,
         session_factory=None,
         store=None,
+        max_output_tokens: int = 1200,
+        max_repair_attempts: int = MAX_REPAIR_ATTEMPTS,
     ) -> None:
         self.session = session
         self.gateway = gateway
         self.session_factory = session_factory
         self.store = store
+        self.max_output_tokens = max_output_tokens
+        self.max_repair_attempts = max_repair_attempts
 
     def generate(self, investigation_id: str, *, component: str | None = None) -> dict[str, Any]:
         investigation = self.session.get(InvestigationRow, investigation_id)
@@ -190,7 +194,7 @@ class NexusHypothesisService:
                         user=user_payload,
                         schema=HypothesisGenerationReply,
                         temperature=0.0,
-                        max_tokens=1200,
+                        max_tokens=self.max_output_tokens,
                     ))
                     reply: HypothesisGenerationReply = result["data"]
                     _validate_model_proposals(reply.hypotheses, observation_ids)
@@ -201,7 +205,7 @@ class NexusHypothesisService:
                     # fallback result: they fail closed unchanged.
                     token = getattr(exc, "reason_token", REASON_SCHEMA_INVALID)
                     rejections.append(token)
-                    final = repair_attempts >= MAX_REPAIR_ATTEMPTS
+                    final = repair_attempts >= self.max_repair_attempts
                     self._persist_rejection(
                         investigation_id,
                         component=component,
@@ -434,7 +438,7 @@ class NexusHypothesisService:
                     output_tokens=result.get("output_tokens") if result else None,
                     latency_ms=result.get("latency_ms") if result else None,
                     temperature=0.0,
-                    max_tokens=1200,
+                    max_tokens=self.max_output_tokens,
                     created_at=utcnow(),
                 ))
                 session.flush()
@@ -444,7 +448,7 @@ class NexusHypothesisService:
                 {
                     "stage": "hypothesis_generation",
                     "failed_attempt": attempt,
-                    "max_repair_attempts": MAX_REPAIR_ATTEMPTS,
+                    "max_repair_attempts": self.max_repair_attempts,
                     "reason": reason,
                     "final": final,
                     "prompt_version": PROMPT_VERSION,
