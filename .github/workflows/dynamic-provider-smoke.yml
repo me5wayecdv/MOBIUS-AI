@@ -1,0 +1,64 @@
+# Dynamic provider smoke: boots a hardware-accelerated Android emulator on the
+# CI runner, installs the pinned public Allsafe lab APK (sha256-verified), and
+# runtime-verifies the exported/unprotected DataProvider surface that static
+# analysis established - positive repro (query without permission, tautology
+# WHERE reaches delete) plus a negative control (non-exported FileProvider
+# authority refused). A D-060 slice: runtime reproduction on the lab target,
+# not the full PHANTOM adapter.
+#
+# Constraints honoured:
+# - lab target only, public intentionally-vulnerable training app, ephemeral
+#   emulator, no external targets, no credentials;
+# - no image publication (nothing is built or pushed; run artifacts only);
+# - free: public-repo GitHub-hosted runner.
+name: Dynamic provider smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/dynamic-provider-smoke.yml"
+      - "scripts/dynamic_provider_smoke.sh"
+  pull_request:
+    paths:
+      - ".github/workflows/dynamic-provider-smoke.yml"
+      - "scripts/dynamic_provider_smoke.sh"
+
+jobs:
+  dynamic-provider-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable KVM group perms
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Download pinned Allsafe lab APK
+        run: |
+          curl -sSfL -o allsafe.apk \
+            https://github.com/t0thkr1s/allsafe/releases/download/v.1.6/allsafe.apk
+          echo "d6792d6634a033f048f935f1269179d3c27b859c4c34b1e9e5b008a88375efd9  allsafe.apk" | sha256sum -c -
+
+      - name: Run dynamic provider smoke on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 29
+          target: default
+          arch: x86_64
+          profile: Nexus 6
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          disable-animations: true
+          script: bash scripts/dynamic_provider_smoke.sh allsafe.apk
+
+      - name: Upload smoke outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dynamic-provider-smoke
+          path: dynamic-smoke/
+          retention-days: 30
