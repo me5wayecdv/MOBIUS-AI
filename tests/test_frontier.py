@@ -155,3 +155,78 @@ def test_ties_break_on_content_not_on_generated_ids():
 
     assert [e.action_args["component"] for e in one] == ["com.x.A", "com.x.B"]
     assert [e.action_args["component"] for e in two] == ["com.x.A", "com.x.B"]
+
+
+# --- Gate-taxonomy correction (2026-11-20): scoring regression pins ---------------
+#
+# The taxonomy fix changed each gate's MASWE tags but must not change the score of
+# any gate's own candidates: under the old (mis-tagged) gates every category resolved
+# to the weights below, and the new exact-ID entries were chosen to reproduce them.
+# Measured by running impact_weight from both code versions over both tag sets.
+
+GATE_WEIGHT_PRESERVATION = {
+    "exported-component-no-permission": 0.95,
+    "exported-provider-unprotected-sink": 0.95,
+    "hardcoded-secret": 0.7,
+    "insecure-storage": 0.7,
+    "weak-crypto": 0.8,
+    "webview-rce-surface": 0.95,
+    "cleartext-transport": 0.8,
+    "exported-provider-path-traversal": 0.95,
+    "dynamic-code-loading": 0.95,
+    "implicit-intent-sensitive-data": 0.95,
+    "deeplink-unvalidated-input": 0.95,
+}
+
+
+def test_every_gate_keeps_its_pre_correction_impact_weight():
+    from mobius.core.gates import _GATES
+    from mobius.core.frontier import impact_weight
+
+    for gate in _GATES:
+        assert impact_weight(gate.maswe) == GATE_WEIGHT_PRESERVATION[gate.category], gate.category
+
+
+def test_legacy_id_resolution_is_unchanged_for_historical_tags():
+    """Tags stored on pre-correction findings/seeds must resolve exactly as before."""
+    from mobius.core.frontier import impact_weight
+
+    assert impact_weight(("MASWE-0029",)) == 0.95
+    assert impact_weight(("MASWE-0030",)) == 0.90
+    assert impact_weight(("MASWE-0001",)) == 0.70
+    assert impact_weight(("MASWE-0002",)) == 0.70
+    assert impact_weight(("MASWE-001",)) == 0.80   # raw prefix string, as stored by old gates
+    assert impact_weight(("MASWE-005",)) == 0.80   # raw prefix string, as stored by old gates
+    assert impact_weight(("MASWE-0034",)) == 0.5   # known ID with no weight entry
+    assert impact_weight(("MASWE-9999",)) == 0.5   # unknown ID default
+    assert impact_weight(()) == 0.5
+
+
+def test_mixed_legacy_and_new_tuple_resolves_by_max_and_is_unchanged():
+    """Catalogue tuple (0029, 0032, 0050): max semantics keep it at 0.95 on both versions."""
+    from mobius.core.frontier import impact_weight
+
+    assert impact_weight(("MASWE-0029", "MASWE-0032", "MASWE-0050")) == 0.95
+    assert impact_weight(("MASWE-0029", "MASWE-0050")) == 0.95
+
+
+def test_new_exact_id_weights_are_the_documented_known_delta():
+    """KNOWN DELTA, pinned deliberately: these IDs resolved lower before the correction
+    (0.5 default, or 0.80 via the raw "MASWE-001"/"MASWE-005" prefix strings). Candidates
+    outside the 11 gates that carry them - 15 catalogue families tagged MASWE-0050 alone,
+    plus webview-js-interface (0033), webview-load (0035) and dynamic-load (0049) - now
+    score higher. Preserving both the old per-ID resolution AND the old per-gate scores
+    is impossible: the old gates were mis-tagged, so the two conflict. This test pins the
+    chosen values so the delta is explicit and reviewable, not silent."""
+    from mobius.core.frontier import impact_weight
+
+    assert impact_weight(("MASWE-0018",)) == 0.95  # was 0.80 (via "MASWE-001" prefix)
+    assert impact_weight(("MASWE-0050",)) == 0.95  # was 0.80 (via "MASWE-005" prefix)
+    assert impact_weight(("MASWE-0032",)) == 0.95  # was 0.5 (no entry)
+    assert impact_weight(("MASWE-0033",)) == 0.95  # was 0.5
+    assert impact_weight(("MASWE-0035",)) == 0.95  # was 0.5
+    assert impact_weight(("MASWE-0049",)) == 0.95  # was 0.5
+    assert impact_weight(("MASWE-0004",)) == 0.70  # was 0.5
+    assert impact_weight(("MASWE-0007",)) == 0.80  # was 0.5
+    assert impact_weight(("MASWE-0008",)) == 0.80  # was 0.5
+    assert impact_weight(("MASWE-0026",)) == 0.80  # was 0.5
