@@ -7,7 +7,14 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import sessionmaker
 
 from conftest import make_apk
-from mobius.adapters.models import ApplicationRow, DecisionRow, InvestigationRow, ObservationRow
+from mobius.adapters.models import (
+    ApplicationRow,
+    DecisionRow,
+    EventRow,
+    HypothesisRow,
+    InvestigationRow,
+    ObservationRow,
+)
 from mobius.core.enums import EvidenceKind, Fidelity, ObservationKind
 from mobius.core.ids import IdPrefix, new_id
 from mobius.core.schemas import Budget
@@ -16,7 +23,10 @@ from mobius.services.evidence import EvidenceService
 from mobius.services.intake import IntakeService
 from mobius.services.model_provider import (
     DeterministicMockProvider,
+    ModelBudgetExceeded,
     ModelConsentRequired,
+    ModelOutputInvalid,
+    ModelUnavailable,
     ProviderResult,
     StructuredModelGateway,
 )
@@ -296,3 +306,263 @@ def test_nexus_receives_and_records_persisted_source_excerpt(session, store, fut
         investigation_id=scan_id, action="generate_hypotheses"
     ).one()
     assert source_evidence.id in decision.considered_evidence
+
+
+class ScriptedProvider:
+    """Returns queued responses (or raises queued exceptions) in order."""
+
+    name = "ollama"
+
+    def __init__(self, steps):
+        self.steps = list(steps)
+        self.calls = 0
+        self.payloads = []
+
+    def complete_json(self, **kwargs):
+        self.calls += 1
+        self.payloads.append(kwargs)
+        step = self.steps.pop(0)
+        if isinstance(step, Exception):
+            raise step
+        return ProviderResult(
+            content=step,
+            model_id="local-test-model",
+            prompt_tokens=7,
+            completion_tokens=5,
+        )
+
+
+def _valid_reply(observation_id):
+    return json.dumps({
+        "hypotheses": [{
+            "claim": "The exported entry may expose file output to attacker-controlled input.",
+            "derived_from": [observation_id],
+            "required_evidence": ["source_location", "attacker_controlled_input", "controlled_poc"],
+            "maswe": ["MASWE-0001"],
+            "priority": 0.7,
+        }],
+        "summary": "One hypothesis requires source and controlled validation evidence.",
+    })
+
+
+def _citation_invalid_reply():
+    return json.dumps({
+        "hypotheses": [{
+            "claim": "The exported entry may expose file output to attacker-controlled input.",
+            "derived_from": ["obs_not_in_this_package"],
+            "required_evidence": ["source_location"],
+            "maswe": [],
+            "priority": 0.5,
+        }],
+        "summary": "Cites an observation that was never supplied.",
+    })
+
+
+def test_nexus_model_repair_succeeds_after_schema_invalid_output(
+    session, store, future_iso
+):
+    scan_id, observation_id = _scan_with_observation(
+        session, store, future_iso, consent=True
+    )
+    provider = ScriptedProvider(["{not valid json", _valid_reply(observation_id)])
+    gateway = StructuredModelGateway(provider, model="local-test-model")
+    session.commit()
+    factory = sessionmaker(bind=session.get_bind(), expire_on_commit=False, future=True)
+
+    result = NexusHypothesisService(
+        session, gateway=gateway, session_factory=factory
+    ).generate(scan_id)
+
+    assert result["mode"] == "model_gateway"
+    assert result["repair_attempts"] == 1
+    assert provider.calls == 2
+    assert result["hypotheses"][0]["derived_from"] == [observation_id]
+
+    # The repair call carries only the fixed reason token and instruction:
+    # no raw model output and no raw validation error text re-enters a prompt.
+    repair_payload = json.loads(provider.payloads[1]["user_payload"]["input"])
+    assert repair_payload["repair"]["error"] == "schema-invalid"
+    assert "evidence_package" in repair_payload
+    repair_text = json.dumps(provider.payloads[1])
+    assert "{not valid json" not in repair_text
+    assert "Expecting value" not in repair_text
+
+    # One planner_rejected event per failed attempt; both attempts are charged.
+    check = factory()
+    try:
+        events = [e for e in check.query(EventRow)
+                  .filter_by(investigation_id=scan_id, type="planner_rejected").all()]
+        assert len(events) == 1
+        assert events[0].payload["reason"] == "schema-invalid"
+        assert events[0].payload["final"] is False
+        assert events[0].payload["failed_attempt"] == 0
+        row = check.get(InvestigationRow, scan_id)
+        assert row.used_json["model_tokens"] == 24
+    finally:
+        check.close()
+
+
+def test_nexus_model_exhaustion_fails_closed_with_committed_rejection_evidence(
+    session, store, future_iso
+):
+    scan_id, observation_id = _scan_with_observation(
+        session, store, future_iso, consent=True
+    )
+    # initial: schema-invalid; repair 1: citation-invalid; repair 2: schema-invalid.
+    provider = ScriptedProvider([
+        "{not valid json",
+        _citation_invalid_reply(),
+        "{still not json",
+    ])
+    gateway = StructuredModelGateway(provider, model="local-test-model")
+    session.commit()
+    factory = sessionmaker(bind=session.get_bind(), expire_on_commit=False, future=True)
+
+    with pytest.raises(ModelOutputInvalid):
+        NexusHypothesisService(
+            session, gateway=gateway, session_factory=factory
+        ).generate(scan_id)
+
+    # Initial + exactly 2 repair attempts, never more.
+    assert provider.calls == 3
+
+    # Simulate the request rollback: committed rejection evidence must survive it.
+    session.rollback()
+    check = factory()
+    try:
+        # No hypotheses and no success event: rejection can never become a result.
+        assert check.query(HypothesisRow).filter_by(investigation_id=scan_id).count() == 0
+        assert check.query(EventRow).filter_by(
+            investigation_id=scan_id, type="hypotheses_generated"
+        ).count() == 0
+
+        events = (check.query(EventRow)
+                  .filter_by(investigation_id=scan_id, type="planner_rejected")
+                  .order_by(EventRow.seq).all())
+        assert [e.payload["reason"] for e in events] == [
+            "schema-invalid", "citation-outside-package", "schema-invalid",
+        ]
+        assert [e.payload["final"] for e in events] == [False, False, True]
+        assert [e.payload["failed_attempt"] for e in events] == [0, 1, 2]
+        # Diagnostics carry fixed tokens and hashes only.
+        for event in events:
+            text = json.dumps(event.payload)
+            assert "{not valid json" not in text and "{still not json" not in text
+            assert "Expecting value" not in text
+
+        decision = check.query(DecisionRow).filter_by(
+            investigation_id=scan_id, action="generate_hypotheses_rejected"
+        ).one()
+        assert decision.output_json is None
+        assert decision.action_args["repair_attempts"] == 2
+        assert decision.action_args["reasons"] == [
+            "schema-invalid", "citation-outside-package", "schema-invalid",
+        ]
+        assert decision.provider == "ollama"
+        assert decision.prompt_version == "nexus-hypothesis-generation-v1"
+        assert events[-1].payload["decision_id"] == decision.id
+    finally:
+        check.close()
+
+
+def test_nexus_citation_invalid_output_repaired_then_validated(
+    session, store, future_iso
+):
+    scan_id, observation_id = _scan_with_observation(
+        session, store, future_iso, consent=True
+    )
+    provider = ScriptedProvider([_citation_invalid_reply(), _valid_reply(observation_id)])
+    gateway = StructuredModelGateway(provider, model="local-test-model")
+    session.commit()
+    factory = sessionmaker(bind=session.get_bind(), expire_on_commit=False, future=True)
+
+    result = NexusHypothesisService(
+        session, gateway=gateway, session_factory=factory
+    ).generate(scan_id)
+
+    assert result["mode"] == "model_gateway"
+    assert result["repair_attempts"] == 1
+    # Only the validated reply is persisted; the citation-invalid output is not.
+    assert [h["derived_from"] for h in result["hypotheses"]] == [[observation_id]]
+    decision = session.query(DecisionRow).filter_by(
+        investigation_id=scan_id, action="generate_hypotheses"
+    ).one()
+    assert decision.output_json["hypotheses"][0]["derived_from"] == [observation_id]
+    repair_payload = json.loads(provider.payloads[1]["user_payload"]["input"])
+    assert repair_payload["repair"]["error"] == "citation-outside-package"
+
+
+def test_nexus_transport_error_is_never_repaired(session, store, future_iso):
+    scan_id, observation_id = _scan_with_observation(
+        session, store, future_iso, consent=True
+    )
+    provider = ScriptedProvider([ModelUnavailable("provider unreachable")])
+    gateway = StructuredModelGateway(provider, model="local-test-model")
+    session.commit()
+    factory = sessionmaker(bind=session.get_bind(), expire_on_commit=False, future=True)
+
+    with pytest.raises(ModelUnavailable):
+        NexusHypothesisService(
+            session, gateway=gateway, session_factory=factory
+        ).generate(scan_id)
+
+    assert provider.calls == 1
+    session.rollback()
+    check = factory()
+    try:
+        assert check.query(EventRow).filter_by(
+            investigation_id=scan_id, type="planner_rejected"
+        ).count() == 0
+        assert check.query(HypothesisRow).filter_by(investigation_id=scan_id).count() == 0
+    finally:
+        check.close()
+
+
+def test_nexus_budget_exhaustion_mid_repair_fails_closed(session, store, future_iso):
+    from mobius.services.evidence_package import EvidencePackageBuilder
+    from mobius.services.nexus_hypotheses import (
+        _SYSTEM_PROMPT,
+        HypothesisGenerationReply,
+        _compact_package,
+    )
+
+    scan_id, observation_id = _scan_with_observation(
+        session, store, future_iso, consent=True
+    )
+    package_data = EvidencePackageBuilder(session, store=store).build(scan_id).as_dict()
+    schema_bytes = json.dumps(
+        HypothesisGenerationReply.model_json_schema(), separators=(",", ":")
+    ).encode("utf-8")
+    first_reservation = (
+        len(_SYSTEM_PROMPT.encode("utf-8"))
+        + len(_compact_package(package_data).encode("utf-8"))
+        + len(schema_bytes)
+        + 1024
+        + 1200
+    )
+    row = session.get(InvestigationRow, scan_id)
+    budget = dict(row.budget_json or {})
+    # Exactly one reservation fits; the repair attempt's reservation cannot.
+    budget["max_model_tokens"] = first_reservation
+    row.budget_json = budget
+    provider = ScriptedProvider(["{not valid json", _valid_reply(observation_id)])
+    gateway = StructuredModelGateway(provider, model="local-test-model")
+    session.commit()
+    factory = sessionmaker(bind=session.get_bind(), expire_on_commit=False, future=True)
+
+    with pytest.raises(ModelBudgetExceeded):
+        NexusHypothesisService(
+            session, gateway=gateway, session_factory=factory
+        ).generate(scan_id)
+
+    # The provider was hit once (initial attempt); the repair never reached it.
+    assert provider.calls == 1
+    session.rollback()
+    check = factory()
+    try:
+        assert check.query(HypothesisRow).filter_by(investigation_id=scan_id).count() == 0
+        assert check.query(EventRow).filter_by(
+            investigation_id=scan_id, type="hypotheses_generated"
+        ).count() == 0
+    finally:
+        check.close()

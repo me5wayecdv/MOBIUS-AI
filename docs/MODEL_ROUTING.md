@@ -148,7 +148,7 @@ demos regardless of quality ranking.
 
 PR #33 adds a standard-library Ollama adapter and a deterministic mock provider behind the structured model contract. The core `ModelGateway` port in `mobius/core/ports.py` is implemented by the local structured gateway. Provider use is disabled by default, local endpoint validation is enforced, Pydantic JSON Schema is sent to Ollama and validated again locally, and per-investigation consent plus reported token usage are required.
 
-This is only the provider boundary. No current agent invokes it, no prompt version is persisted yet, no repair/retry loop or cache exists, and no model benchmark has been run. Those remain explicit follow-up work.
+This is only the provider boundary plus the investigation integration: NEXUS hypothesis generation and the opt-in VERITAS reviewer invoke it with persisted prompt/model provenance. A bounded repair loop (initial call plus at most two repair attempts with fixed reason tokens) exists for NEXUS hypothesis generation and fails closed on exhaustion with committed `planner_rejected` diagnostics; the section-3 deterministic-fallback-after-exhaustion step is deliberately not adopted, because the merged contract fails closed and the 2026-11-19 live measurement rejected all three tried small models at the integrity guards - auto-fallback would have masked every one of those failures. No response cache and no NEXUS planner exist, and the model-quality benchmark in `MODEL_BENCHMARKS.md` has not been run. Those remain explicit follow-up work.
 
 ## 9. Open questions
 

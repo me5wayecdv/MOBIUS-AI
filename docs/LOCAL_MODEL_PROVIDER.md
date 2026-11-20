@@ -50,7 +50,8 @@ APK-derived text is untrusted input. Prompts must explicitly tell the model not 
 
 - Unit tests cover request shape, schema forwarding, local endpoint restrictions, explicit consent, provider identity, malformed output, token-budget exhaustion, missing usage metrics, and deterministic mock compatibility with `core.ports.ModelGateway`.
 - CI does not require an Ollama daemon and does not claim model-quality measurements.
-- No real Ollama server call or model-quality benchmark has been verified. NEXUS hypothesis generation and VERITAS review persist prompt/model provenance, but a NEXUS planner, retry/repair loop, and cache are not implemented.
+- Real Ollama calls were measured on 2026-11-19 (recorded in `TASK_BOARD.md` and `IMPLEMENTATION_STATUS.md`): `qwen2.5:0.5b`, `qwen2.5:1.5b` and `qwen2.5-coder:1.5b` each returned schema-valid JSON, and all three were rejected by the citation/evidence integrity guards. The guards functioned as designed (fail-closed); the models failed the guards. No accepted model-backed hypothesis has ever been produced, and whether a larger local model passes the guards is unknown.
+- NEXUS hypothesis generation and VERITAS review persist prompt/model provenance. A bounded repair loop (initial call plus at most two repair attempts carrying fixed reason tokens, fail-closed on exhaustion with committed `planner_rejected` diagnostics) is implemented for NEXUS hypothesis generation; a NEXUS planner and a response cache are not implemented.
 - Model calls remain opt-in and require explicit per-investigation consent; deterministic fallback remains the default.
 
 
