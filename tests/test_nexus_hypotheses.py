@@ -566,3 +566,33 @@ def test_nexus_budget_exhaustion_mid_repair_fails_closed(session, store, future_
         ).count() == 0
     finally:
         check.close()
+
+
+def test_nexus_repair_bound_is_configurable(session, store, future_iso):
+    """Experimental knob: max_repair_attempts=0 refuses after the first reply."""
+    scan_id, observation_id = _scan_with_observation(
+        session, store, future_iso, consent=True
+    )
+    provider = ScriptedProvider(["{not valid json"])
+    gateway = StructuredModelGateway(provider, model="local-test-model")
+    session.commit()
+    factory = sessionmaker(bind=session.get_bind(), expire_on_commit=False, future=True)
+
+    with pytest.raises(ModelOutputInvalid):
+        NexusHypothesisService(
+            session, gateway=gateway, session_factory=factory, max_repair_attempts=0
+        ).generate(scan_id)
+
+    assert provider.calls == 1
+
+
+def test_settings_expose_experimental_model_knobs(monkeypatch):
+    from mobius.api.config import Settings
+
+    monkeypatch.setenv("MOBIUS_MODEL_MAX_OUTPUT_TOKENS", "2048")
+    monkeypatch.setenv("MOBIUS_MODEL_MAX_REPAIR_ATTEMPTS", "4")
+    monkeypatch.setenv("MOBIUS_VERITAS_AUTO_MAX_REVIEWS", "25")
+    settings = Settings.from_env()
+    assert settings.model_max_output_tokens == 2048
+    assert settings.model_max_repair_attempts == 4
+    assert settings.veritas_auto_max_reviews == 25
