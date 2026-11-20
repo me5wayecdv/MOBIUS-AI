@@ -257,6 +257,23 @@ class ProviderAnalysisService:
                     "protection_permission": operation.protection_permission,
                     "protection_basis": operation.protection_basis,
                     "caller_check_absent": operation.caller_check_absent,
+                    # The claim's bound, stated where reviewers read it:
+                    # absence is established only across this operation's
+                    # analyzed methods plus the resolved helper classes named
+                    # in evidence_classes; checks hiding in unadapted,
+                    # unresolved, or cross-component code force UNKNOWN via
+                    # the coverage/flow flags instead of being assumed away.
+                    "caller_check_scope": (
+                        "analyzed operation methods and resolved helpers only"
+                        if operation.caller_check_absent is not None else None
+                    ),
+                    "evidence_classes": list(operation.evidence_classes),
+                    # Provenance rests on the standard loading convention:
+                    # classes claimed first-wins in numeric classesN.dex order
+                    # (AOSP libcore DexPathList element order; androidx.multidex
+                    # mounts secondaries in that order). A loader that deviates
+                    # from this convention is outside this claim's scope.
+                    "provenance_basis": "first-wins in numeric classesN.dex order (DexPathList convention)",
                     "coverage_complete": operation.coverage_complete,
                     "flow_complete": operation.flow_complete,
                     "guard_findings": [

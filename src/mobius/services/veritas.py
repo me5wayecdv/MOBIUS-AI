@@ -295,17 +295,36 @@ class VeritasReviewService:
             raise ModelConsentRequired(
                 "provider resolved VERITAS to the producer model; independent review refused"
             )
-        for challenge in reply.challenges:
-            if not set(challenge.evidence_refs).issubset(set(refs)):
-                raise ModelOutputInvalid(
-                    "VERITAS challenge cites evidence outside the finding's persisted evidence"
-                )
-        if reply.disposition == "challenge" and not reply.challenges:
-            raise ModelOutputInvalid("challenge disposition requires at least one challenge")
-        if reply.disposition == "no_material_challenge" and reply.challenges:
-            raise ModelOutputInvalid("no_material_challenge cannot contain challenges")
-        if reply.disposition == "insufficient_evidence" and not reply.summary:
-            raise ModelOutputInvalid("insufficient_evidence requires an explanatory summary")
+        # Semantic conversion failures: the reply parsed (and survived any
+        # repair pass) but its CONTENT violates a review constraint. The raw
+        # capture ladder covers these exactly like shape failures - the reply
+        # is preserved for the operator as an explicit needs-review record,
+        # never dropped into a bare 422 and never converted into a verdict.
+        try:
+            for challenge in reply.challenges:
+                if not set(challenge.evidence_refs).issubset(set(refs)):
+                    raise ModelOutputInvalid(
+                        "VERITAS challenge cites evidence outside the finding's persisted evidence"
+                    )
+            if reply.disposition == "challenge" and not reply.challenges:
+                raise ModelOutputInvalid("challenge disposition requires at least one challenge")
+            if reply.disposition == "no_material_challenge" and reply.challenges:
+                raise ModelOutputInvalid("no_material_challenge cannot contain challenges")
+            if reply.disposition == "insufficient_evidence" and not reply.summary:
+                raise ModelOutputInvalid("insufficient_evidence requires an explanatory summary")
+        except ModelOutputInvalid as semantic:
+            return self._review_needs_review(
+                finding,
+                refs=refs,
+                producer_model_id=producer_model_id,
+                producer_verified=producer_verified,
+                reason=str(semantic),
+                # The verbatim transport reply is the record of what the model
+                # actually said; the parsed form rides alongside as inspection
+                # aid, never as a substitute for the original.
+                raw_content=result.get("raw_content") or reply.model_dump_json(),
+                parsed_reply=reply.model_dump_json(),
+            )
 
         output_json = reply.model_dump(mode="json")
         decision = DecisionRow(
@@ -398,6 +417,7 @@ class VeritasReviewService:
         producer_verified: bool,
         reason: str,
         raw_content: str | None = None,
+        parsed_reply: str | None = None,
     ) -> dict[str, Any]:
         """Capture an unconvertible model reply as an explicit needs-review record.
 
@@ -459,6 +479,10 @@ class VeritasReviewService:
                 "raw_response_clipped": raw_clipped,
                 "raw_response_length": len(raw_content) if raw_content is not None else 0,
                 "raw_artifact_key": raw_artifact_key,
+                # Present only when the reply converted cleanly but its
+                # content was rejected afterwards: the parsed representation
+                # of the SAME reply, kept next to (never instead of) the raw.
+                "parsed_reply": parsed_reply,
             },
             created_at=utcnow(),
         )

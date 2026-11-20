@@ -43,7 +43,7 @@ def test_harness_flags_a_wrong_expectation(session, store):
 def test_refused_reviews_leave_no_decision_rows(session, store):
     fx = build_fixture(session, store)
     refused = [c for c in cases(fx) if c.expected.startswith("refused:")]
-    assert len(refused) == 10
+    assert len(refused) == 5
     for case in refused:
         result = run_case(session, fx, case)
         assert result.ok, f"{case.name}: {result.detail}"
