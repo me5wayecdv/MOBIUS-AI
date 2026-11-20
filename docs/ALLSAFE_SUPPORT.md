@@ -1,24 +1,41 @@
 # Allsafe capability matrix
 
-**Status date:** 2026-11-20, current main `5f62271`.
+**Status date:** 2026-11-20, current main `a663b210`.
 **Target:** the pinned Allsafe training APK, SHA-256
 `d6792d6634a033f048f935f1269179d3c27b859c4c34b1e9e5b008a88375efd9` (Apache-2.0/GPL security-education
 app, source: `github.com/t0thkr1s/allsafe`, challenge list from its README).
 **Rule for this document:** Allsafe is never described as "passed". A complete static run that
-finds nothing is a boundary statement, not a clean bill. The only measured end-to-end journey
-(2026-11-19, ancestor `c6f0b82`, scan `scn_01M7RW55B200GZ5KGC8HKSR5Z7`) closed all 5 investigated
-components at `insufficient_evidence` / `manual_review_required`; it is historical provenance and
-was not re-run on the current head.
+finds nothing is a boundary statement, not a clean bill. Two measured journeys now stand. The
+2026-11-19 historical journey (ancestor `c6f0b82`, scan `scn_01M7RW55B200GZ5KGC8HKSR5Z7`) closed
+all 5 investigated components at `insufficient_evidence` / `manual_review_required`. A 2026-11-20
+current-head inline re-run (main `a663b210`, scan `scn_01M7X43D42XCT0MRBYXVYY3WKK`, direct services
+against a scratch SQLite database, not the worker/OCI path) reproduced that shape: the same 5
+exported components closed at `manual_review_required`, 0 confirmed. In the current-head run the
+`exported` and no-permission gate clauses were established for all 5 components, the caller-check
+clause stayed unresolved for all 5, and sink reachability was established only for
+`challenges.DataProvider` (confidence 0.38, three of four clauses settled, still manual review).
 
 ## Cross-cutting bounds on current main
 
 - **Method-count bound.** The DEX index runs under ONE aggregate budget of 50,000 methods
   (`--max-methods`, capped at 50,000; the worker payload schema caps `methods` at `le=50000`).
-  Allsafe's discovered method count (~88k aggregate per the latest handoff measurement; the
-  historical journey recorded 92,817 across 7 DEX entries) exceeds that bound on the current
-  head: the worker path refuses with an explicit "too large" service limit, and inline indexing
-  would truncate at the budget with per-entry coverage marked `truncated`. Either way the result
-  is a disclosed boundary, never a full-index verdict.
+  Allsafe carries 92,817 methods across 7 DEX entries (re-measured 2026-11-20 on the pinned APK,
+  matching the historical journey; an unsourced "~88k" handoff figure previously quoted here was
+  dropped). That exceeds the bound, and measured 2026-11-20 on the current head the two paths
+  behave differently:
+  - *Inline path.* `index_apk` indexes entries in lexicographic name order and truncates at the
+    budget with per-entry coverage marked `truncated`. On this APK, `classes.dex` (49,328 methods,
+    library-only) is fully indexed, the five app-containing entries `classes2`-`classes6` (646
+    methods, including all 276 app-package methods in 88 app classes) fit the remaining budget,
+    and only `classes7.dex` (library-only) is truncated, 26 of 42,843 methods. The full pipeline
+    completes: all 5 exported components are investigated and close at `manual_review_required`.
+    App-class coverage is complete for this APK by layout, not by policy: the budget is spent in
+    name order, not app-first, so an APK whose app code sits in a later entry would lose coverage.
+  - *Worker path.* The dex-index worker job uses the same bounded index and succeeds with the
+    truncation disclosed. The provider-analysis worker job adapts all discovered methods without
+    a budget and refuses this APK outright: `provider_analysis.py` exits "too large for this
+    service's explicit limits" once the adapted count exceeds 50,000.
+  Either way the result is a disclosed boundary, never a full-index verdict.
 - **Static only.** Nothing is executed. Runtime, dynamic-instrumentation and network behaviours
   are outside the analysis by design.
 - **Bounded, selected-family data flow.** Candidate sources are the Intent/deep-link,
@@ -49,10 +66,11 @@ was not re-run on the current head.
 
 "Surface level" means the build can show the relevant component/surface and, where the catalogue
 covers it, measure bounded reachability. It does not mean the challenge is detectable end to end:
-the historical journey's five investigated components all closed undetermined, and the current
-head's 50,000-method aggregate bound refuses or truncates this APK before any of that. Raising
-the bound or loosening the soundness policy to change these outcomes is out of scope for this
-document and is a product decision, not a repair.
+both measured journeys closed all five investigated components undetermined. On the current head
+the inline path investigates the full app surface under the bound (truncation falls on a
+library-only entry for this APK); the provider-analysis worker job refuses the APK outright.
+Raising the bound, reordering budget allocation, or loosening the soundness policy to change
+these outcomes is out of scope for this document and is a product decision, not a repair.
 
 ## Sources
 
@@ -63,3 +81,6 @@ document and is a product decision, not a repair.
 - Method bound: `src/mobius/worker/dex_index.py`, `src/mobius/adapters/dex_payload.py`,
   `src/mobius/worker/provider_analysis.py`.
 - Historical journey: `docs/DEMO_SCENARIOS.md` scenario C, `docs/TASK_BOARD.md` (2026-11-19).
+- Current-head inline run: 2026-11-20, main `a663b210`, scan `scn_01M7X43D42XCT0MRBYXVYY3WKK`
+  (direct services, scratch SQLite, pinned APK above; per-component gate evidence recorded in
+  that scan's findings rows).
