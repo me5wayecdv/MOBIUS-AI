@@ -402,7 +402,7 @@ def test_veritas_review_http_consent_disabled_is_409(client, session, ctx):
     assert response.json()["code"] == "MODEL_CONSENT_REQUIRED"
 
 
-def test_veritas_review_http_malformed_model_output_is_422(client, session, ctx):
+def test_veritas_review_http_unconvertible_output_is_captured_needs_review(client, session, ctx):
     _configure_gateway(
         ctx, '{"disposition": "challenge", "summary": "x", "challenges": "not-a-list"}'
     )
@@ -414,8 +414,14 @@ def test_veritas_review_http_malformed_model_output_is_422(client, session, ctx)
         f"/api/v1/scans/{scan_id}/findings/{finding_id}/veritas-review",
         params={"producer_model_id": "producer-v1"},
     )
-    assert response.status_code == 422
-    assert response.json()["code"] == "MODEL_OUTPUT_INVALID"
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "needs_review"
+    assert body["disposition"] is None
+    assert body["challenges"] == []
+    assert body["failure_class"].startswith("model reply unconvertible")
+    # the raw model reply never leaves the server
+    assert "not-a-list" not in response.text
 
 
 def _register_producer_actions(monkeypatch, *actions):

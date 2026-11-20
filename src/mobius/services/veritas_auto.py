@@ -53,7 +53,7 @@ MAX_AUTO_REVIEWS_PER_RUN = 10
 REVIEW_ACTION = "review_finding"
 FAILURE_EVENT = "veritas_review_failed"
 
-_SUMMARY_KEYS = ("attempted", "completed", "failed", "skipped")
+_SUMMARY_KEYS = ("attempted", "completed", "failed", "skipped", "needs_review")
 
 
 def _lock_key(investigation_id: str, finding_id: str) -> int:
@@ -140,7 +140,7 @@ def _review_one(summary: dict[str, Any], session_factory, gateway, investigation
             return
         summary["attempted"] += 1
         try:
-            VeritasReviewService(
+            result = VeritasReviewService(
                 session,
                 gateway=gateway,
                 session_factory=session_factory,
@@ -162,7 +162,12 @@ def _review_one(summary: dict[str, Any], session_factory, gateway, investigation
             session.rollback()
             _fail(summary, session_factory, investigation_id, finding_id, "review-pass-error")
         else:
-            summary["completed"] += 1
+            if result.get("status") == "needs_review":
+                # Explicitly incomplete: the unconvertible reply is captured by
+                # the service as a needs-review record, never a verdict.
+                summary["needs_review"] += 1
+            else:
+                summary["completed"] += 1
     finally:
         session.close()
 
@@ -183,6 +188,7 @@ def run_auto_review_pass(
         "completed": 0,
         "failed": 0,
         "skipped": 0,
+        "needs_review": 0,
         "failures": [],
         "skips": [],
         "advisory_only": True,

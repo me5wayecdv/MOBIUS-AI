@@ -46,22 +46,67 @@ def test_parse_ignores_non_json_lines_and_missing_tokens():
     assert output_tokens is None
 
 
-def test_extract_json_object_accepts_single_whitespace_padded_object():
-    from mobius.services.model_provider import extract_json_object
-    assert extract_json_object('  {"a": {"b": 2}}\n') == '{"a": {"b": 2}}'
-    assert extract_json_object('{"a": "}"}') == '{"a": "}"}'
+GOOD = '{"disposition":"insufficient_evidence","summary":"only one observation supplied","challenges":[]}'
 
 
-def test_extract_json_object_rejects_competing_or_trailing_payloads():
-    from mobius.services.model_provider import extract_json_object
-    for bad in (
-        '{"a": 1} {"b": 2}',                       # two competing objects
-        '{"a": 1}\n{"contradictory": true}',      # trailing contradictory payload
-        'Here is the reply: {"a": 1}',            # leading commentary
-        '{"a": 1} trailing commentary',           # trailing commentary
-        '```json\n{"a": 1}\n```',                  # markdown fence
-        '{"a":',                                   # truncated
-        '{"a": 1',                                 # malformed
-        'no object at all',
-    ):
-        assert extract_json_object(bad) == bad, bad
+def test_normalization_accepts_exact_fenced_and_prose_wrapped_single_object():
+    from mobius.services.model_provider import normalize_structured_reply
+    from mobius.services.veritas import VeritasReviewReply
+
+    norm = normalize_structured_reply('  ' + GOOD + '\n', VeritasReviewReply)
+    assert norm.status == "valid" and norm.method == "exact"
+
+    fenced = normalize_structured_reply('```json\n' + GOOD + '\n```', VeritasReviewReply)
+    assert fenced.status == "valid" and fenced.method == "fenced"
+
+    wrapped = normalize_structured_reply('Here is my review:\n' + GOOD + '\nEnd of review.', VeritasReviewReply)
+    assert wrapped.status == "valid" and wrapped.method == "extracted"
+    assert wrapped.data.disposition == "insufficient_evidence"
+
+
+def test_normalization_collapses_identical_duplicate_payloads():
+    from mobius.services.model_provider import normalize_structured_reply
+    from mobius.services.veritas import VeritasReviewReply
+
+    norm = normalize_structured_reply(GOOD + '\n' + GOOD, VeritasReviewReply)
+    assert norm.status == "valid" and norm.method == "extracted_duplicate"
+
+
+def test_normalization_refuses_conflicting_or_absent_payloads():
+    from mobius.services.model_provider import normalize_structured_reply
+    from mobius.services.veritas import VeritasReviewReply
+
+    conflicting = (
+        '{"disposition":"challenge","summary":"a long enough summary here","challenges":[]}'
+        '\n{"disposition":"no_material_challenge","summary":"a contradictory second verdict","challenges":[]}'
+    )
+    norm = normalize_structured_reply(conflicting, VeritasReviewReply)
+    assert norm.status == "unconvertible" and norm.reason == "multiple_conflicting_payloads"
+
+    for bad in ('plain prose with no json at all', '{"disposition":"challenge"'):
+        norm = normalize_structured_reply(bad, VeritasReviewReply)
+        assert norm.status == "unconvertible" and norm.reason == "no_json_payload", (bad, norm.reason)
+
+
+def test_normalization_drops_undeclared_fields_and_records_them():
+    from mobius.services.model_provider import normalize_structured_reply
+    from mobius.services.veritas import VeritasReviewReply
+
+    reply = (
+        '{"disposition":"challenge","summary":"evidence does not establish the claimed flow",'
+        '"challenges":[{"challenge_type":"unsupported_claim","title":"decorative",'
+        '"statement":"the supplied evidence does not show the component is exported",'
+        '"evidence_refs":["ev1"],"requested_proof":"persisted manifest evidence"}]}'
+    )
+    norm = normalize_structured_reply(reply, VeritasReviewReply)
+    assert norm.status == "valid"
+    assert norm.dropped_fields == ("challenges.0.title",)
+
+
+def test_normalization_never_invents_missing_required_fields():
+    from mobius.services.model_provider import normalize_structured_reply
+    from mobius.services.veritas import VeritasReviewReply
+
+    norm = normalize_structured_reply('{"disposition":"insufficient_evidence","challenges":[]}', VeritasReviewReply)
+    assert norm.status == "unconvertible"
+    assert norm.reason and norm.reason.startswith("schema_violation:summary")

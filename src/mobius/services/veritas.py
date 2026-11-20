@@ -197,15 +197,49 @@ class VeritasReviewService:
         bound = InvestigationModelGateway(
             self.gateway, self.session_factory, finding.investigation_id
         )
-        result = _run_async(bound.complete_structured(
-            role="reasoning",
-            system=_SYSTEM_PROMPT,
-            user=_compact_json(user_payload),
-            schema=VeritasReviewReply,
-            temperature=0.0,
-            max_tokens=1200,
-        ))
+        repair_attempted = False
+        try:
+            result = _run_async(bound.complete_structured(
+                role="reasoning",
+                system=_SYSTEM_PROMPT,
+                user=_compact_json(user_payload),
+                schema=VeritasReviewReply,
+                temperature=0.0,
+                max_tokens=1200,
+            ))
+        except ModelOutputInvalid as first:
+            # Format/conversion failure, not a review judgment. One bounded
+            # repair pass: the model converts its OWN previous reply into the
+            # schema, grounded only in that reply plus the original request.
+            if first.raw_content is None:
+                return self._review_needs_review(
+                    finding,
+                    refs=refs,
+                    producer_model_id=producer_model_id,
+                    producer_verified=producer_verified,
+                    reason=str(first),
+                )
+            repair_attempted = True
+            try:
+                result = _run_async(bound.complete_structured(
+                    role="reasoning",
+                    system=_SYSTEM_PROMPT,
+                    user=_repair_payload(user_payload, first.raw_content, str(first)),
+                    schema=VeritasReviewReply,
+                    temperature=0.0,
+                    max_tokens=1200,
+                ))
+            except ModelOutputInvalid as second:
+                return self._review_needs_review(
+                    finding,
+                    refs=refs,
+                    producer_model_id=producer_model_id,
+                    producer_verified=producer_verified,
+                    reason=str(second),
+                    raw_content=second.raw_content,
+                )
         reply: VeritasReviewReply = result["data"]
+        normalization = result.get("normalization")
 
         if result["model_id"].strip().casefold() == producer_model_id.strip().casefold():
             raise ModelConsentRequired(
@@ -278,6 +312,8 @@ class VeritasReviewService:
                     "output_tokens": result["output_tokens"],
                 },
                 "advisory_only": True,
+                "repair_attempted": repair_attempted,
+                "normalization": normalization,
             },
             actor=AGENT,
         )
@@ -288,14 +324,90 @@ class VeritasReviewService:
         # not advertise independence.
         return {
             "mode": "model_gateway",
+            "status": "completed",
             "disposition": reply.disposition,
             "summary": reply.summary,
             "challenges": output_json["challenges"],
             "decision_id": decision.id,
             "model_id": result["model_id"],
+            "repair_attempted": repair_attempted,
+            "normalization": normalization,
             "producer_model_id": producer_model_id,
             "producer_model_verified": producer_verified,
             "independence_assured": producer_verified,
+            "advisory_only": True,
+            "gate_verdict_unchanged": True,
+        }
+
+    def _review_needs_review(
+        self,
+        finding: FindingRow,
+        *,
+        refs: list[str],
+        producer_model_id: str,
+        producer_verified: bool,
+        reason: str,
+        raw_content: str | None = None,
+    ) -> dict[str, Any]:
+        """Capture an unconvertible model reply as an explicit needs-review record.
+
+        The raw reply never becomes a structured verdict: no disposition is
+        guessed and no citation is fabricated. ``reason`` is the sanitized
+        failure class (schema locations and rule names, never model content).
+        """
+        import hashlib
+
+        digest = (
+            hashlib.sha256(raw_content.encode("utf-8")).hexdigest()
+            if raw_content is not None
+            else None
+        )
+        decision = DecisionRow(
+            id=new_id(IdPrefix.DECISION),
+            investigation_id=finding.investigation_id,
+            agent=AGENT,
+            action="review_finding",
+            action_args={
+                "finding_id": finding.id,
+                "producer_model_id": producer_model_id,
+                "producer_model_verified": producer_verified,
+                "advisory_only": True,
+            },
+            considered_evidence=refs,
+            alternatives=[],
+            expected_outcome="Independently challenge the finding using only persisted evidence; never alter the deterministic verdict.",
+            uncertainty=f"model reply unconvertible: {reason}",
+            prompt_version=PROMPT_VERSION,
+            provider=self.gateway.provider.name if self.gateway is not None else None,
+            requested_model=self.gateway.model if self.gateway is not None else None,
+            response_sha256=digest,
+            output_json={"status": "needs_review", "failure_class": reason},
+            created_at=utcnow(),
+        )
+        self.session.add(decision)
+        SqlEventStore(self.session).emit(
+            finding.investigation_id,
+            "veritas_review_needs_review",
+            {
+                "finding_id": finding.id,
+                "decision_id": decision.id,
+                "failure_class": reason,
+                "advisory_only": True,
+            },
+            actor=AGENT,
+        )
+        self.session.flush()
+        return {
+            "mode": "model_gateway",
+            "status": "needs_review",
+            "disposition": None,
+            "summary": None,
+            "challenges": [],
+            "decision_id": decision.id,
+            "failure_class": reason,
+            "producer_model_id": producer_model_id,
+            "producer_model_verified": producer_verified,
+            "independence_assured": False,
             "advisory_only": True,
             "gate_verdict_unchanged": True,
         }
@@ -332,6 +444,28 @@ class VeritasReviewService:
 def _compact_json(value: dict[str, Any]) -> str:
     import json
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _repair_payload(original_payload: dict[str, Any], raw_reply: str, failure: str) -> str:
+    """Bounded conversion-repair request: the model converts its OWN reply.
+
+    Grounded only in the original review request and the model's own previous
+    output; the instruction forbids adding or dropping anything substantive.
+    """
+    return _compact_json(
+        {
+            "conversion_task": (
+                "Convert your previous reply into the required JSON schema. Preserve "
+                "every disposition, statement and evidence reference exactly as given; "
+                "add nothing and remove nothing substantive. Drop only decorative "
+                "fields the schema does not declare, and remove any wrapping that is "
+                "not part of the JSON value itself."
+            ),
+            "failure": failure,
+            "original_review_request": original_payload,
+            "previous_reply": raw_reply,
+        }
+    )
 
 
 def _run_async(awaitable):

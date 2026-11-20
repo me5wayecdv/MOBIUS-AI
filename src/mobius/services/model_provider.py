@@ -9,14 +9,15 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
-from typing import Any, Protocol
+from dataclasses import dataclass, field
+from typing import Any, Protocol, get_args, get_origin
 from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ValidationError
@@ -35,7 +36,11 @@ class ModelUnavailable(ModelProviderError):
 
 
 class ModelOutputInvalid(ModelProviderError):
-    pass
+    def __init__(self, message: str, *, raw_content: str | None = None) -> None:
+        super().__init__(message)
+        # The raw reply is kept for server-side repair/review only. API layers
+        # must never surface it to clients.
+        self.raw_content = raw_content
 
 
 class ModelBudgetExceeded(ModelProviderError):
@@ -260,12 +265,12 @@ class StructuredModelGateway:
             raise ModelBudgetExceeded(
                 f"provider used {used} tokens but only {remaining_tokens} remained"
             )
-        try:
-            parsed = json.loads(result.content)
-            validated = output_model.model_validate(parsed)
-        except (ValueError, ValidationError) as exc:
-            raise ModelOutputInvalid("model output failed the requested JSON schema") from exc
-        return validated, result
+        norm = normalize_structured_reply(result.content, output_model)
+        if norm.status != "valid":
+            raise ModelOutputInvalid(
+                f"model reply unconvertible: {norm.reason}", raw_content=result.content
+            )
+        return norm.data, result
 
 
 
@@ -362,11 +367,12 @@ class InvestigationModelGateway:
             provider=self.gateway.provider.name, model_id=result.model_id,
         )
 
-        try:
-            parsed = json.loads(result.content)
-            validated = schema.model_validate(parsed)
-        except (ValueError, ValidationError) as exc:
-            raise ModelOutputInvalid("model output failed the requested JSON schema") from exc
+        norm = normalize_structured_reply(result.content, schema)
+        if norm.status != "valid":
+            raise ModelOutputInvalid(
+                f"model reply unconvertible: {norm.reason}", raw_content=result.content
+            )
+        validated = norm.data
         schema_json = json.dumps(schema.model_json_schema(), sort_keys=True, separators=(",", ":"))
         return {
             "data": validated,
@@ -385,6 +391,10 @@ class InvestigationModelGateway:
             "output_tokens": result.completion_tokens,
             "latency_ms": result.duration_ms,
             "schema_valid": True,
+            "normalization": {
+                "method": norm.method,
+                "dropped_fields": list(norm.dropped_fields),
+            },
         }
 
 
@@ -437,25 +447,129 @@ def parse_ndjson_events(stdout: str) -> tuple[str, int | None, int | None]:
     )
 
 
-def extract_json_object(text: str) -> str:
-    """Fail-closed transport normalization for CLI replies.
+@dataclass(frozen=True, slots=True)
+class ReplyNormalization:
+    """Outcome of converting a raw model reply into a validated schema instance.
 
-    Returns the reply only when the ENTIRE reply (ignoring surrounding
-    whitespace) is exactly one JSON value. Anything else is returned
-    unchanged so the gateway's schema validation rejects it: multiple
-    competing objects, trailing or leading payloads, commentary around the
-    object, markdown fences, and malformed/truncated structure are all
-    refused rather than rescued. This adapter never picks a nested object
-    or a commentary example over the real answer.
+    ``reason`` is a sanitized failure class (locations and rule names only,
+    never model content); the raw reply stays with the caller for repair or
+    needs-review capture.
+    """
+
+    status: str  # "valid" | "unconvertible"
+    data: BaseModel | None = None
+    method: str | None = None  # exact | fenced | extracted | extracted_duplicate
+    dropped_fields: tuple[str, ...] = ()
+    reason: str | None = None
+
+
+_FENCE_RE = re.compile(r"^```[A-Za-z0-9_-]*[ \t]*\n(?P<body>.*?)\n?```$", re.DOTALL)
+
+
+def _json_candidates(text: str) -> list[Any]:
+    """Every JSON value decodable from any ``{``/``[`` position in the text."""
+    decoder = json.JSONDecoder()
+    found: list[Any] = []
+    covered_until = -1
+    for match in re.finditer(r"[\{\[]", text):
+        if match.start() < covered_until:
+            continue  # nested inside a candidate already decoded
+        try:
+            value, end = decoder.raw_decode(text, match.start())
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, (dict, list)):
+            found.append(value)
+            covered_until = end
+    return found
+
+
+def _drop_forbidden_keys(value: Any, schema: type[BaseModel], path: str = "") -> tuple[Any, list[str]]:
+    """Drop object keys the schema does not declare, recording dotted paths.
+
+    Keys are only ever REMOVED (and reported). Nothing is added, renamed, or
+    retyped: a missing required field stays missing and fails validation.
+    """
+    if not isinstance(value, dict):
+        return value, []
+    if schema.model_config.get("extra") == "allow":
+        return value, []
+    dropped: list[str] = []
+    out: dict[str, Any] = {}
+    for key, item in value.items():
+        field_info = schema.model_fields.get(key)
+        if field_info is None:
+            dropped.append(f"{path}{key}")
+            continue
+        out[key] = _coerce_value(item, field_info.annotation, f"{path}{key}.", dropped)
+    return out, dropped
+
+
+def _coerce_value(value: Any, annotation: Any, path: str, dropped: list[str]) -> Any:
+    origin = get_origin(annotation)
+    if origin is list and isinstance(value, list):
+        args = get_args(annotation)
+        item_type = args[0] if args else Any
+        return [_coerce_value(v, item_type, f"{path}{i}.", dropped) for i, v in enumerate(value)]
+    if isinstance(annotation, type) and issubclass(annotation, BaseModel) and isinstance(value, dict):
+        coerced, sub = _drop_forbidden_keys(value, annotation, path)
+        dropped.extend(sub)
+        return coerced
+    return value
+
+
+def normalize_structured_reply(text: str, schema: type[BaseModel]) -> ReplyNormalization:
+    """Convert a raw model reply into a validated schema instance.
+
+    Acceptance ladder (tolerant of presentation, strict on semantics):
+    1. the whole reply is one JSON value;
+    2. the reply is a single markdown code fence wrapping one JSON value;
+    3. exactly one DISTINCT JSON object/array appears anywhere in the reply
+       (surrounding prose is presentation); repeated identical payloads
+       collapse to one;
+    4. undeclared object keys are dropped and recorded; nothing is added.
+
+    Anything else (no JSON payload, several conflicting payloads, or a schema
+    violation after key-dropping) is unconvertible: the caller must repair or
+    capture it as needs-review, never guess a decision.
     """
     stripped = text.strip()
     if not stripped:
-        return text
+        return ReplyNormalization(status="unconvertible", reason="empty_reply")
+    candidate: Any = None
+    method: str | None = None
     try:
-        json.loads(stripped)
+        candidate = json.loads(stripped)
+        method = "exact"
     except json.JSONDecodeError:
-        return text
-    return stripped
+        fence = _FENCE_RE.match(stripped)
+        if fence is not None:
+            try:
+                candidate = json.loads(fence.group("body").strip())
+                method = "fenced"
+            except json.JSONDecodeError:
+                candidate = None
+        if candidate is None:
+            found = _json_candidates(stripped)
+            distinct: dict[str, Any] = {}
+            for value in found:
+                distinct.setdefault(json.dumps(value, sort_keys=True), value)
+            if len(distinct) == 1:
+                candidate = next(iter(distinct.values()))
+                method = "extracted" if len(found) == 1 else "extracted_duplicate"
+            elif len(distinct) > 1:
+                return ReplyNormalization(status="unconvertible", reason="multiple_conflicting_payloads")
+    if candidate is None:
+        return ReplyNormalization(status="unconvertible", reason="no_json_payload")
+    coerced, dropped = _drop_forbidden_keys(candidate, schema)
+    try:
+        validated = schema.model_validate(coerced)
+    except ValidationError as exc:
+        locs = ";".join(
+            ".".join(str(p) for p in err["loc"]) + ":" + err["type"] for err in exc.errors()[:5]
+        )
+        return ReplyNormalization(status="unconvertible", reason=f"schema_violation:{locs}")
+    return ReplyNormalization(status="valid", data=validated, method=method, dropped_fields=tuple(dropped))
 
 
 class OpenCodeCliProvider:
@@ -539,7 +653,8 @@ class OpenCodeCliProvider:
         content, cli_input, cli_output = parse_ndjson_events(proc.stdout)
         self.last_cli_input_tokens = cli_input
         self.last_cli_output_tokens = cli_output
-        content = extract_json_object(content)
+        # Raw reply text is returned untouched: presentation-vs-semantics
+        # separation happens in normalize_structured_reply at the gateway.
         if not content.strip():
             tail = (proc.stdout or "")[-_MAX_ERROR_CHARS:].strip()
             raise ModelProviderError(f"OpenCode CLI returned no assistant text: {tail}")
