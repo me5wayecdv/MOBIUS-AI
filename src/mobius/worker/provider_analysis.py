@@ -46,7 +46,7 @@ def main() -> int:
         apk = source.read_bytes()
         digest = hashlib.sha256(apk).hexdigest()
         surface = parse_apk(apk)
-        methods, registers_sizes, superclasses, try_regions, ledger = adapt_code(
+        methods, registers_sizes, superclasses, try_regions, ledger, origins = adapt_code(
             apk, max_methods=MAX_METHODS, app_package=surface.package_name
         )
         exposures = detect_provider_exposures(
@@ -58,6 +58,7 @@ def main() -> int:
             methods_adapted=len(methods),
             ledger=ledger,
             exposures=list(exposures),
+            origins=origins,
         )
         encoded = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
     except Exception as exc:

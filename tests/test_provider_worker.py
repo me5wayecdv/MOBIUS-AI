@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from mobius.adapters.flow_adapt import DexBlobCoverage
+from mobius.adapters.flow_adapt import ClassOrigin, DexBlobCoverage
 from mobius.adapters.provider_payload import (
     MAX_PROVIDER_JSON_BYTES,
     provider_analysis_payload,
@@ -66,6 +66,7 @@ def _sample_exposure(**overrides) -> ProviderExposure:
                              "caller-controlled projection"),
         ),
         flow_complete=True,
+        evidence_classes=("com.example.NotesProvider",),
     )
     op = overrides.pop("operation_override", op)
     return ProviderExposure(
@@ -79,6 +80,9 @@ def _sample_exposure(**overrides) -> ProviderExposure:
     )
 
 
+_NOTES_ORIGINS = {"com.example.NotesProvider": ClassOrigin("classes.dex", 0)}
+
+
 def _sample_payload(sha: str) -> dict:
     return provider_analysis_payload(
         artifact_sha256=sha,
@@ -86,6 +90,7 @@ def _sample_payload(sha: str) -> dict:
         methods_adapted=3,
         ledger=[DexBlobCoverage("classes.dex", "parsed", 100, methods=3)],
         exposures=[_sample_exposure()],
+        origins=_NOTES_ORIGINS,
     )
 
 
@@ -287,6 +292,7 @@ def test_dex_completeness_is_recomputed_from_the_ledger_not_the_worker():
             DexBlobCoverage("classes2.dex", "failed-parse", 50, error="BadDEX"),
         ],
         exposures=[_sample_exposure()],
+        origins=_NOTES_ORIGINS,
     )
     result = validate_provider_analysis_payload(json.dumps(payload).encode(), sha)
     assert result.dex_complete is False
@@ -316,7 +322,7 @@ def test_duplicate_class_first_dex_wins_and_is_counted():
     first body, skip the copy, and account for it in the ledger."""
     from mobius.adapters.flow_adapt import adapt_code
     apk = _multi_dex_apk(("classes.dex", "classes2.dex"))
-    methods, _rs, _sc, _tr, ledger = adapt_code(apk)
+    methods, _rs, _sc, _tr, ledger, _o = adapt_code(apk)
     parsed = [row for row in ledger if row.status == "parsed"]
     assert len(parsed) == 2
     assert parsed[0].methods == len(methods) and parsed[0].duplicates == 0
@@ -345,6 +351,10 @@ def _payload(**overrides) -> dict:
         "dex_coverage": [{"entry": "classes.dex", "status": "parsed",
                           "size_bytes": 100, "methods": 1}],
         "exposures": [],
+        "origins": {
+            "com.example.P": {"entry": "classes.dex", "entry_position": 0,
+                              "duplicated": False},
+        },
     }
     base.update(overrides)
     return base
@@ -361,8 +371,11 @@ def _operation_payload(**overrides) -> dict:
         "coverage_complete": True,
         "sink_flows": [{"method": "m", "sink": "s", "detail": "d"}],
         "flow_complete": True,
+        "evidence_classes": ["com.example.P"],
     }
     op.update(overrides)
+    if op["caller_check_absent"] is None:
+        op.pop("evidence_classes", None)
     return op
 
 
@@ -475,7 +488,7 @@ def test_duplicate_class_with_disjoint_methods_is_skipped_and_marks_ambiguity(mo
     monkeypatch.setattr(fa, "flow_scan_from_androguard", lambda vm, em: None)
 
     apk = _multi_dex_apk(("classes.dex", "classes2.dex"))
-    methods, _rs, _sc, _tr, ledger = fa.adapt_code(apk)
+    methods, _rs, _sc, _tr, ledger, _o = fa.adapt_code(apk)
     assert _FakeDEX.calls == 2
     parsed = [row for row in ledger if row.status == "parsed"]
     assert len(parsed) == 2
@@ -605,7 +618,7 @@ def test_budget_truncates_inside_an_app_entry_and_skips_library(monkeypatch):
     }
     _patch_budget_dex(monkeypatch, fakes)
     apk = _budget_apk({"classes.dex": b"lib", "classes2.dex": b"app"})
-    methods, _r, _s, _t, ledger = adapt_code(apk, max_methods=2, app_package="com.example.app")
+    methods, _r, _s, _t, ledger, _o = adapt_code(apk, max_methods=2, app_package="com.example.app")
     # the app entry spent the whole budget and was cut mid-entry; the library
     # entry was never reached. Both downgrade coverage; neither is "parsed".
     assert len(methods) == 2
@@ -632,7 +645,7 @@ def test_budget_exhaustion_at_entry_boundary_skips_whole_entry(monkeypatch):
     }
     _patch_budget_dex(monkeypatch, fakes)
     apk = _budget_apk({"classes.dex": b"lib", "classes2.dex": b"app"})
-    methods, _r, _s, _t, ledger = adapt_code(apk, max_methods=3, app_package="com.example.app")
+    methods, _r, _s, _t, ledger, _o = adapt_code(apk, max_methods=3, app_package="com.example.app")
     assert len(methods) == 3
     by_entry = {b.entry: b for b in ledger}
     # the app entry exactly fills the budget: fully parsed; the library entry
@@ -657,7 +670,7 @@ def test_first_wins_duplicate_resolution_follows_runtime_order_not_budget_order(
     fakes = {b"lib": lib_vm, b"app": app_vm}
     _patch_budget_dex(monkeypatch, fakes)
     apk = _budget_apk({"classes.dex": b"lib", "classes2.dex": b"app"})
-    methods, _r, superclasses, _t, ledger = adapt_code(apk, max_methods=10, app_package="com.example.app")
+    methods, _r, superclasses, _t, ledger, _o = adapt_code(apk, max_methods=10, app_package="com.example.app")
     # classes.dex claimed Dup first (runtime order), and its copy is the one
     # adapted even though the app entry was visited first under the budget order.
     dup = next(m for m in methods if m.class_name == "com.example.app.Dup")
@@ -680,7 +693,7 @@ def test_no_package_means_plain_runtime_order(monkeypatch):
     }
     _patch_budget_dex(monkeypatch, fakes)
     apk = _budget_apk({"classes.dex": b"lib", "classes2.dex": b"app"})
-    methods, _r, _s, _t, ledger = adapt_code(apk, max_methods=3)
+    methods, _r, _s, _t, ledger, _o = adapt_code(apk, max_methods=3)
     by_entry = {b.entry: b for b in ledger}
     # without a package, name/runtime order decides: library entry fills the
     # budget exactly (parsed), app entry skipped whole.
@@ -703,6 +716,7 @@ def test_payload_accepts_budget_statuses_and_accounts_adapted_methods():
                             error="global method budget exhausted"),
         ],
         exposures=[_sample_exposure()],
+        origins=_NOTES_ORIGINS,
     )
     result = validate_provider_analysis_payload(json.dumps(payload).encode(), sha)
     assert result.methods_adapted == 2
@@ -718,6 +732,7 @@ def test_payload_rejects_methods_count_ignoring_truncated_entries():
         methods_adapted=3,
         ledger=[DexBlobCoverage("classes.dex", "truncated-budget", 100, methods=2)],
         exposures=[_sample_exposure()],
+        origins=_NOTES_ORIGINS,
     )
     with pytest.raises(ValueError, match="contradicts the DEX ledger"):
         validate_provider_analysis_payload(json.dumps(payload).encode(), sha)
@@ -748,3 +763,102 @@ def test_entrypoint_binds_adaptation_budget_and_manifest_package(tmp_path, monke
     finally:
         sys.argv = argv
     assert captured == {"max_methods": MAX_METHODS, "app_package": "com.example"}
+
+
+def test_origins_record_runtime_provenance(monkeypatch):
+    from mobius.adapters.flow_adapt import adapt_code
+
+    lib_vm = _BudgetDex([
+        _BudgetClass("Lcom/example/app/Dup;", [_BudgetMethod("m1")]),
+        _BudgetClass("Lcom/lib/Util;", [_BudgetMethod("u")]),
+    ])
+    app_vm = _BudgetDex([
+        _BudgetClass("Lcom/example/app/Dup;", [_BudgetMethod("m1")]),
+        _BudgetClass("Lcom/example/app/Main;", [_BudgetMethod("onCreate")]),
+    ])
+    _patch_budget_dex(monkeypatch, {b"lib": lib_vm, b"app": app_vm})
+    apk = _budget_apk({"classes.dex": b"lib", "classes2.dex": b"app"})
+    *_, origins = adapt_code(apk, max_methods=10, app_package="com.example.app")
+    # winning copy is the runtime-first entry; the later duplicate flips only
+    # the duplicated flag, never the supplying entry.
+    assert origins["com.example.app.Dup"].entry == "classes.dex"
+    assert origins["com.example.app.Dup"].entry_position == 0
+    assert origins["com.example.app.Dup"].duplicated is True
+    assert origins["com.example.app.Main"].entry == "classes2.dex"
+    assert origins["com.example.app.Main"].entry_position == 1
+    assert origins["com.example.app.Main"].duplicated is False
+    assert origins["com.lib.Util"].entry_position == 0
+    assert origins["com.lib.Util"].duplicated is False
+
+
+def test_origins_cover_classes_cut_by_the_budget(monkeypatch):
+    from mobius.adapters.flow_adapt import adapt_code
+
+    fakes = {
+        b"lib": _BudgetDex([_BudgetClass("Lcom/lib/Util;", [_BudgetMethod(n) for n in ("a", "b", "c")])]),
+        b"app": _BudgetDex([
+            _BudgetClass("Lcom/example/app/Main;", [_BudgetMethod("onCreate"), _BudgetMethod("onStart")]),
+            _BudgetClass("Lcom/example/app/Other;", [_BudgetMethod("m")]),
+        ]),
+    }
+    _patch_budget_dex(monkeypatch, fakes)
+    apk = _budget_apk({"classes.dex": b"lib", "classes2.dex": b"app"})
+    methods, _r, _s, _t, ledger, origins = adapt_code(apk, max_methods=2, app_package="com.example.app")
+    # Other was claimed in phase 1 but never adapted: its origin still names
+    # the supplying entry, whose status (truncated-budget) marks the claim
+    # unsound for provenance purposes.
+    assert origins["com.example.app.Other"].entry == "classes2.dex"
+    by_entry = {b.entry: b for b in ledger}
+    assert by_entry["classes2.dex"].status == "truncated-budget"
+    assert origins["com.example.app.Main"].entry == "classes2.dex"
+
+
+def test_payload_rejects_origin_contradicting_the_ledger():
+    apk = _fixture_apk()
+    sha = hashlib.sha256(apk).hexdigest()
+    payload = provider_analysis_payload(
+        artifact_sha256=sha,
+        package_name="com.example",
+        methods_adapted=3,
+        ledger=[DexBlobCoverage("classes.dex", "parsed", 100, methods=3)],
+        exposures=[_sample_exposure()],
+        origins={"com.example.NotesProvider": ClassOrigin("classes9.dex", 3)},
+    )
+    with pytest.raises(ValueError, match="origin contradicts the DEX ledger"):
+        validate_provider_analysis_payload(json.dumps(payload).encode(), sha)
+
+
+def test_payload_rejects_missing_origin_for_evidence_class():
+    apk = _fixture_apk()
+    sha = hashlib.sha256(apk).hexdigest()
+    payload = provider_analysis_payload(
+        artifact_sha256=sha,
+        package_name="com.example",
+        methods_adapted=3,
+        ledger=[DexBlobCoverage("classes.dex", "parsed", 100, methods=3)],
+        exposures=[_sample_exposure()],
+        origins={"com.example.Unrelated": ClassOrigin("classes.dex", 0)},
+    )
+    with pytest.raises(ValueError, match="omits origins for evidence classes"):
+        validate_provider_analysis_payload(json.dumps(payload).encode(), sha)
+
+
+def test_payload_rejects_caller_claim_without_evidence_classes():
+    op = _operation_payload(evidence_classes=[])
+    payload = _payload(exposures=[{
+        "provider": "com.example.P", "exported": True, "operations": [op]}])
+    with pytest.raises(ValueError, match="without evidence classes"):
+        validate_provider_analysis_payload(
+            json.dumps(payload).encode(), hashlib.sha256(b"apk").hexdigest())
+
+
+def test_payload_round_trips_origins_and_evidence_classes():
+    apk = _fixture_apk()
+    sha = hashlib.sha256(apk).hexdigest()
+    payload = _sample_payload(sha)
+    result = validate_provider_analysis_payload(json.dumps(payload).encode(), sha)
+    origin = result.origins["com.example.NotesProvider"]
+    assert origin.entry == "classes.dex"
+    assert origin.entry_position == 0
+    assert origin.duplicated is False
+    assert result.exposures[0].operations[0].evidence_classes == ("com.example.NotesProvider",)

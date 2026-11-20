@@ -476,7 +476,7 @@ def test_run_refuses_over_methods_bound_before_detection(monkeypatch):
     monkeypatch.setattr(entry, "parse_apk",
                         lambda apk: SimpleNamespace(package_name="com.example.app"))
     monkeypatch.setattr(entry, "adapt_code",
-                        lambda apk: (_flows_of_size(50001), {}, {}, [], []))
+                        lambda apk: (_flows_of_size(50001), {}, {}, [], [], {}))
     monkeypatch.setattr(entry, "detect_hardcoded_secrets",
                         lambda *a, **k: detected.append(True))
     with pytest.raises(entry.MethodsBoundExceeded) as excinfo:
@@ -493,7 +493,7 @@ def test_run_accepts_exactly_at_methods_bound(monkeypatch):
     monkeypatch.setattr(entry, "parse_apk",
                         lambda apk: SimpleNamespace(package_name="com.example.app"))
     monkeypatch.setattr(entry, "adapt_code",
-                        lambda apk: (_flows_of_size(50000), {}, {}, [], []))
+                        lambda apk: (_flows_of_size(50000), {}, {}, [], [], {}))
     monkeypatch.setattr(entry, "_static_flags", lambda apk, flows: {})
     monkeypatch.setattr(entry, "detect_hardcoded_secrets", lambda *a, **k: [])
     monkeypatch.setattr(entry, "build_secrets_payload", lambda **k: {"ok": True})

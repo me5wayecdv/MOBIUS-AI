@@ -725,10 +725,13 @@ def test_provider_analysis_validates_exported_provider(client):
 
 
 def _provider_worker_payload(sha, package="com.example", methods=3, ledger=None,
-                             caller_check_absent=True, operations=("read",)):
+                             caller_check_absent=True, operations=("read",),
+                             origin_entry="classes.dex", origin_position=0,
+                             origin_duplicated=False, include_origins=True):
     """Hand-built worker payload: lets tests tamper with exactly one field."""
-    ops = [
-        {
+    ops = []
+    for name in operations:
+        op = {
             "operation": name,
             "protection_status": "unprotected",
             "protection_permission": None,
@@ -743,9 +746,10 @@ def _provider_worker_payload(sha, package="com.example", methods=3, ledger=None,
             ],
             "flow_complete": True,
         }
-        for name in operations
-    ]
-    return {
+        if caller_check_absent is not None:
+            op["evidence_classes"] = ["com.example.NotesProvider"]
+        ops.append(op)
+    payload = {
         "schema_version": 1,
         "artifact_sha256": sha,
         "package_name": package,
@@ -753,6 +757,17 @@ def _provider_worker_payload(sha, package="com.example", methods=3, ledger=None,
         "dex_coverage": ledger if ledger is not None else [
             {"entry": "classes.dex", "status": "parsed", "size_bytes": 100, "methods": methods},
         ],
+        "origins": (
+            {
+                "com.example.NotesProvider": {
+                    "entry": origin_entry,
+                    "entry_position": origin_position,
+                    "duplicated": origin_duplicated,
+                }
+            }
+            if include_origins
+            else {}
+        ),
         "exposures": [
             {
                 "provider": "com.example.NotesProvider",
@@ -764,6 +779,7 @@ def _provider_worker_payload(sha, package="com.example", methods=3, ledger=None,
             },
         ],
     }
+    return payload
 
 
 def _surface_ready_scan(client):
@@ -862,10 +878,11 @@ def test_isolated_provider_apply_rejects_dex_job_kind_and_unfinished_jobs(client
     assert unfinished.status_code == 409
 
 
-def test_isolated_provider_partial_dex_ledger_downgrades_caller_check(client, ctx):
-    """Unknown/sensitivity constraint over the wire: when the worker ledger
-    shows DEX bytes it could not parse, an applied caller_check_absent=True
-    must be downgraded to unknown before the gate sees it."""
+def test_isolated_provider_later_unseen_dex_keeps_caller_check(client, ctx):
+    """Per-class provenance: a failed LATER dex entry cannot shadow a class
+    claimed first in runtime order, so a fully-evidenced caller_check_absent
+    survives a globally incomplete ledger (dex_complete stays honestly
+    False; only the shadowing-dependent downgrade is lifted)."""
     app, scan = _surface_ready_scan(client)
     job_id = client.post(f"/api/v1/scans/{scan['id']}/provider-analysis/jobs").json()["job_id"]
 
@@ -878,6 +895,35 @@ def test_isolated_provider_partial_dex_ledger_downgrades_caller_check(client, ct
              "error": "BadDEX"},
         ],
         caller_check_absent=True,
+        origin_entry="classes.dex", origin_position=0,
+    )
+    assert _complete_provider_job(client, ctx, scan, payload) == job_id
+
+    applied = client.post(f"/api/v1/scans/{scan['id']}/provider-analysis/jobs/{job_id}/apply")
+    assert applied.status_code == 200, applied.text
+    result = applied.json()["results"][0]
+    assert applied.json()["dex_complete"] is False
+    # provenance sound: the clause keeps its evidence
+    assert result["attributes"]["caller_check_absent"] is True
+
+
+def test_isolated_provider_unseen_earlier_dex_downgrades_caller_check(client, ctx):
+    """An entry BEFORE the supplying one in runtime order that could not be
+    parsed may carry the copy the device actually loads: the claim cannot
+    stand in either direction and is downgraded to unknown."""
+    app, scan = _surface_ready_scan(client)
+    job_id = client.post(f"/api/v1/scans/{scan['id']}/provider-analysis/jobs").json()["job_id"]
+
+    payload = _provider_worker_payload(
+        app["sha256"],
+        methods=3,
+        ledger=[
+            {"entry": "classes.dex", "status": "failed-parse", "size_bytes": 100,
+             "error": "BadDEX"},
+            {"entry": "classes2.dex", "status": "parsed", "size_bytes": 100, "methods": 3},
+        ],
+        caller_check_absent=True,
+        origin_entry="classes2.dex", origin_position=1,
     )
     assert _complete_provider_job(client, ctx, scan, payload) == job_id
 
@@ -886,6 +932,26 @@ def test_isolated_provider_partial_dex_ledger_downgrades_caller_check(client, ct
     result = applied.json()["results"][0]
     assert applied.json()["dex_complete"] is False
     # downgraded to unknown: the clause carries no evidence either way
+    assert "caller_check_absent" not in result["attributes"]
+    assert result["verdict"] == "insufficient_evidence"
+
+
+def test_isolated_provider_duplicated_class_downgrades_caller_check(client, ctx):
+    """A class body present in two dex files rests on the first-wins
+    classpath-order assumption: the claim is downgraded to unknown."""
+    app, scan = _surface_ready_scan(client)
+    job_id = client.post(f"/api/v1/scans/{scan['id']}/provider-analysis/jobs").json()["job_id"]
+
+    payload = _provider_worker_payload(
+        app["sha256"],
+        caller_check_absent=True,
+        origin_duplicated=True,
+    )
+    assert _complete_provider_job(client, ctx, scan, payload) == job_id
+
+    applied = client.post(f"/api/v1/scans/{scan['id']}/provider-analysis/jobs/{job_id}/apply")
+    assert applied.status_code == 200, applied.text
+    result = applied.json()["results"][0]
     assert "caller_check_absent" not in result["attributes"]
     assert result["verdict"] == "insufficient_evidence"
 
@@ -1125,9 +1191,10 @@ def test_legacy_second_job_terminalizes_safely_after_first_applied(client, ctx):
 
 
 def test_partial_dex_downgrades_refutation_to_unknown(client, ctx):
-    """Blocker F: a failed-parse DEX means the analysed copy of a class may be
-    one the runtime never loads. An 'enforcing' guard found there must NOT
-    refute: caller_check_absent=False downgrades to None exactly like True."""
+    """Blocker F: a failed-parse entry EARLIER in runtime order than the
+    supplying one may carry the copy the runtime actually loads. An
+    'enforcing' guard found in the analysed copy must NOT refute:
+    caller_check_absent=False downgrades to None exactly like True."""
     app, scan = _surface_ready_scan(client)
     job_id = client.post(f"/api/v1/scans/{scan['id']}/provider-analysis/jobs").json()["job_id"]
     ops = []
@@ -1146,8 +1213,12 @@ def test_partial_dex_downgrades_refutation_to_unknown(client, ctx):
                             "sink": "SQLiteQueryBuilder.query",
                             "detail": "caller-controlled selection at offset 4"}],
             "flow_complete": True,
+            "evidence_classes": ["com.example.NotesProvider"],
         })
-    payload = _provider_worker_payload(app["sha256"], operations=("read", "write"))
+    payload = _provider_worker_payload(
+        app["sha256"], operations=("read", "write"),
+        origin_entry="classes2.dex", origin_position=1,
+    )
     payload["exposures"][0]["operations"] = ops
     payload["methods_adapted"] = 1
     payload["dex_coverage"] = [

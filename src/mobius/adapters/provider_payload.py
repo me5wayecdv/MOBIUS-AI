@@ -11,7 +11,8 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -22,7 +23,7 @@ from ..core.providers import (
     ProviderExposure,
     SinkFlowEvidence,
 )
-from .flow_adapt import DexBlobCoverage
+from .flow_adapt import DexBlobCoverage, ClassOrigin
 
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 MAX_PROVIDER_JSON_BYTES = 4 * 1024 * 1024
@@ -77,6 +78,13 @@ class OperationDTO(StrictModel):
     coverage_complete: bool = False
     sink_flows: list[SinkFlowDTO] = Field(default_factory=list, max_length=256)
     flow_complete: bool = False
+    evidence_classes: list[str] = Field(default_factory=list, max_length=64)
+
+
+class ClassOriginDTO(StrictModel):
+    entry: str = Field(min_length=1, max_length=256)
+    entry_position: int = Field(ge=0, le=64)
+    duplicated: bool = False
 
 
 class ExposureDTO(StrictModel):
@@ -95,6 +103,7 @@ class ProviderAnalysisDTO(StrictModel):
     methods_adapted: int = Field(ge=0, le=50000)
     dex_coverage: list[LedgerDTO] = Field(min_length=1, max_length=64)
     exposures: list[ExposureDTO] = Field(default_factory=list, max_length=256)
+    origins: dict[str, ClassOriginDTO] = Field(default_factory=dict, max_length=4096)
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,6 +114,7 @@ class ProviderAnalysisResult:
     methods_adapted: int
     ledger: tuple[DexBlobCoverage, ...]
     exposures: tuple[ProviderExposure, ...]
+    origins: Mapping[str, ClassOrigin] = field(default_factory=dict)
 
     @property
     def dex_complete(self) -> bool:
@@ -130,9 +140,20 @@ def provider_analysis_payload(
     methods_adapted: int,
     ledger: list[DexBlobCoverage],
     exposures: list[ProviderExposure],
+    origins: Mapping[str, ClassOrigin] | None = None,
 ) -> dict[str, Any]:
     if not _SHA256.fullmatch(artifact_sha256):
         raise ValueError("artifact SHA-256 must be lowercase hexadecimal")
+    # Only classes that actually back an operation claim earn a payload entry:
+    # the full adaptation map can hold 50,000 classes and would blow the
+    # output budget for no evidentiary gain.
+    evidence_class_names = {
+        cls
+        for e in exposures
+        for op in e.operations
+        for cls in op.evidence_classes
+    }
+    origins = origins or {}
     return {
         "schema_version": 1,
         "artifact_sha256": artifact_sha256,
@@ -163,12 +184,22 @@ def provider_analysis_payload(
                             for s in op.sink_flows
                         ],
                         "flow_complete": op.flow_complete,
+                        "evidence_classes": list(op.evidence_classes),
                     }
                     for op in e.operations
                 ],
             }
             for e in exposures
         ],
+        "origins": {
+            dotted: {
+                "entry": o.entry,
+                "entry_position": o.entry_position,
+                "duplicated": o.duplicated,
+            }
+            for dotted, o in origins.items()
+            if dotted in evidence_class_names
+        },
     }
 
 
@@ -230,6 +261,12 @@ def validate_provider_analysis_payload(
                 if any(g.outcome == "enforcing" for g in op.guard_findings):
                     raise ValueError(
                         "caller_check_absent contradicted by an enforcing guard")
+            if op.caller_check_absent is not None and not op.evidence_classes:
+                # A caller-check claim in either direction must name the
+                # classes whose bytecode backs it, or provenance cannot be
+                # checked API-side and the claim is unverifiable.
+                raise ValueError(
+                    "caller-check claim without evidence classes in worker payload")
             for g in op.guard_findings:
                 if g.outcome not in _ALLOWED_GUARD_OUTCOME:
                     raise ValueError("provider analysis payload has an unknown guard outcome")
@@ -249,6 +286,7 @@ def validate_provider_analysis_payload(
                     for s in op.sink_flows
                 ),
                 flow_complete=op.flow_complete,
+                evidence_classes=tuple(op.evidence_classes),
             ))
         exposures.append(ProviderExposure(
             provider=e.provider,
@@ -259,9 +297,24 @@ def validate_provider_analysis_payload(
             operations=tuple(operations),
         ))
 
+    origins: dict[str, ClassOrigin] = {}
+    for dotted, o in dto.origins.items():
+        if o.entry_position >= len(ledger) or ledger[o.entry_position].entry != o.entry:
+            raise ValueError("provider analysis origin contradicts the DEX ledger")
+        origins[dotted] = ClassOrigin(
+            entry=o.entry, entry_position=o.entry_position, duplicated=o.duplicated
+        )
+    evidence_needed = {
+        cls for e in exposures for op in e.operations for cls in op.evidence_classes
+    }
+    missing = evidence_needed - origins.keys()
+    if missing:
+        raise ValueError("provider analysis payload omits origins for evidence classes")
+
     return ProviderAnalysisResult(
         package_name=dto.package_name,
         methods_adapted=dto.methods_adapted,
         ledger=tuple(ledger),
+        origins=origins,
         exposures=tuple(exposures),
     )

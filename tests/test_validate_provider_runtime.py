@@ -26,7 +26,7 @@ def _valid_state() -> tuple[dict, str]:
     apk = runtime.fixture_apk(runtime.FIXTURE_DEX.read_bytes())
     sha = hashlib.sha256(apk).hexdigest()
     surface = parse_apk(apk)
-    methods, registers_sizes, superclasses, try_regions, ledger = adapt_code(apk)
+    methods, registers_sizes, superclasses, try_regions, ledger, origins = adapt_code(apk)
     payload = provider_analysis_payload(
         artifact_sha256=sha,
         package_name=surface.package_name,

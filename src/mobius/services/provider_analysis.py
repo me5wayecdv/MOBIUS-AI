@@ -113,7 +113,7 @@ class ProviderAnalysisService:
                 "authorized target package does not match the package parsed from this APK"
             )
 
-        methods, registers_sizes, superclasses, try_regions, ledger = adapt_code(
+        methods, registers_sizes, superclasses, try_regions, ledger, origins = adapt_code(
             apk_bytes, app_package=surface.package_name
         )
         # The same predicate as the API result DTO (shared helper): an
@@ -130,6 +130,7 @@ class ProviderAnalysisService:
             ledger=ledger,
             exposures=list(exposures),
             dex_complete=dex_complete,
+            origins=origins,
             validated_by=validated_by,
         )
 
@@ -151,6 +152,7 @@ class ProviderAnalysisService:
             ledger=list(result.ledger),
             exposures=list(result.exposures),
             dex_complete=result.dex_complete,
+            origins=result.origins,
             validated_by=validated_by,
             exclude_applied_job_id=applied_job_id,
         )
@@ -176,6 +178,7 @@ class ProviderAnalysisService:
         ledger,
         exposures,
         dex_complete: bool,
+        origins=None,
         validated_by: str,
         exclude_applied_job_id: str | None = None,
     ) -> dict[str, object]:
@@ -190,24 +193,50 @@ class ProviderAnalysisService:
                 f"provider analysis was already applied for this investigation "
                 f"(worker job {other.id})"
             )
-        if not dex_complete:
-            # A DEX that could not be selected or parsed is code we never saw.
-            # The runtime resolves a class from the FIRST dex, so the analysed
-            # copy may be one the device never loads: on partial bytecode no
-            # caller-check claim stands in EITHER direction. True would be a
-            # false confirm; False would be a false refutation (an "enforcing"
-            # guard found in a shadowed later copy). Both become UNKNOWN.
-            exposures = [
-                replace(
-                    exposure,
-                    operations=tuple(
-                        replace(op, caller_check_absent=None)
-                        if op.caller_check_absent is not None else op
-                        for op in exposure.operations
-                    ),
-                )
-                for exposure in exposures
-            ]
+        ledger = list(ledger)
+        origins = origins or {}
+
+        def _origin_sound(dotted: str) -> bool:
+            """The analysed copy of this class is the copy a runtime loads.
+
+            Sound only when the class was claimed exactly once (first-wins is
+            then the AOSP-documented KEEP_FIRST policy, not an assumption
+            about which of two bodies the device picks), its supplying entry
+            was fully parsed (every claimed method adapted), and every entry
+            BEFORE it in runtime order was fully parsed too: an entry we
+            could not see may carry the copy that actually wins. Truncated or
+            failed LATER entries cannot shadow this class, and callees that
+            escaped adaptation already downgraded the operation's own
+            coverage/flow flags in the detector.
+            """
+            origin = origins.get(dotted)
+            if origin is None or origin.duplicated:
+                return False
+            if origin.entry_position >= len(ledger):
+                return False
+            supplying = ledger[origin.entry_position]
+            if supplying.status != "parsed" or supplying.entry != origin.entry:
+                return False
+            return all(b.status == "parsed" for b in ledger[: origin.entry_position])
+
+        # Per-operation downgrade: partial bytecode no longer blanks every
+        # operation. A caller-check claim stands only when every class whose
+        # adapted bytecode backs it (the provider class and its guard
+        # helpers) has sound runtime-loading provenance; anything else stays
+        # UNKNOWN in both directions (no false confirm, no false refutation).
+        exposures = [
+            replace(
+                exposure,
+                operations=tuple(
+                    replace(op, caller_check_absent=None)
+                    if op.caller_check_absent is not None
+                    and not all(_origin_sound(cls) for cls in op.evidence_classes)
+                    else op
+                    for op in exposure.operations
+                ),
+            )
+            for exposure in exposures
+        ]
 
         validator = ValidationService(self._session)
         results = []
