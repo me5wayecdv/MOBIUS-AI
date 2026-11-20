@@ -416,15 +416,44 @@ def generate_nexus_hypotheses(
 ):
     """Generate testable hypotheses; model use is consent-gated and budgeted cumulatively."""
     _require_scan_owner(session, scan_id, who)
-    ctx = get_context()
+    from ..services.errors import (
+        BudgetExhausted,
+        ModelConsentRequiredError,
+        ModelOutputInvalidError,
+        ModelProviderUnavailable,
+    )
+    from ..services.model_provider import (
+        ModelBudgetExceeded,
+        ModelConsentRequired,
+        ModelOutputInvalid,
+        ModelProviderError,
+    )
     from ..services.nexus_hypotheses import NexusHypothesisService
 
-    return NexusHypothesisService(
-        session,
-        gateway=ctx.model_gateway,
-        session_factory=ctx.session_factory,
-        store=ctx.store,
-    ).generate(scan_id, component=component)
+    ctx = get_context()
+    try:
+        return NexusHypothesisService(
+            session,
+            gateway=ctx.model_gateway,
+            session_factory=ctx.session_factory,
+            store=ctx.store,
+        ).generate(scan_id, component=component)
+    except ModelConsentRequired as exc:
+        raise ModelConsentRequiredError(str(exc)) from exc
+    except (ModelOutputInvalid, ValueError) as exc:
+        # Stable client-facing message: raw validation/parse details can carry
+        # model output content and never leave the server (same rule as VERITAS).
+        raise ModelOutputInvalidError(
+            "model output failed validation; rejection recorded, no hypotheses persisted"
+        ) from exc
+    except ModelBudgetExceeded as exc:
+        raise BudgetExhausted(str(exc)) from exc
+    except ModelProviderError as exc:
+        # Provider unreachable/timeout/transport failure: explicit 503, never a
+        # bare 500; raw transport details never leave the server.
+        raise ModelProviderUnavailable(
+            "model provider unavailable; retry later"
+        ) from exc
 
 
 @router.get("/scans/{scan_id}/decisions", tags=["scans"])

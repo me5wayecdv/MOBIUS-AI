@@ -1,6 +1,7 @@
 """NEXUS hypothesis generation from bounded, persisted evidence packages."""
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -30,6 +31,68 @@ REQUIRED_EVIDENCE = frozenset({
     "controlled_poc",
     "negative_control",
 })
+
+# Bounded repair loop (MODEL_ROUTING.md section 3): the initial call plus at most
+# two repair attempts. The deterministic-fallback-after-exhaustion step from the
+# design doc is deliberately NOT adopted: the merged contract fails closed, and
+# the 2026-11-19 live measurement (all three small models rejected by the
+# citation/integrity guards) shows auto-fallback would have masked every failure.
+MAX_REPAIR_ATTEMPTS = 2
+
+REASON_SCHEMA_INVALID = "schema-invalid"
+REASON_CITATION_OUTSIDE_PACKAGE = "citation-outside-package"
+REASON_UNSUPPORTED_EVIDENCE_TYPE = "unsupported-evidence-type"
+
+_REPAIR_INSTRUCTIONS = {
+    REASON_SCHEMA_INVALID: (
+        "The previous reply did not validate against the required JSON schema. "
+        "Return only JSON that validates against the schema."
+    ),
+    REASON_CITATION_OUTSIDE_PACKAGE: (
+        "The previous reply cited observation IDs that are not present in the "
+        "evidence package. Cite only supplied observation IDs."
+    ),
+    REASON_UNSUPPORTED_EVIDENCE_TYPE: (
+        "The previous reply requested evidence types outside the allowed "
+        "vocabulary. Use only allowed required_evidence values."
+    ),
+}
+
+
+def _invalid(token: str, message: str) -> ModelOutputInvalid:
+    exc = ModelOutputInvalid(message)
+    exc.reason_token = token
+    return exc
+
+
+def _validate_model_proposals(
+    hypotheses: list["ProposedHypothesis"], observation_ids: set[str]
+) -> None:
+    for item in hypotheses:
+        if not set(item.derived_from).issubset(observation_ids):
+            raise _invalid(
+                REASON_CITATION_OUTSIDE_PACKAGE,
+                "hypothesis cites an observation outside this evidence package",
+            )
+        if not set(item.required_evidence).issubset(REQUIRED_EVIDENCE):
+            raise _invalid(
+                REASON_UNSUPPORTED_EVIDENCE_TYPE,
+                "hypothesis requested an unsupported evidence type",
+            )
+
+
+def _repair_payload(package: dict[str, Any], token: str) -> str:
+    # Fixed tokens and instructions only: raw validation errors can carry model
+    # output content and never re-enter a prompt.
+    return json.dumps(
+        {
+            "evidence_package": package,
+            "repair": {"error": token, "instruction": _REPAIR_INSTRUCTIONS[token]},
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
 
 
 class ProposedHypothesis(BaseModel):
@@ -91,6 +154,7 @@ class NexusHypothesisService:
         output_json: dict[str, Any] | None = None
         summary = "Deterministic fallback: hypotheses are rule-derived from persisted observations."
         proposed: list[ProposedHypothesis]
+        repair_attempts = 0
 
         if consent.get("enabled") is True and self.gateway is not None:
             if self.session_factory is None:
@@ -98,15 +162,50 @@ class NexusHypothesisService:
             bound = InvestigationModelGateway(
                 self.gateway, self.session_factory, investigation_id
             )
-            result = _run_async(bound.complete_structured(
-                role="reasoning",
-                system=_SYSTEM_PROMPT,
-                user=_compact_package(package_data),
-                schema=HypothesisGenerationReply,
-                temperature=0.0,
-                max_tokens=1200,
-            ))
-            reply: HypothesisGenerationReply = result["data"]
+            repair_token: str | None = None
+            repair_attempts = 0
+            rejections: list[str] = []
+            while True:
+                user_payload = (
+                    _compact_package(package_data)
+                    if repair_token is None
+                    else _repair_payload(package_data, repair_token)
+                )
+                result: dict[str, Any] | None = None
+                try:
+                    result = _run_async(bound.complete_structured(
+                        role="reasoning",
+                        system=_SYSTEM_PROMPT,
+                        user=user_payload,
+                        schema=HypothesisGenerationReply,
+                        temperature=0.0,
+                        max_tokens=1200,
+                    ))
+                    reply: HypothesisGenerationReply = result["data"]
+                    _validate_model_proposals(reply.hypotheses, observation_ids)
+                except ModelOutputInvalid as exc:
+                    # Only validation failures are repairable. Consent, budget and
+                    # transport errors (ModelConsentRequired/ModelBudgetExceeded/
+                    # ModelUnavailable) are never repaired or converted to a
+                    # fallback result: they fail closed unchanged.
+                    token = getattr(exc, "reason_token", REASON_SCHEMA_INVALID)
+                    rejections.append(token)
+                    final = repair_attempts >= MAX_REPAIR_ATTEMPTS
+                    self._persist_rejection(
+                        investigation_id,
+                        component=component,
+                        attempt=repair_attempts,
+                        reason=token,
+                        reasons=rejections,
+                        final=final,
+                        result=result,
+                    )
+                    if final:
+                        raise
+                    repair_attempts += 1
+                    repair_token = token
+                    continue
+                break
             proposed = list(reply.hypotheses)
             summary = reply.summary
             model_id = result["model_id"]
@@ -129,17 +228,26 @@ class NexusHypothesisService:
                 "latency_ms": result["latency_ms"],
                 "temperature": result["temperature"],
                 "max_tokens": result["max_tokens"],
+                "repair_attempts": repair_attempts,
             }
             mode = "model_gateway"
         else:
             proposed = self._deterministic(package_data)
 
+        # Defense-in-depth: model output already passed _validate_model_proposals
+        # inside the repair loop; the deterministic output is constructed valid.
         validated: list[ProposedHypothesis] = []
         for item in proposed:
             if not set(item.derived_from).issubset(observation_ids):
-                raise ModelOutputInvalid("hypothesis cites an observation outside this evidence package")
+                raise _invalid(
+                    REASON_CITATION_OUTSIDE_PACKAGE,
+                    "hypothesis cites an observation outside this evidence package",
+                )
             if not set(item.required_evidence).issubset(REQUIRED_EVIDENCE):
-                raise ModelOutputInvalid("hypothesis requested an unsupported evidence type")
+                raise _invalid(
+                    REASON_UNSUPPORTED_EVIDENCE_TYPE,
+                    "hypothesis requested an unsupported evidence type",
+                )
             validated.append(item)
 
         persisted: list[HypothesisRow] = []
@@ -223,6 +331,7 @@ class NexusHypothesisService:
                 "response_sha256": provenance.get("response_sha256"),
                 "token_usage": usage,
                 "package_truncated": package.truncated,
+                "repair_attempts": repair_attempts,
             },
             actor=AGENT,
         )
@@ -230,6 +339,7 @@ class NexusHypothesisService:
         return {
             "mode": mode,
             "summary": summary,
+            "repair_attempts": repair_attempts,
             "decision_id": decision.id,
             "model_id": model_id,
             "provider": provenance.get("provider"),
@@ -251,6 +361,91 @@ class NexusHypothesisService:
                 for row in persisted
             ],
         }
+
+    def _persist_rejection(
+        self,
+        investigation_id: str,
+        *,
+        component: str | None,
+        attempt: int,
+        reason: str,
+        reasons: list[str],
+        final: bool,
+        result: dict[str, Any] | None,
+    ) -> None:
+        """Commit rejection diagnostics in their own transaction.
+
+        The request session rolls back when generation ultimately fails, so
+        rejection evidence written on it would vanish with the error. This
+        session commits independently, mirroring the token budget ledger.
+        Payloads carry fixed reason tokens and content hashes only - never raw
+        model output, prompts or exception chains.
+        """
+        if self.session_factory is None:
+            return
+        session = self.session_factory()
+        try:
+            decision_id = None
+            if final:
+                decision_id = new_id(IdPrefix.DECISION)
+                session.add(DecisionRow(
+                    id=decision_id,
+                    investigation_id=investigation_id,
+                    agent=AGENT,
+                    action="generate_hypotheses_rejected",
+                    action_args={
+                        "component": component,
+                        "repair_attempts": attempt,
+                        "reasons": list(reasons),
+                    },
+                    considered_evidence=[],
+                    alternatives=[],
+                    expected_outcome=(
+                        "Model hypothesis generation rejected after bounded repair; "
+                        "no hypotheses persisted and the request fails closed."
+                    ),
+                    uncertainty=(
+                        "Model output failed validation; the deterministic fallback "
+                        "remains available as the default path."
+                    ),
+                    prompt_version=PROMPT_VERSION,
+                    model_id=result.get("model_id") if result else None,
+                    provider=self.gateway.provider.name if self.gateway else None,
+                    model_role="reasoning",
+                    requested_model=self.gateway.model if self.gateway else None,
+                    system_prompt_sha256=result.get("system_prompt_sha256") if result else None,
+                    input_sha256=result.get("input_sha256") if result else None,
+                    schema_sha256=result.get("schema_sha256") if result else None,
+                    response_sha256=result.get("response_sha256") if result else None,
+                    schema_name=result.get("schema_name") if result else None,
+                    output_json=None,
+                    input_tokens=result.get("input_tokens") if result else None,
+                    output_tokens=result.get("output_tokens") if result else None,
+                    latency_ms=result.get("latency_ms") if result else None,
+                    temperature=0.0,
+                    max_tokens=1200,
+                    created_at=utcnow(),
+                ))
+                session.flush()
+            SqlEventStore(session).emit(
+                investigation_id,
+                "planner_rejected",
+                {
+                    "stage": "hypothesis_generation",
+                    "failed_attempt": attempt,
+                    "max_repair_attempts": MAX_REPAIR_ATTEMPTS,
+                    "reason": reason,
+                    "final": final,
+                    "prompt_version": PROMPT_VERSION,
+                    "decision_id": decision_id,
+                    "model_id": result.get("model_id") if result else None,
+                    "response_sha256": result.get("response_sha256") if result else None,
+                },
+                actor=AGENT,
+            )
+            session.commit()
+        finally:
+            session.close()
 
     @staticmethod
     def _deterministic(package: dict[str, Any]) -> list[ProposedHypothesis]:
@@ -287,7 +482,6 @@ class NexusHypothesisService:
 
 
 def _compact_package(package: dict[str, Any]) -> str:
-    import json
     # The package itself is already bounded by EvidencePackageBuilder. Keep deterministic
     # serialization so prompt bytes and budget reservations are reproducible.
     return json.dumps(package, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
