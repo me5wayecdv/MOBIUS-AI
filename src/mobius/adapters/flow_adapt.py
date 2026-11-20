@@ -6,10 +6,14 @@ supplied APK bytes. It lives in adapters so the worker entrypoint never
 imports the service layer (DB, evidence, validation).
 
 Bounds: entry sizes are checked BEFORE decompression, with per-entry and
-aggregate budgets from adapters.dex. Nothing is silently dropped: every
-discovered classes*.dex entry is accounted for in the coverage ledger, and
-any non-parsed entry downgrades guard-absence claims to unknown in the
-provider service.
+aggregate budgets from adapters.dex, and method adaptation itself is bounded:
+at most ``max_methods`` unique methods are adapted, app-bearing entries first
+(manifest package heuristic, entry-level; never a trust boundary), instead of
+adapting everything and refusing the APK afterwards. Nothing is silently
+dropped: every discovered classes*.dex entry is accounted for in the coverage
+ledger (``truncated-budget`` / ``skipped-budget`` when the method budget cuts
+in), and any non-fully-parsed entry downgrades guard-absence claims to unknown
+in the provider service.
 """
 from __future__ import annotations
 
@@ -20,7 +24,7 @@ from io import BytesIO
 
 from ..core.flow import flow_scan_from_androguard
 from ..core.reachability import MethodRef
-from .dex import MAX_DEX_BYTES, MAX_TOTAL_DEX_BYTES, _DEX_ENTRY
+from .dex import MAX_DEX_BYTES, MAX_METHODS, MAX_TOTAL_DEX_BYTES, _DEX_ENTRY
 
 _DEX_ENTRY_NUM = re.compile(r"^classes(\d*)\.dex$")
 
@@ -33,7 +37,7 @@ class DexBlobCoverage:
 
     entry: str
     status: str  # parsed | failed-parse | skipped-oversized | skipped-aggregate
-                 # | duplicate-entry
+                 # | duplicate-entry | truncated-budget | skipped-budget
     size_bytes: int
     methods: int = 0       # NEWLY adapted unique methods from this entry
     duplicates: int = 0    # methods skipped because an earlier entry already
@@ -88,45 +92,62 @@ def dex_entries(apk_bytes: bytes) -> list[tuple[str, int, bytes | None, str | No
     return out
 
 
-def adapt_code(apk_bytes: bytes):
-    """Adapt every selected classes*.dex into the core flow IR, accounting for
-    each entry's disposition instead of silently dropping it."""
+def adapt_code(apk_bytes: bytes, *, max_methods: int = MAX_METHODS, app_package: str | None = None):
+    """Adapt selected classes*.dex into the core flow IR, bounded app-first.
+
+    At most ``max_methods`` unique methods are adapted. Entries containing
+    classes under ``app_package`` (the manifest package; a prioritization
+    heuristic, not a trust boundary) spend the budget before library-only
+    entries; within an entry, adaptation stays file order, so an app entry
+    larger than the budget still loses methods. Duplicate-class first-wins
+    claims are always resolved in numeric runtime order BEFORE the budget
+    order is applied, so reordering never changes which copy of a class the
+    analysis sees. Every entry's disposition lands in the ledger: ``parsed``,
+    ``truncated-budget`` (budget cut inside the entry) or ``skipped-budget``
+    (budget already exhausted), alongside the existing failure/skip statuses.
+    """
     from androguard.core.dex import DEX
 
-    methods = {}
-    registers_sizes = {}
-    try_regions = {}
-    superclasses: dict[str, str] = {}
-    ledger: list[DexBlobCoverage] = []
+    if max_methods < 1:
+        raise ValueError("max_methods must be at least 1")
+    selected = list(dex_entries(apk_bytes))
+    ledger_by_entry: dict[int, DexBlobCoverage] = {}
+    # Phase 1: parse once and resolve first-wins claims in runtime order.
+    # Duplicate class bodies across dex files: the runtime resolves a class
+    # from the FIRST dex in classpath order (DexPathList searches its elements
+    # front to back; AOSP dx documents the same policy as
+    # CollisionPolicy.KEEP_FIRST). The WHOLE duplicate class is skipped, never
+    # merged per-method: methods that exist only in the later copy do not
+    # exist at runtime. ANY duplicate class marks ambiguity: first-wins is a
+    # classpath-order assumption, not a runtime check.
+    parsed: list[tuple[int, str, int, object, bool, list, int, bool]] = []
     seen_classes: dict[str, set[tuple[str, str]]] = {}
-    for entry, size, raw, skip_reason in dex_entries(apk_bytes):
+    superclasses: dict[str, str] = {}
+    prefix = app_package + "." if app_package else None
+    for position, (entry, size, raw, skip_reason) in enumerate(selected):
         if raw is None:
             reason = skip_reason or ""
-            ledger.append(DexBlobCoverage(
+            ledger_by_entry[position] = DexBlobCoverage(
                 entry,
                 "skipped-oversized" if "exceeds" in reason
                 else "duplicate-entry" if "duplicate" in reason
                 else "skipped-aggregate",
-                size, error=skip_reason))
+                size, error=skip_reason)
             continue
         try:
             vm = DEX(raw)
         except Exception as exc:
-            ledger.append(DexBlobCoverage(entry, "failed-parse", size,
-                                          error=f"{type(exc).__name__}"))
+            ledger_by_entry[position] = DexBlobCoverage(entry, "failed-parse", size,
+                                                        error=f"{type(exc).__name__}")
             continue
-        # Duplicate class bodies across dex files: the runtime resolves a
-        # class from the FIRST dex in classpath order (DexPathList searches
-        # its elements front to back; AOSP dx documents the same policy as
-        # CollisionPolicy.KEEP_FIRST). The WHOLE duplicate class is skipped,
-        # never merged per-method: methods that exist only in the later copy
-        # do not exist at runtime. ANY duplicate class marks ambiguity:
-        # first-wins is a classpath-order assumption, not a runtime check.
-        entry_methods = 0
+        claimed = []
         entry_duplicates = 0
         entry_ambiguous = False
+        app_bearing = False
         for cls in vm.get_classes():
             dotted = cls.get_name()[1:-1].replace("/", ".")
+            if app_package and (dotted == app_package or dotted.startswith(prefix)):
+                app_bearing = True
             class_methods = list(cls.get_methods())
             if dotted in seen_classes:
                 # ANY duplicate class marks ambiguity, identical signatures or
@@ -141,11 +162,32 @@ def adapt_code(apk_bytes: bytes):
             sup = cls.get_superclassname()
             if sup:
                 superclasses[dotted] = sup[1:-1].replace("/", ".")
+            claimed.append((dotted, class_methods))
+        parsed.append((position, entry, size, vm, app_bearing, claimed,
+                       entry_duplicates, entry_ambiguous))
+    # Phase 2: adapt claimed methods app-first, bounded by max_methods. The
+    # sort is stable, so runtime order is preserved within each group.
+    parsed.sort(key=lambda item: 0 if item[4] else 1)
+    methods = {}
+    registers_sizes = {}
+    try_regions = {}
+    budget_exhausted = False
+    for position, entry, size, vm, _app, claimed, entry_duplicates, entry_ambiguous in parsed:
+        if budget_exhausted:
+            ledger_by_entry[position] = DexBlobCoverage(
+                entry, "skipped-budget", size, duplicates=entry_duplicates,
+                ambiguous=entry_ambiguous, error="global method budget exhausted")
+            continue
+        entry_methods = 0
+        for dotted, class_methods in claimed:
             for em in class_methods:
                 ref = MethodRef(dotted, em.get_name(), em.get_descriptor())
                 if ref in methods:
                     entry_duplicates += 1
                     continue
+                if len(methods) >= max_methods:
+                    budget_exhausted = True
+                    break
                 blocks = flow_scan_from_androguard(vm, em)
                 if blocks is None:
                     continue
@@ -161,9 +203,21 @@ def adapt_code(apk_bytes: bytes):
                 )
                 if regions:
                     try_regions[ref] = regions
-        ledger.append(DexBlobCoverage(entry, "parsed", size, methods=entry_methods,
-                                      duplicates=entry_duplicates,
-                                      ambiguous=entry_ambiguous,
-                                      error="duplicate class body with divergent methods"
-                                      if entry_ambiguous else None))
+            if budget_exhausted:
+                break
+        if budget_exhausted:
+            ledger_by_entry[position] = DexBlobCoverage(
+                entry,
+                "truncated-budget" if entry_methods else "skipped-budget",
+                size, methods=entry_methods, duplicates=entry_duplicates,
+                ambiguous=entry_ambiguous, error="global method budget exhausted")
+        else:
+            ledger_by_entry[position] = DexBlobCoverage(
+                entry, "parsed", size, methods=entry_methods,
+                duplicates=entry_duplicates, ambiguous=entry_ambiguous,
+                error="duplicate class body with divergent methods"
+                if entry_ambiguous else None)
+    # The ledger reports every discovered entry in runtime order, whatever the
+    # adaptation order was.
+    ledger = [ledger_by_entry[position] for position in range(len(selected))]
     return methods, registers_sizes, superclasses, try_regions, ledger

@@ -525,3 +525,226 @@ def test_service_and_dto_share_one_coverage_predicate():
             package_name="p", methods_adapted=0, ledger=cov, exposures=())
         assert result.dex_complete is expected
         assert dex_ledger_complete(cov) is expected
+
+
+# ---------------------------------------------------------------------------
+# bounded app-first adaptation
+# ---------------------------------------------------------------------------
+
+
+class _BudgetCode:
+    tries = ()
+
+    def get_registers_size(self):
+        return 2
+
+
+class _BudgetMethod:
+    def __init__(self, name, descriptor="()V"):
+        self._name, self._descriptor = name, descriptor
+
+    def get_name(self):
+        return self._name
+
+    def get_descriptor(self):
+        return self._descriptor
+
+    def get_code(self):
+        return _BudgetCode()
+
+
+class _BudgetClass:
+    def __init__(self, descriptor, methods, superclass="Ljava/lang/Object;"):
+        self._name, self._methods, self._super = descriptor, list(methods), superclass
+
+    def get_name(self):
+        return self._name
+
+    def get_methods(self):
+        return list(self._methods)
+
+    def get_superclassname(self):
+        return self._super
+
+
+class _BudgetDex:
+    def __init__(self, classes):
+        self._classes = list(classes)
+
+    def get_classes(self):
+        return list(self._classes)
+
+
+def _budget_apk(entries: dict[str, bytes]) -> bytes:
+    stream = BytesIO()
+    with zipfile.ZipFile(stream, "w") as archive:
+        archive.writestr("AndroidManifest.xml", _PROVIDER_MANIFEST)
+        for name, raw in entries.items():
+            archive.writestr(name, raw)
+    return stream.getvalue()
+
+
+def _patch_budget_dex(monkeypatch, fakes: dict[bytes, object]):
+    monkeypatch.setattr("androguard.core.dex.DEX", lambda raw: fakes[raw])
+    monkeypatch.setattr(
+        "mobius.adapters.flow_adapt.flow_scan_from_androguard",
+        lambda vm, em: (id(vm), em.get_name()),
+    )
+
+
+def test_budget_truncates_inside_an_app_entry_and_skips_library(monkeypatch):
+    from mobius.adapters.flow_adapt import adapt_code
+    from mobius.adapters.provider_payload import dex_ledger_complete
+
+    fakes = {
+        b"lib": _BudgetDex([_BudgetClass("Lcom/lib/Util;", [_BudgetMethod(n) for n in ("a", "b", "c")])]),
+        b"app": _BudgetDex([
+            _BudgetClass("Lcom/example/app/Main;", [_BudgetMethod("onCreate"), _BudgetMethod("onStart")]),
+            _BudgetClass("Lcom/example/app/Other;", [_BudgetMethod("m")]),
+        ]),
+    }
+    _patch_budget_dex(monkeypatch, fakes)
+    apk = _budget_apk({"classes.dex": b"lib", "classes2.dex": b"app"})
+    methods, _r, _s, _t, ledger = adapt_code(apk, max_methods=2, app_package="com.example.app")
+    # the app entry spent the whole budget and was cut mid-entry; the library
+    # entry was never reached. Both downgrade coverage; neither is "parsed".
+    assert len(methods) == 2
+    assert {m.class_name for m in methods} == {"com.example.app.Main"}
+    by_entry = {b.entry: b for b in ledger}
+    assert [b.entry for b in ledger] == ["classes.dex", "classes2.dex"]  # runtime order
+    assert by_entry["classes2.dex"].status == "truncated-budget"
+    assert by_entry["classes2.dex"].methods == 2
+    assert by_entry["classes.dex"].status == "skipped-budget"
+    assert by_entry["classes.dex"].methods == 0
+    assert dex_ledger_complete(ledger) is False
+
+
+def test_budget_exhaustion_at_entry_boundary_skips_whole_entry(monkeypatch):
+    from mobius.adapters.flow_adapt import adapt_code
+    from mobius.adapters.provider_payload import dex_ledger_complete
+
+    fakes = {
+        b"lib": _BudgetDex([_BudgetClass("Lcom/lib/Util;", [_BudgetMethod("a")])]),
+        b"app": _BudgetDex([
+            _BudgetClass("Lcom/example/app/Main;", [_BudgetMethod("onCreate"), _BudgetMethod("onStart")]),
+            _BudgetClass("Lcom/example/app/Other;", [_BudgetMethod("m")]),
+        ]),
+    }
+    _patch_budget_dex(monkeypatch, fakes)
+    apk = _budget_apk({"classes.dex": b"lib", "classes2.dex": b"app"})
+    methods, _r, _s, _t, ledger = adapt_code(apk, max_methods=3, app_package="com.example.app")
+    assert len(methods) == 3
+    by_entry = {b.entry: b for b in ledger}
+    # the app entry exactly fills the budget: fully parsed; the library entry
+    # is then skipped whole, not truncated.
+    assert by_entry["classes2.dex"].status == "parsed"
+    assert by_entry["classes2.dex"].methods == 3
+    assert by_entry["classes.dex"].status == "skipped-budget"
+    assert dex_ledger_complete(ledger) is False
+
+
+def test_first_wins_duplicate_resolution_follows_runtime_order_not_budget_order(monkeypatch):
+    from mobius.adapters.flow_adapt import adapt_code
+
+    lib_vm = _BudgetDex([
+        _BudgetClass("Lcom/example/app/Dup;", [_BudgetMethod("m1")]),
+        _BudgetClass("Lcom/lib/Util;", [_BudgetMethod("u")]),
+    ])
+    app_vm = _BudgetDex([
+        _BudgetClass("Lcom/example/app/Dup;", [_BudgetMethod("m1")]),
+        _BudgetClass("Lcom/example/app/Main;", [_BudgetMethod("onCreate")]),
+    ])
+    fakes = {b"lib": lib_vm, b"app": app_vm}
+    _patch_budget_dex(monkeypatch, fakes)
+    apk = _budget_apk({"classes.dex": b"lib", "classes2.dex": b"app"})
+    methods, _r, superclasses, _t, ledger = adapt_code(apk, max_methods=10, app_package="com.example.app")
+    # classes.dex claimed Dup first (runtime order), and its copy is the one
+    # adapted even though the app entry was visited first under the budget order.
+    dup = next(m for m in methods if m.class_name == "com.example.app.Dup")
+    assert methods[dup] == (id(lib_vm), "m1")
+    assert len(methods) == 3
+    by_entry = {b.entry: b for b in ledger}
+    assert by_entry["classes2.dex"].ambiguous is True
+    assert by_entry["classes2.dex"].duplicates == 1
+    assert by_entry["classes2.dex"].status == "parsed"
+    # superclasses of claimed classes stay recorded for the winning copies
+    assert superclasses["com.example.app.Dup"] == "java.lang.Object"
+
+
+def test_no_package_means_plain_runtime_order(monkeypatch):
+    from mobius.adapters.flow_adapt import adapt_code
+
+    fakes = {
+        b"lib": _BudgetDex([_BudgetClass("Lcom/lib/Util;", [_BudgetMethod(n) for n in ("a", "b", "c")])]),
+        b"app": _BudgetDex([_BudgetClass("Lcom/example/app/Main;", [_BudgetMethod("onCreate")])]),
+    }
+    _patch_budget_dex(monkeypatch, fakes)
+    apk = _budget_apk({"classes.dex": b"lib", "classes2.dex": b"app"})
+    methods, _r, _s, _t, ledger = adapt_code(apk, max_methods=3)
+    by_entry = {b.entry: b for b in ledger}
+    # without a package, name/runtime order decides: library entry fills the
+    # budget exactly (parsed), app entry skipped whole.
+    assert by_entry["classes.dex"].status == "parsed"
+    assert by_entry["classes.dex"].methods == 3
+    assert by_entry["classes2.dex"].status == "skipped-budget"
+    assert len(methods) == 3
+
+
+def test_payload_accepts_budget_statuses_and_accounts_adapted_methods():
+    apk = _fixture_apk()
+    sha = hashlib.sha256(apk).hexdigest()
+    payload = provider_analysis_payload(
+        artifact_sha256=sha,
+        package_name="com.example",
+        methods_adapted=2,
+        ledger=[
+            DexBlobCoverage("classes.dex", "skipped-budget", 100, error="global method budget exhausted"),
+            DexBlobCoverage("classes2.dex", "truncated-budget", 100, methods=2,
+                            error="global method budget exhausted"),
+        ],
+        exposures=[_sample_exposure()],
+    )
+    result = validate_provider_analysis_payload(json.dumps(payload).encode(), sha)
+    assert result.methods_adapted == 2
+    assert result.dex_complete is False  # no false confirm/refute on partial coverage
+
+
+def test_payload_rejects_methods_count_ignoring_truncated_entries():
+    apk = _fixture_apk()
+    sha = hashlib.sha256(apk).hexdigest()
+    payload = provider_analysis_payload(
+        artifact_sha256=sha,
+        package_name="com.example",
+        methods_adapted=3,
+        ledger=[DexBlobCoverage("classes.dex", "truncated-budget", 100, methods=2)],
+        exposures=[_sample_exposure()],
+    )
+    with pytest.raises(ValueError, match="contradicts the DEX ledger"):
+        validate_provider_analysis_payload(json.dumps(payload).encode(), sha)
+
+
+def test_entrypoint_binds_adaptation_budget_and_manifest_package(tmp_path, monkeypatch, capsys):
+    from mobius.adapters.dex import MAX_METHODS
+    from mobius.worker import provider_analysis as entry
+
+    staged = tmp_path / "input.apk"
+    apk = _fixture_apk()
+    staged.write_bytes(apk)
+    monkeypatch.setattr(entry, "_STAGED_INPUT", staged)
+    captured = {}
+    real_adapt = entry.adapt_code
+
+    def spy(apk_bytes, **kwargs):
+        captured.update(kwargs)
+        return real_adapt(apk_bytes, **kwargs)
+
+    monkeypatch.setattr(entry, "adapt_code", spy)
+
+    import sys
+    argv = sys.argv
+    try:
+        sys.argv = ["mobius-provider-analysis", "--input", str(staged)]
+        assert entry.main() == 0
+    finally:
+        sys.argv = argv
+    assert captured == {"max_methods": MAX_METHODS, "app_package": "com.example"}

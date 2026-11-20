@@ -113,7 +113,9 @@ class ProviderAnalysisService:
                 "authorized target package does not match the package parsed from this APK"
             )
 
-        methods, registers_sizes, superclasses, try_regions, ledger = adapt_code(apk_bytes)
+        methods, registers_sizes, superclasses, try_regions, ledger = adapt_code(
+            apk_bytes, app_package=surface.package_name
+        )
         # The same predicate as the API result DTO (shared helper): an
         # ambiguous duplicate class downgrades coverage exactly like a failed
         # parse, in both directions (no false confirmation, no false refutation).

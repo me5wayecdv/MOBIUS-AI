@@ -40,10 +40,17 @@ development only: it answers 503 unless the environment is `test` or
   smuggles extra fields (for example a `verdict`) is schema-invalid.
 - Distinct failure classes: exit 2 staged-input contract violation, 3
   analysis failure, 4 output budget exceeded. A DEX entry that cannot be
-  parsed is NOT a failure; it is ledger evidence that downgrades the claims
-  depending on it.
+  parsed or is cut by the method budget is NOT a failure; it is ledger
+  evidence that downgrades the claims depending on it.
 - Output budget: 4 MiB (`MAX_PROVIDER_JSON_BYTES`), enforced in the
   entrypoint and again at apply time.
+- Method adaptation is bounded app-first at the shared 50,000-method cap
+  (`MAX_METHODS`), enforced DURING adaptation: entries containing classes
+  under the manifest package are adapted first (prioritization heuristic,
+  not a trust boundary); entries the budget cuts are ledger evidence
+  (`truncated-budget` / `skipped-budget`) that downgrades guard-absence
+  claims to unknown exactly like a failed parse. The worker no longer
+  refuses oversized APKs after the fact.
 
 ## Publication
 
