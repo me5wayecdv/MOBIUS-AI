@@ -67,20 +67,31 @@ _IMPACT_BY_MASWE_PREFIX: Mapping[str, float] = MappingProxyType(
         "MASWE-0002": 0.70,
         "MASWE-001": 0.80,   # crypto
         "MASWE-005": 0.80,   # network
-        # Exact-ID entries added with the 2026-11-20 gate-taxonomy correction.
-        # Each preserves the numeric weight the category carried BEFORE the
-        # correction (metadata fixed, scoring deliberately unchanged; any
-        # re-weighting is a separate decision).
-        "MASWE-0018": 0.95,  # component/provider exposure gates (were tagged 0029)
-        "MASWE-0050": 0.95,  # untrusted-data-to-sink gates (were tagged 0029)
-        "MASWE-0032": 0.95,  # implicit-intent gate (was tagged 0029)
-        "MASWE-0033": 0.95,  # webview bridge (was tagged 0029)
-        "MASWE-0035": 0.95,  # webview untrusted content (was tagged 0029)
-        "MASWE-0049": 0.95,  # dynamic code loading (was tagged 0029)
-        "MASWE-0004": 0.70,  # hardcoded secret (was tagged 0001)
-        "MASWE-0007": 0.80,  # improper encryption (was the MASWE-001 prefix)
-        "MASWE-0008": 0.80,  # improper hashing (was the MASWE-001 prefix)
-        "MASWE-0026": 0.80,  # cleartext transport (was the MASWE-005 prefix)
+    }
+)
+
+# Preserved impact weight per gate category - scoring metadata, deliberately
+# decoupled from the gate's MASWE taxonomy IDs. Each value is the weight the
+# category's candidates resolved to BEFORE the 2026-11-20 taxonomy correction,
+# when the gates were mis-tagged (most on MASWE-0029). Keying the weight off the
+# category rather than the corrected IDs keeps two things true at once: the
+# report shows the source-verified weakness, and no score moves - not the gate's
+# own candidates, not catalogue candidates that happen to share an ID, and not
+# historical entries whose stored tags still resolve through the prefix table.
+# Any re-weighting on its own merits is a separate, explicitly reviewed decision.
+_IMPACT_BY_GATE_CATEGORY: Mapping[str, float] = MappingProxyType(
+    {
+        "exported-component-no-permission": 0.95,
+        "exported-provider-unprotected-sink": 0.95,
+        "exported-provider-path-traversal": 0.95,
+        "webview-rce-surface": 0.95,
+        "dynamic-code-loading": 0.95,
+        "implicit-intent-sensitive-data": 0.95,
+        "deeplink-unvalidated-input": 0.95,
+        "hardcoded-secret": 0.70,
+        "insecure-storage": 0.70,
+        "weak-crypto": 0.80,
+        "cleartext-transport": 0.80,
     }
 )
 
@@ -117,6 +128,19 @@ def impact_weight(maswe: tuple[str, ...]) -> float:
     return best if best else 0.5
 
 
+def entry_impact(entry: "FrontierEntry") -> float:
+    """Impact for one frontier entry.
+
+    Gate-seeded entries carry their category as explicit scoring metadata and use
+    its preserved weight; every other entry resolves its tags through the prefix
+    table exactly as before. Stored rows predate gate_category (NULL) and take the
+    table path, so historical scoring is untouched.
+    """
+    if entry.gate_category is not None and entry.gate_category in _IMPACT_BY_GATE_CATEGORY:
+        return _IMPACT_BY_GATE_CATEGORY[entry.gate_category]
+    return impact_weight(entry.relates_to_maswe)
+
+
 def risk_penalty(action: str, intensity: int) -> float:
     """0 for passive actions, a finite penalty when permitted, infinite when not.
 
@@ -148,7 +172,7 @@ def score(entry: FrontierEntry, ctx: ScoreContext) -> float:
     p_informative = ctx.prior_of(entry.action)
     # An action that is expected to confirm what is already believed is worth less.
     info_gain = min(max(1.0 - entry.score if entry.score else 1.0, 0.05), 1.0)
-    impact = impact_weight(entry.relates_to_maswe)
+    impact = entry_impact(entry)
     decay = ctx.depth_decay**entry.depth
 
     return (p_informative * info_gain * impact * decay) / (ctx.cost_of(entry.action) * (1.0 + risk))

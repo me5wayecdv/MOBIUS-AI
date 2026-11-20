@@ -125,6 +125,10 @@ def test_recon_queues_only_unguarded_non_launcher_components(session, store, sta
     targets = {q.action_args["component"] for q in queued}
     assert targets == {"com.example.demo.ExportActivity", "com.example.demo.BootReceiver"}
     assert all(q.required_agent == "SPECTRE" for q in queued)
+    # Gate-seeded candidates carry the corrected taxonomy ID plus the category as
+    # scoring metadata, so the metadata fix cannot move their score.
+    assert all(q.relates_to_maswe == ["MASWE-0018"] for q in queued)
+    assert all(q.gate_category == "exported-component-no-permission" for q in queued)
 
 
 def test_recon_emits_surface_ready_then_the_transition(session, store, started):

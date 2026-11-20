@@ -317,6 +317,9 @@ class ReconService:
                     # MASWE-0018 (Lack of Authentication or Authorization on App
                     # Components), not MASWE-0029 (Insecure Deep Links).
                     relates_to_maswe=["MASWE-0018"],
+                    # Scoring metadata: impact comes from the category's preserved
+                    # weight, so the corrected taxonomy ID cannot move the score.
+                    gate_category="exported-component-no-permission",
                     score=0.0,  # NEXUS scores it when it ranks the frontier
                     depth=0,
                     state="queued",

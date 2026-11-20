@@ -256,6 +256,10 @@ class FrontierEntryRow(Base):
     action_args: Mapped[dict[str, Any]] = mapped_column(JSON, nullable=False, default=dict)
     required_agent: Mapped[str] = mapped_column(String(60), nullable=False)
     relates_to_maswe: Mapped[list[str]] = mapped_column(JSON, nullable=False, default=list)
+    #: Scoring metadata for gate-seeded entries (migration 0010). NULL on every
+    #: pre-existing row and on non-gate candidates: those resolve impact from
+    #: relates_to_maswe exactly as before. Taxonomy corrections must not change it.
+    gate_category: Mapped[str | None] = mapped_column(String(80))
     score: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     depth: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     state: Mapped[str] = mapped_column(String(20), nullable=False, default="queued")
