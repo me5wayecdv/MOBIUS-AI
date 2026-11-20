@@ -392,7 +392,7 @@ def test_veritas_unconvertible_reply_is_captured_needs_review_not_fabricated(ses
     assert decision.output_json["raw_response_clipped"] is False
 
 
-def test_veritas_needs_review_raw_preservation_is_clipped(session, reviewed_finding):
+def test_veritas_needs_review_raw_preservation_is_clipped(session, store, reviewed_finding):
     from mobius.services.veritas import _NEEDS_REVIEW_RAW_LIMIT
 
     finding_id, investigation_id, _, evidence_id = reviewed_finding
@@ -402,15 +402,20 @@ def test_veritas_needs_review_raw_preservation_is_clipped(session, reviewed_find
     factory = sessionmaker(bind=session.get_bind(), expire_on_commit=False, future=True)
 
     result = VeritasReviewService(
-        session, gateway=gateway, session_factory=factory
+        session, gateway=gateway, session_factory=factory, store=store
     ).review(finding_id, producer_model_id="producer-v1")
 
     assert result["status"] == "needs_review"
     decision = session.execute(select(DecisionRow).where(
         DecisionRow.id == result["decision_id"],
     )).scalar_one()
-    assert len(decision.output_json["raw_response"]) == _NEEDS_REVIEW_RAW_LIMIT
-    assert decision.output_json["raw_response_clipped"] is True
+    out = decision.output_json
+    # the inline copy is a clip and SAYS so; the full raw is a stored artifact
+    assert len(out["raw_response"]) == _NEEDS_REVIEW_RAW_LIMIT
+    assert out["raw_response_clipped"] is True
+    assert out["raw_response_length"] == _NEEDS_REVIEW_RAW_LIMIT + 500
+    assert out["raw_artifact_key"]
+    assert store.get(out["raw_artifact_key"]).decode() == huge
 
 
 def test_veritas_conflicting_payloads_are_never_silently_chosen(session, reviewed_finding):

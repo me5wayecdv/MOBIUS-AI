@@ -104,7 +104,7 @@ def _fail(summary: dict[str, Any], session_factory, investigation_id: str, findi
         diag.close()
 
 
-def _review_one(summary: dict[str, Any], session_factory, gateway, investigation_id: str, finding_id: str) -> None:
+def _review_one(summary: dict[str, Any], session_factory, gateway, investigation_id: str, finding_id: str, store=None) -> None:
     session = session_factory()
     try:
         if session.get_bind().dialect.name == "postgresql":
@@ -144,6 +144,7 @@ def _review_one(summary: dict[str, Any], session_factory, gateway, investigation
                 session,
                 gateway=gateway,
                 session_factory=session_factory,
+                store=store,
             ).review(finding_id, producer_model_id=SENTINEL_PRODUCER_MODEL_ID)
             session.commit()
         except ModelConsentRequired:
@@ -178,6 +179,7 @@ def run_auto_review_pass(
     gateway,
     investigation_id: str,
     max_reviews: int = MAX_AUTO_REVIEWS_PER_RUN,
+    store=None,
 ) -> dict[str, Any]:
     """Review each confirmed, unreviewed, deterministically-produced finding once.
 
@@ -212,5 +214,5 @@ def run_auto_review_pass(
         if summary["attempted"] >= max_reviews:
             _skip(summary, finding_id, "run-cap-reached")
             continue
-        _review_one(summary, session_factory, gateway, investigation_id, finding_id)
+        _review_one(summary, session_factory, gateway, investigation_id, finding_id, store=store)
     return summary

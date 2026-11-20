@@ -20,6 +20,7 @@ from .model_provider import (
     InvestigationModelGateway,
     ModelConsentRequired,
     ModelOutputInvalid,
+    ModelProviderError,
     StructuredModelGateway,
 )
 
@@ -103,10 +104,12 @@ class VeritasReviewService:
         *,
         gateway: StructuredModelGateway | None = None,
         session_factory=None,
+        store=None,
     ) -> None:
         self.session = session
         self.gateway = gateway
         self.session_factory = session_factory
+        self.store = store
 
     def review(
         self,
@@ -374,9 +377,17 @@ class VeritasReviewService:
         )
         clipped_raw = None
         raw_clipped = False
+        raw_artifact_key = None
         if raw_content is not None:
             clipped_raw = raw_content[:_NEEDS_REVIEW_RAW_LIMIT]
             raw_clipped = len(raw_content) > _NEEDS_REVIEW_RAW_LIMIT
+            if raw_clipped:
+                if self.store is None:
+                    raise ModelProviderError(
+                        "needs-review raw reply exceeds the inline limit and no "
+                        "artifact store is configured for full preservation"
+                    )
+                raw_artifact_key, _ = self.store.put(raw_content.encode("utf-8"))
         decision = DecisionRow(
             id=new_id(IdPrefix.DECISION),
             investigation_id=finding.investigation_id,
@@ -399,8 +410,13 @@ class VeritasReviewService:
             output_json={
                 "status": "needs_review",
                 "failure_class": reason,
+                # Inline copy is a CLIP, not the full reply, whenever
+                # raw_response_clipped is true; the complete bytes live at
+                # raw_artifact_key in the investigation's artifact store.
                 "raw_response": clipped_raw,
                 "raw_response_clipped": raw_clipped,
+                "raw_response_length": len(raw_content) if raw_content is not None else 0,
+                "raw_artifact_key": raw_artifact_key,
             },
             created_at=utcnow(),
         )
