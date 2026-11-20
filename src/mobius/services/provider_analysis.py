@@ -289,8 +289,15 @@ class ProviderAnalysisService:
                     investigation_id=investigation_id,
                     kind=EvidenceKind.TOOL_OUTPUT,
                     content=json.dumps(document, indent=2).encode(),
+                    # The summary is the primary text a reviewer reads: it
+                    # must carry the established manifest facts (export state,
+                    # guarding permission or its absence), not only the gate
+                    # outcome, or the review package undersells what the
+                    # analysis actually established.
                     summary=(
                         f"provider-analysis: {exposure.provider} {operation.operation} - "
+                        f"exported {exposure.exported}, "
+                        f"permission {operation.protection_permission or 'none'}, "
                         f"protection {operation.protection_status}, "
                         f"caller_check_absent {operation.caller_check_absent}"
                     ),

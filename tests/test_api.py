@@ -715,6 +715,16 @@ def test_provider_analysis_validates_exported_provider(client):
     assert len(findings) == 2
     assert {f["category"] for f in findings} == {"exported-provider-unprotected-sink"}
 
+    # The evidence summary is the primary text a reviewer reads: it must
+    # carry the established manifest facts, not only the gate outcome.
+    evidence_items = client.get(f"/api/v1/scans/{scan['id']}/evidence").json()["items"]
+    provider_summaries = [e["summary"] for e in evidence_items
+                          if e["summary"].startswith("provider-analysis:")]
+    assert len(provider_summaries) == 2
+    for summary in provider_summaries:
+        assert "exported True" in summary
+        assert "protection unprotected" in summary
+
     # the ARCHIVIST report is composed from the same findings: write it, then
     # read it back and confirm the provider analysis is visible there.
     written = client.post(f"/api/v1/scans/{scan['id']}/report")
