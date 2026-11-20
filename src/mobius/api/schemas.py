@@ -64,7 +64,9 @@ class ValidationRequest(_Base):
 
 class ModelConsentRequest(_Base):
     enabled: bool
-    provider: str | None = Field(default=None, pattern=r"^ollama$")
+    # ollama = local-only inference. opencode = prompts leave the machine to
+    # upstream providers; consent to it is an explicit data-disclosure decision.
+    provider: str | None = Field(default=None, pattern=r"^(ollama|opencode)$")
     # Opt-in for the post-investigation advisory VERITAS auto-review pass.
     # Default-off; requires enabled consent. Advisory only - deterministic
     # gates remain the sole verdict authority either way.

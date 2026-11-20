@@ -55,6 +55,7 @@ from ..services.model_provider import (
     ModelConsentRequired,
     ModelOutputInvalid,
     OllamaProvider,
+    OpenCodeCliProvider,
     StructuredModelGateway,
 )
 from ..services.nexus_hypotheses import NexusHypothesisService
@@ -458,11 +459,10 @@ def _live_report(mode: str = "ollama") -> Report:
 
     ``ollama`` drives a local Ollama model; ``opencode`` drives an OpenCode
     free-tier model through the official CLI (eval-only adapter, see
-    mobius.tools.opencode_provider). Both measure the same acceptance floor.
+    mobius.services.model_provider). Both measure the same acceptance floor.
     """
     from ..api.config import Settings
     from ..api.deps import AppContext, set_context
-    from .opencode_provider import OpenCodeCliProvider
 
     model = os.environ.get("MOBIUS_MODEL_NAME", "")
     if not model.strip():
