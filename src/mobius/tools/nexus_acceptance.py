@@ -429,7 +429,13 @@ def _live_report(mode: str = "ollama") -> Report:
                                 f"/{result['token_usage'].get('output_tokens')}; "
                                 f"hypotheses={len(result['hypotheses'])} "
                                 f"({grounded} with evidence refs); "
-                                f"claims: {claims}"),
+                                f"claims: {claims}" + (
+                                    f"; CLI totals in/out: "
+                                    f"{provider.last_cli_input_tokens}/"
+                                    f"{provider.last_cli_output_tokens} "
+                                    f"(includes OpenCode platform overhead)"
+                                    if mode == "opencode" else ""
+                                )),
                     ))
                 except (ModelConsentRequired, ModelOutputInvalid, ModelBudgetExceeded) as exc:
                     elapsed = time.monotonic() - started

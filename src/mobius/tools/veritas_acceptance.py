@@ -430,7 +430,13 @@ def _live_report(mode: str = "ollama") -> Report:
                         ok=accepted,
                         observed=f"persisted:{result['disposition']}",
                         detail=(f"measured {elapsed:.1f}s (timeout budget {timeout}s); "
-                                f"tokens in/out: {result.get('input_tokens')}/{result.get('output_tokens')}"),
+                                f"tokens in/out: {result.get('input_tokens')}/{result.get('output_tokens')}" + (
+                                    f"; CLI totals in/out: "
+                                    f"{provider.last_cli_input_tokens}/"
+                                    f"{provider.last_cli_output_tokens} "
+                                    f"(includes OpenCode platform overhead)"
+                                    if mode == "opencode" else ""
+                                )),
                     ))
                 except (ModelConsentRequired, ModelOutputInvalid, ModelBudgetExceeded) as exc:
                     elapsed = time.monotonic() - started
