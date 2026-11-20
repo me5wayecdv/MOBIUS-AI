@@ -273,24 +273,52 @@ _PURE_REJECT_PREFIXES = (
 )
 
 
+def _index_flows(
+    flows: Mapping[MethodRef, object],
+) -> tuple[dict[str, list[MethodRef]], dict[tuple[str, str, str], list[MethodRef]]]:
+    """One-pass lookup indexes over the flow map.
+
+    Returns (constructors by class, methods by normalised
+    (class, name, descriptor) key). Bucket order preserves the mapping's
+    iteration order, so first-match and unique-match lookups return exactly
+    the element a repeated full scan would find. Pure re-indexing: matching
+    predicates, verdict logic, guards and ordering are unchanged.
+    """
+    ctors: dict[str, list[MethodRef]] = {}
+    by_key: dict[tuple[str, str, str], list[MethodRef]] = {}
+    for ref in flows:
+        if ref.name in ("<init>", "<clinit>"):
+            ctors.setdefault(ref.class_name, []).append(ref)
+        key = (ref.class_name, ref.name, re.sub(r"\s+", "", ref.descriptor))
+        by_key.setdefault(key, []).append(ref)
+    return ctors, by_key
+
+
 def _resolve_callee(
     flows: Mapping[MethodRef, object],
     invoke_class: str,
     invoke_method: str,
     invoke_descriptor: str,
+    flow_index: Mapping[tuple[str, str, str], Sequence[MethodRef]] | None = None,
 ) -> MethodRef | None:
     """Exactly one normalised (class, name, descriptor) match, else None.
 
     Zero matches (framework/external code, missing flows) and ambiguous matches
-    (duplicate definitions) both fail closed: never guessed.
+    (duplicate definitions) both fail closed: never guessed. ``flow_index`` is
+    an optional prebuilt (class, name, descriptor) -> refs index (see
+    ``_index_flows``); without it the flow map is scanned directly.
     """
     want_desc = re.sub(r"\s+", "", invoke_descriptor)
-    matches = [
-        m for m in flows
-        if m.class_name == invoke_class[1:-1].replace("/", ".")
-        and m.name == invoke_method
-        and re.sub(r"\s+", "", m.descriptor) == want_desc
-    ]
+    if flow_index is not None:
+        matches = list(flow_index.get(
+            (invoke_class[1:-1].replace("/", "."), invoke_method, want_desc), ()))
+    else:
+        matches = [
+            m for m in flows
+            if m.class_name == invoke_class[1:-1].replace("/", ".")
+            and m.name == invoke_method
+            and re.sub(r"\s+", "", m.descriptor) == want_desc
+        ]
     if len(matches) != 1:
         return None
     return matches[0]
@@ -469,6 +497,7 @@ def _derived_transform_literal(
     producer: CallRecord,
     flows: Mapping[MethodRef, Sequence[FlowBlock]],
     frame_info: Mapping[MethodRef, tuple[int, bool]] | None,
+    flow_index: Mapping[tuple[str, str, str], Sequence[MethodRef]] | None = None,
 ) -> str | None:
     """Literal with a may-depend route through a pure return-transform, else None.
 
@@ -494,7 +523,7 @@ def _derived_transform_literal(
     if frame_info is None:
         return None
     callee = _resolve_callee(flows, producer.invoke_class, producer.invoke_method,
-                             producer.invoke_descriptor)
+                             producer.invoke_descriptor, flow_index=flow_index)
     if callee is None or callee not in frame_info:
         return None
     registers_size, callee_static = frame_info[callee]
@@ -558,12 +587,18 @@ def detect_hardcoded_secrets(
     # (absence claims would rest on partial field knowledge).
     ctor_fields: dict[str, dict] = {}
     ctor_complete: dict[str, bool] = {}
+    # One-pass indexes shared by constructor seeding and call-target lookups.
+    # Rescanning the whole flow map per class / per call site is quadratic and
+    # is the demonstrated large-app bottleneck (classes x flows comparisons).
+    ctors_by_class: dict[str, list[MethodRef]] = {}
+    flow_by_key: dict[tuple[str, str, str], list[MethodRef]] = {}
     if flows:
+        ctors_by_class, flow_by_key = _index_flows(flows)
         classes = {m.class_name for m in flows}
         for cls in classes:
             summary: dict = {}
             complete_all = True
-            for m in sorted((m for m in flows if m.class_name == cls and m.name in ("<init>", "<clinit>")), key=str):
+            for m in sorted(ctors_by_class.get(cls, ()), key=str):
                 cscan = scan_method_flow(flows[m])
                 complete_all = complete_all and cscan.complete
                 for ref, origins in cscan.field_summary.items():
@@ -612,12 +647,14 @@ def detect_hardcoded_secrets(
                 # flow map keys may carry androguard's spaced descriptor form;
                 # the call record's is normalised compact. Match on both.
                 want_desc = re.sub(r"\s+", "", call.invoke_descriptor)
-                callee = next(
-                    (m for m in flows
-                     if m.class_name == call.invoke_class[1:-1].replace("/", ".")
-                     and m.name == call.invoke_method
-                     and re.sub(r"\s+", "", m.descriptor) == want_desc),
-                    None)
+                bucket = flow_by_key.get(
+                    (call.invoke_class[1:-1].replace("/", "."),
+                     call.invoke_method, want_desc))
+                # First match in flow-map iteration order, exactly as the
+                # previous linear next() scan (ambiguous keys keep first-match
+                # semantics here; the unique-match rule lives in
+                # _resolve_callee and is untouched).
+                callee = bucket[0] if bucket else None
                 if callee is None or callee.class_name != method.class_name or callee == method:
                     continue
                 tracked = ("lit", "keybytes", "ext")
@@ -702,13 +739,14 @@ def detect_hardcoded_secrets(
                     producer = calls_by_id.get(origin[1])
                     if producer is None or producer is call:
                         continue
-                    value = _derived_transform_literal(producer, flows, frame_info)
+                    value = _derived_transform_literal(producer, flows, frame_info,
+                                                       flow_index=flow_by_key)
                     if value is not None:
                         derived[pos] = (value, producer)
                 if not derived:
                     continue
                 callee = _resolve_callee(flows, call.invoke_class, call.invoke_method,
-                                         call.invoke_descriptor)
+                                         call.invoke_descriptor, flow_index=flow_by_key)
                 if callee is None or callee == method or callee not in (frame_info or {}):
                     continue
                 widths = _param_slots(call.invoke_descriptor)
