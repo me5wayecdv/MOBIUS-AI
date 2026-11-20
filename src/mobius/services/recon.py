@@ -313,7 +313,10 @@ class ReconService:
                     action="find_api_refs",
                     action_args={"component": component.name, "source": "manifest"},
                     required_agent="SPECTRE",
-                    relates_to_maswe=["MASWE-0029"],
+                    # Exported-component candidates: the verified weakness is
+                    # MASWE-0018 (Lack of Authentication or Authorization on App
+                    # Components), not MASWE-0029 (Insecure Deep Links).
+                    relates_to_maswe=["MASWE-0018"],
                     score=0.0,  # NEXUS scores it when it ranks the frontier
                     depth=0,
                     state="queued",

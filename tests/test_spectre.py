@@ -125,7 +125,7 @@ def test_confirmed_finding_is_persisted_with_its_gate_evidence(session, store, s
     assert all(finding.gate_evidence.values())
     # The finding carries the gate's weakness (exported component), not the sink's - the sink
     # family is recorded on the observation. Two different claims, two different columns.
-    assert finding.maswe == ["MASWE-0029"]
+    assert finding.maswe == ["MASWE-0018"]
 
 
 def test_guard_call_on_the_path_is_undetermined_not_rejected(session, store, surface_ready):

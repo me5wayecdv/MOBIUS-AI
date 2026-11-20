@@ -61,12 +61,26 @@ _INTENSITY_REQUIRED: Mapping[str, int] = MappingProxyType(
 # "leaks a preference" from "reaches a privileged data write".
 _IMPACT_BY_MASWE_PREFIX: Mapping[str, float] = MappingProxyType(
     {
-        "MASWE-0029": 0.95,  # platform / exported component to privileged sink
+        "MASWE-0029": 0.95,  # platform / deep links and (legacy) exported component to sink
         "MASWE-0030": 0.90,
         "MASWE-0001": 0.70,  # insecure storage
         "MASWE-0002": 0.70,
         "MASWE-001": 0.80,   # crypto
         "MASWE-005": 0.80,   # network
+        # Exact-ID entries added with the 2026-11-20 gate-taxonomy correction.
+        # Each preserves the numeric weight the category carried BEFORE the
+        # correction (metadata fixed, scoring deliberately unchanged; any
+        # re-weighting is a separate decision).
+        "MASWE-0018": 0.95,  # component/provider exposure gates (were tagged 0029)
+        "MASWE-0050": 0.95,  # untrusted-data-to-sink gates (were tagged 0029)
+        "MASWE-0032": 0.95,  # implicit-intent gate (was tagged 0029)
+        "MASWE-0033": 0.95,  # webview bridge (was tagged 0029)
+        "MASWE-0035": 0.95,  # webview untrusted content (was tagged 0029)
+        "MASWE-0049": 0.95,  # dynamic code loading (was tagged 0029)
+        "MASWE-0004": 0.70,  # hardcoded secret (was tagged 0001)
+        "MASWE-0007": 0.80,  # improper encryption (was the MASWE-001 prefix)
+        "MASWE-0008": 0.80,  # improper hashing (was the MASWE-001 prefix)
+        "MASWE-0026": 0.80,  # cleartext transport (was the MASWE-005 prefix)
     }
 )
 
