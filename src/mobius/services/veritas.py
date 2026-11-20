@@ -25,6 +25,11 @@ from .model_provider import (
 
 AGENT = "VERITAS"
 PROMPT_VERSION = "veritas-independent-review-v3"
+
+# Raw replies captured on needs-review are clipped to this many characters.
+# Generous enough to hold a full review reply for later operator inspection
+# or hand-conversion, bounded so a runaway response cannot bloat the row.
+_NEEDS_REVIEW_RAW_LIMIT = 8000
 CHALLENGE_TYPES = frozenset({
     "unsupported_claim",
     "contradictory_evidence",
@@ -354,6 +359,11 @@ class VeritasReviewService:
         The raw reply never becomes a structured verdict: no disposition is
         guessed and no citation is fabricated. ``reason`` is the sanitized
         failure class (schema locations and rule names, never model content).
+
+        The raw reply itself is preserved (clipped to _NEEDS_REVIEW_RAW_LIMIT)
+        inside the decision row so the project operator can inspect or
+        hand-convert it later; it is investigation-derived project data, never
+        leaves the server, and is excluded from API error messages.
         """
         import hashlib
 
@@ -362,6 +372,11 @@ class VeritasReviewService:
             if raw_content is not None
             else None
         )
+        clipped_raw = None
+        raw_clipped = False
+        if raw_content is not None:
+            clipped_raw = raw_content[:_NEEDS_REVIEW_RAW_LIMIT]
+            raw_clipped = len(raw_content) > _NEEDS_REVIEW_RAW_LIMIT
         decision = DecisionRow(
             id=new_id(IdPrefix.DECISION),
             investigation_id=finding.investigation_id,
@@ -381,7 +396,12 @@ class VeritasReviewService:
             provider=self.gateway.provider.name if self.gateway is not None else None,
             requested_model=self.gateway.model if self.gateway is not None else None,
             response_sha256=digest,
-            output_json={"status": "needs_review", "failure_class": reason},
+            output_json={
+                "status": "needs_review",
+                "failure_class": reason,
+                "raw_response": clipped_raw,
+                "raw_response_clipped": raw_clipped,
+            },
             created_at=utcnow(),
         )
         self.session.add(decision)

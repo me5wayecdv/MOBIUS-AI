@@ -387,6 +387,30 @@ def test_veritas_unconvertible_reply_is_captured_needs_review_not_fabricated(ses
     )).scalar_one()
     assert decision.output_json["status"] == "needs_review"
     assert decision.response_sha256 is not None
+    # the raw reply is preserved for the operator, clipped and flagged
+    assert decision.output_json["raw_response"] == "still not json"
+    assert decision.output_json["raw_response_clipped"] is False
+
+
+def test_veritas_needs_review_raw_preservation_is_clipped(session, reviewed_finding):
+    from mobius.services.veritas import _NEEDS_REVIEW_RAW_LIMIT
+
+    finding_id, investigation_id, _, evidence_id = reviewed_finding
+    huge = "x" * (_NEEDS_REVIEW_RAW_LIMIT + 500)
+    provider = SequenceProvider([huge, huge])
+    gateway = StructuredModelGateway(provider, model="reviewer-v2")
+    factory = sessionmaker(bind=session.get_bind(), expire_on_commit=False, future=True)
+
+    result = VeritasReviewService(
+        session, gateway=gateway, session_factory=factory
+    ).review(finding_id, producer_model_id="producer-v1")
+
+    assert result["status"] == "needs_review"
+    decision = session.execute(select(DecisionRow).where(
+        DecisionRow.id == result["decision_id"],
+    )).scalar_one()
+    assert len(decision.output_json["raw_response"]) == _NEEDS_REVIEW_RAW_LIMIT
+    assert decision.output_json["raw_response_clipped"] is True
 
 
 def test_veritas_conflicting_payloads_are_never_silently_chosen(session, reviewed_finding):
