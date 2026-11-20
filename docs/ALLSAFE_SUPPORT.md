@@ -30,9 +30,11 @@ clause stayed unresolved for all 5, and sink reachability was established only f
     coverage marked `truncated`. Measured 2026-11-20 on the pinned APK (run above, before the
     ordering change): all 88 app-package classes (276 methods, in entries `classes2`-`classes6`)
     were indexed and only `classes7.dex` (library-only) was truncated, 26 of 42,843 methods;
-    re-measured after the change with identical coverage, now guaranteed by the ordering rather
-    than by this APK's entry layout. The full pipeline completes: all 5 exported components are
-    investigated and close at `manual_review_required`.
+    re-measured after the change with identical coverage. The ordering now prioritizes
+    app-bearing entries over library-only ones, but admission within an entry stays file order,
+    so an app entry larger than the budget would still lose app methods; the 88/88 app-class
+    figure is this APK's measurement, not a general guarantee. The full pipeline completes:
+    all 5 exported components are investigated and close at `manual_review_required`.
   - *Worker path.* The dex-index worker job uses the same bounded index and succeeds with the
     truncation disclosed. The provider-analysis worker job adapts all discovered methods without
     a budget and refuses this APK outright: `provider_analysis.py` exits "too large for this
