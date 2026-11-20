@@ -59,7 +59,7 @@ def test_gate_catalogue_is_exposed_before_a_scan(client):
     assert len(gates) == 11
     exported = next(g for g in gates if g["category"] == "exported-component-no-permission")
     assert exported["required_evidence"] == ["exported", "permission", "caller_check_absent", "sink_reachable"]
-    assert exported["maswe"] == ["MASWE-0029"]
+    assert exported["maswe"] == ["MASWE-0018"]
 
 
 def test_full_flow(client):

@@ -155,3 +155,102 @@ def test_ties_break_on_content_not_on_generated_ids():
 
     assert [e.action_args["component"] for e in one] == ["com.x.A", "com.x.B"]
     assert [e.action_args["component"] for e in two] == ["com.x.A", "com.x.B"]
+
+
+# --- Gate-taxonomy correction (2026-11-20): scoring regression pins ---------------
+#
+# The taxonomy fix changed each gate's MASWE tags. Scoring must not move for ANY
+# candidate, so the fix decouples the two: taxonomy IDs classify, the preserved
+# per-category weight scores gate-seeded entries, and the prefix table is byte-for-
+# byte the pre-correction one. These tests assert the ABSENCE of any global delta:
+# every MASWE ID resolves through the table exactly as it did before the fix.
+
+# The pre-correction table, expressed as rules: exact 0029/0030/0001/0002, the two
+# raw prefix strings "MASWE-001" (0010-0019) and "MASWE-005" (0050-0059), else 0.5.
+def _pre_correction_weight(tag: str) -> float:
+    if tag == "MASWE-0029":
+        return 0.95
+    if tag == "MASWE-0030":
+        return 0.90
+    if tag in ("MASWE-0001", "MASWE-0002"):
+        return 0.70
+    if tag.startswith("MASWE-001"):
+        return 0.80
+    if tag.startswith("MASWE-005"):
+        return 0.80
+    return 0.5
+
+
+def test_no_global_weight_delta_for_any_maswe_id():
+    """Sweep the whole MASWE id space plus edge cases: resolution must equal the
+    pre-correction table's. This is the regression the first version of the fix
+    introduced (exact-ID entries raised 0018/0050/0032/0033/0035/0049/0004/0007/
+    0008/0026); it must not come back."""
+    from mobius.core.frontier import impact_weight
+
+    tags = [f"MASWE-{i:04d}" for i in range(0, 80)] + [
+        "MASWE-001", "MASWE-005", "MASWE-9999", "MASWE", "",
+    ]
+    for tag in tags:
+        assert impact_weight((tag,)) == _pre_correction_weight(tag), tag
+    assert impact_weight(()) == 0.5
+
+
+def test_legacy_id_resolution_is_unchanged_for_historical_tags():
+    """Tags stored on pre-correction findings/seeds resolve exactly as before."""
+    from mobius.core.frontier import impact_weight
+
+    assert impact_weight(("MASWE-0029",)) == 0.95
+    assert impact_weight(("MASWE-0030",)) == 0.90
+    assert impact_weight(("MASWE-0001",)) == 0.70
+    assert impact_weight(("MASWE-0002",)) == 0.70
+    assert impact_weight(("MASWE-001",)) == 0.80   # raw prefix string, as stored by old gates
+    assert impact_weight(("MASWE-005",)) == 0.80   # raw prefix string, as stored by old gates
+    assert impact_weight(("MASWE-0034",)) == 0.5   # known ID with no weight entry
+    assert impact_weight(("MASWE-0018",)) == 0.80  # corrected ID: via "MASWE-001" prefix, as before
+    assert impact_weight(("MASWE-0050",)) == 0.80  # corrected ID: via "MASWE-005" prefix, as before
+    assert impact_weight(("MASWE-0032",)) == 0.5   # corrected ID: default, as before
+
+
+def test_mixed_legacy_and_new_tuple_resolves_by_max_and_is_unchanged():
+    """Catalogue tuple (0029, 0032, 0050): 0.95 on both versions via max semantics."""
+    from mobius.core.frontier import impact_weight
+
+    assert impact_weight(("MASWE-0029", "MASWE-0032", "MASWE-0050")) == 0.95
+    assert impact_weight(("MASWE-0029", "MASWE-0050")) == 0.95
+
+
+GATE_WEIGHT_PRESERVATION = {
+    "exported-component-no-permission": 0.95,
+    "exported-provider-unprotected-sink": 0.95,
+    "hardcoded-secret": 0.7,
+    "insecure-storage": 0.7,
+    "weak-crypto": 0.8,
+    "webview-rce-surface": 0.95,
+    "cleartext-transport": 0.8,
+    "exported-provider-path-traversal": 0.95,
+    "dynamic-code-loading": 0.95,
+    "implicit-intent-sensitive-data": 0.95,
+    "deeplink-unvalidated-input": 0.95,
+}
+
+
+def test_every_gate_category_keeps_its_pre_correction_impact():
+    """A gate-seeded entry scores from its category's preserved weight, whatever
+    corrected taxonomy IDs it carries. Weights measured by resolving each gate's
+    old (mis-tagged) maswe tuple through the pre-correction table."""
+    from mobius.core.frontier import entry_impact
+    from mobius.core.gates import _GATES
+
+    for gate in _GATES:
+        entry = _entry(relates_to_maswe=tuple(gate.maswe), gate_category=gate.category)
+        assert entry_impact(entry) == GATE_WEIGHT_PRESERVATION[gate.category], gate.category
+
+
+def test_entries_without_gate_category_use_the_table_path():
+    """Catalogue-sourced and historical entries (no category) resolve by tags only."""
+    from mobius.core.frontier import entry_impact
+
+    assert entry_impact(_entry(relates_to_maswe=("MASWE-0050",))) == 0.80
+    assert entry_impact(_entry(relates_to_maswe=("MASWE-0029",))) == 0.95
+    assert entry_impact(_entry(relates_to_maswe=(), gate_category="not-a-gate")) == 0.5

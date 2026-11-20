@@ -182,3 +182,29 @@ def test_gate_evidence_distinguishes_refuted_from_never_established():
     assert evidence["exported"] is True  # established
     assert evidence["caller_check_absent"] is None  # never established
     assert evidence["permission"] is True  # "no permission" is itself the evidence
+
+
+# Verified 2026-11-20 against the official MASWE v1.0.0 index (https://mas.owasp.org/MASWE/):
+# each ID's title and owning MASVS control was read from its OWASP page. This table pins the
+# source-backed taxonomy so a future edit cannot silently regress a gate to an unrelated
+# weakness the way the original all-MASWE-0029 tagging did.
+VERIFIED_GATE_TAXONOMY = {
+    "exported-component-no-permission": (("MASWE-0018",), ("MASVS-AUTH-1",)),
+    "exported-provider-unprotected-sink": (("MASWE-0018", "MASWE-0050"), ("MASVS-AUTH-1", "MASVS-CODE-4")),
+    "hardcoded-secret": (("MASWE-0004",), ("MASVS-STORAGE-1",)),
+    "insecure-storage": (("MASWE-0002",), ("MASVS-STORAGE-1",)),
+    "weak-crypto": (("MASWE-0007", "MASWE-0008"), ("MASVS-CRYPTO-1",)),
+    "webview-rce-surface": (("MASWE-0033", "MASWE-0035"), ("MASVS-PLATFORM-2",)),
+    "cleartext-transport": (("MASWE-0026",), ("MASVS-NETWORK-1",)),
+    "exported-provider-path-traversal": (("MASWE-0018", "MASWE-0050"), ("MASVS-AUTH-1", "MASVS-CODE-4")),
+    "dynamic-code-loading": (("MASWE-0049",), ("MASVS-CODE-4",)),
+    "implicit-intent-sensitive-data": (("MASWE-0032",), ("MASVS-PLATFORM-1",)),
+    "deeplink-unvalidated-input": (("MASWE-0029",), ("MASVS-PLATFORM-1",)),
+}
+
+
+def test_gate_taxonomy_matches_the_source_verified_table():
+    from mobius.core.gates import _GATES
+
+    actual = {g.category: (g.maswe, g.masvs) for g in _GATES}
+    assert actual == VERIFIED_GATE_TAXONOMY

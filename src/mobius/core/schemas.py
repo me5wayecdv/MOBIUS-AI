@@ -475,6 +475,10 @@ class FrontierEntry(_Model):
     action_args: dict[str, Any] = Field(default_factory=dict)
     required_agent: str
     relates_to_maswe: tuple[str, ...] = ()
+    #: Scoring metadata for gate-seeded entries: when set, impact comes from the
+    #: category's preserved weight, not from resolving relates_to_maswe. Decoupled
+    #: from the taxonomy IDs on purpose so metadata corrections cannot move scores.
+    gate_category: str | None = None
     score: float = 0.0
     depth: int = Field(default=0, ge=0)
     state: Literal["queued", "leased", "done", "dropped", "failed"] = "queued"

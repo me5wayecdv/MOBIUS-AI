@@ -103,11 +103,17 @@ class GateResult:
 
 
 _GATES: tuple[Gate, ...] = (
+    # MASWE/MASVS metadata verified 2026-11-20 against the official MASWE v1.0.0
+    # index (https://mas.owasp.org/MASWE/): each ID's title and owning control
+    # was read from its OWASP page. Categories with no exact official weakness
+    # map to the verified closest weakness whose official page covers the gate's
+    # clauses (e.g. MASWE-0018 explicitly covers exported components without
+    # permission requirements and unverified IPC callers).
     Gate(
         category="exported-component-no-permission",
         title="Exported component with no permission reaches a privileged sink",
-        maswe=("MASWE-0029",),
-        masvs=("MASVS-PLATFORM-3",),
+        maswe=("MASWE-0018",),
+        masvs=("MASVS-AUTH-1",),
         severity_hint=Severity.HIGH,
         clauses=(
             Clause("exported", "Component is reachable by another app", _is_true),
@@ -123,8 +129,8 @@ _GATES: tuple[Gate, ...] = (
     Gate(
         category="exported-provider-unprotected-sink",
         title="Exported provider operation reaches a database sink with no permission",
-        maswe=("MASWE-0029",),
-        masvs=("MASVS-PLATFORM-3",),
+        maswe=("MASWE-0018", "MASWE-0050"),
+        masvs=("MASVS-AUTH-1", "MASVS-CODE-4"),
         severity_hint=Severity.HIGH,
         clauses=(
             Clause("exported", "The provider is reachable by another app", _is_true),
@@ -147,7 +153,7 @@ _GATES: tuple[Gate, ...] = (
     Gate(
         category="hardcoded-secret",
         title="Hardcoded credential used in a security context",
-        maswe=("MASWE-0001",),
+        maswe=("MASWE-0004",),
         masvs=("MASVS-STORAGE-1",),
         severity_hint=Severity.HIGH,
         clauses=(
@@ -164,7 +170,7 @@ _GATES: tuple[Gate, ...] = (
     Gate(
         category="insecure-storage",
         title="Sensitive data written to non-private storage",
-        maswe=("MASWE-0001",),
+        maswe=("MASWE-0002",),
         masvs=("MASVS-STORAGE-1",),
         severity_hint=Severity.MEDIUM,
         clauses=(
@@ -177,7 +183,7 @@ _GATES: tuple[Gate, ...] = (
     Gate(
         category="weak-crypto",
         title="Weak primitive used to protect something that matters",
-        maswe=("MASWE-001",),
+        maswe=("MASWE-0007", "MASWE-0008"),
         masvs=("MASVS-CRYPTO-1",),
         severity_hint=Severity.MEDIUM,
         clauses=(
@@ -190,8 +196,8 @@ _GATES: tuple[Gate, ...] = (
     Gate(
         category="webview-rce-surface",
         title="WebView bridge reachable with attacker-influenceable content",
-        maswe=("MASWE-0029",),
-        masvs=("MASVS-PLATFORM-3", "MASVS-CODE-4"),
+        maswe=("MASWE-0033", "MASWE-0035"),
+        masvs=("MASVS-PLATFORM-2",),
         severity_hint=Severity.HIGH,
         clauses=(
             Clause("javascript_interface_added", "addJavascriptInterface is reachable", _is_true),
@@ -206,7 +212,7 @@ _GATES: tuple[Gate, ...] = (
     Gate(
         category="cleartext-transport",
         title="Credentials travel over cleartext transport",
-        maswe=("MASWE-005",),
+        maswe=("MASWE-0026",),
         masvs=("MASVS-NETWORK-1",),
         severity_hint=Severity.HIGH,
         clauses=(
@@ -222,8 +228,8 @@ _GATES: tuple[Gate, ...] = (
     Gate(
         category="exported-provider-path-traversal",
         title="Exported provider allows caller-controlled path traversal",
-        maswe=("MASWE-0029",),
-        masvs=("MASVS-PLATFORM-3",),
+        maswe=("MASWE-0018", "MASWE-0050"),
+        masvs=("MASVS-AUTH-1", "MASVS-CODE-4"),
         severity_hint=Severity.HIGH,
         clauses=(
             Clause("provider_exported", "The provider is exported", _is_true),
@@ -235,8 +241,8 @@ _GATES: tuple[Gate, ...] = (
     Gate(
         category="dynamic-code-loading",
         title="Executable code loaded at runtime with no integrity check",
-        maswe=("MASWE-0029",),
-        masvs=("MASVS-CODE-4", "MASVS-RESILIENCE-1"),
+        maswe=("MASWE-0049",),
+        masvs=("MASVS-CODE-4",),
         severity_hint=Severity.HIGH,
         clauses=(
             Clause("loader_used", "A DexClassLoader/InMemoryDexClassLoader is instantiated", _is_true),
@@ -255,8 +261,8 @@ _GATES: tuple[Gate, ...] = (
     Gate(
         category="implicit-intent-sensitive-data",
         title="Sensitive data broadcast or sent via an implicit intent",
-        maswe=("MASWE-0029",),
-        masvs=("MASVS-PLATFORM-3",),
+        maswe=("MASWE-0032",),
+        masvs=("MASVS-PLATFORM-1",),
         severity_hint=Severity.MEDIUM,
         clauses=(
             Clause("sensitive_extra_present", "A sensitive value is placed in the intent", _is_true),
@@ -268,7 +274,7 @@ _GATES: tuple[Gate, ...] = (
         category="deeplink-unvalidated-input",
         title="Deep link parameter reaches a sensitive sink unvalidated",
         maswe=("MASWE-0029",),
-        masvs=("MASVS-PLATFORM-3",),
+        masvs=("MASVS-PLATFORM-1",),
         severity_hint=Severity.HIGH,
         clauses=(
             Clause("deeplink_entry", "A deep link entry point exists", _is_true),

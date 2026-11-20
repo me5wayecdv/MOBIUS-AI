@@ -337,6 +337,7 @@ class NexusService:
             action_args=row.action_args or {},
             required_agent=row.required_agent,
             relates_to_maswe=tuple(row.relates_to_maswe or ()),
+            gate_category=row.gate_category,
             score=row.score or 0.0,
             depth=row.depth or 0,
             state=row.state,
