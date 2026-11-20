@@ -127,13 +127,19 @@ class InvestigationTokenBudget:
             used["model_tokens_reserved"] = remaining_reserved
             used["model_tokens"] = total
             row.used_json = used
+            # input_and_output_tokens is the conservative accounting charge
+            # (byte-ceiling units for envelope-transforming providers); any
+            # provider-reported real usage rides alongside under its own keys.
+            payload = {"provider": provider, "model_id": model_id,
+                       "input_and_output_tokens": actual_tokens,
+                       "cumulative_tokens": total,
+                       "reserved_tokens_remaining": remaining_reserved,
+                       "budget_limit": reservation.budget_limit}
+            if usage:
+                payload.update(usage)
             SqlEventStore(session).emit(
                 row.id, "model_tokens_consumed",
-                {"provider": provider, "model_id": model_id,
-                 "input_and_output_tokens": actual_tokens,
-                 "cumulative_tokens": total,
-                 "reserved_tokens_remaining": remaining_reserved,
-                 "budget_limit": reservation.budget_limit},
+                payload,
                 actor="NEXUS",
             )
             session.commit()

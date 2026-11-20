@@ -245,6 +245,11 @@ class NexusHypothesisService:
                 "max_tokens": result["max_tokens"],
                 "repair_attempts": repair_attempts,
             }
+            if result.get("provider_input_tokens") is not None:
+                # Provider-reported real token usage, distinct from the
+                # conservative accounting units in input/output_tokens.
+                provenance["provider_reported_input_tokens"] = result["provider_input_tokens"]
+                provenance["provider_reported_output_tokens"] = result["provider_output_tokens"]
             mode = "model_gateway"
         else:
             proposed = self._deterministic(package_data)
