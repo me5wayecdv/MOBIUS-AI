@@ -82,9 +82,79 @@ class Fixture:
     evidence_id: str
 
 
-def build_fixture(session: Session, store: ArtifactStore, *, provider: str = "mock") -> Fixture:
-    """One investigation with a persisted reachability observation whose ID is the
-    only legitimate citation target in the evidence package."""
+def _observation(**overrides):  # helper for fixture variants
+    base = dict(
+        agent="SPECTRE",
+        kind=ObservationKind.INFERENCE.value,
+        fidelity=Fidelity.DECOMPILED.value,
+        subject_type="component",
+        subject_ref="com.example.Entry",
+        statement="Static call path reaches a file output sink",
+        attributes={
+            "reachability": "reached-unguarded",
+            "path": ["Lcom/example/Entry;->onCreate()V"],
+            "sink": "Ljava/io/FileOutputStream;-><init>()V",
+            "guards": [],
+            "index_truncated": False,
+            "exhaustive": True,
+        },
+        maswe=["MASWE-0001"],
+        confidence=0.8,
+        created_at="2026-11-16T00:00:00Z",
+    )
+    base.update(overrides)
+    return base
+
+
+_VARIANTS = {
+    # Disputed oracle: a single may-flow reachability observation. Reasonable
+    # models disagree on whether this justifies a hypothesis; reported
+    # informationally, never as pass/fail.
+    "thin": [_observation()],
+    # Actionable: unguarded sink PLUS an exported entry with attacker-controlled
+    # input established. A useful hypothesis clearly exists; floor: >=1 grounded.
+    "actionable": [
+        _observation(),
+        _observation(
+            statement="Exported entry receives an Intent extra that reaches the file write unvalidated",
+            attributes={
+                "reachability": "reached-unguarded",
+                "exported": True,
+                "entry_point": "Lcom/example/Entry;->onCreate()V",
+                "input_source": "android.intent.extra.STREAM",
+                "input_validation": "none",
+                "sink": "Ljava/io/FileOutputStream;-><init>()V",
+                "index_truncated": False,
+                "exhaustive": True,
+            },
+            confidence=0.9,
+        ),
+    ],
+    # Correct abstention: an app-internal, guarded, non-sensitive write. No
+    # useful hypothesis exists; floor: exactly 0 hypotheses.
+    "abstain": [
+        _observation(
+            statement="App writes a non-sensitive log file to its private internal directory after path canonicalization",
+            attributes={
+                "reachability": "reached-guarded",
+                "path": ["Lcom/example/Logger;->flush()V"],
+                "sink": "Ljava/io/FileOutputStream;-><init>()V",
+                "guards": ["path-canonicalization", "app-private-directory"],
+                "data_sensitivity": "none",
+                "index_truncated": False,
+                "exhaustive": True,
+            },
+            subject_ref="com.example.Logger",
+            confidence=0.9,
+        ),
+    ],
+}
+
+
+def build_fixture(session: Session, store: ArtifactStore, *, provider: str = "mock", variant: str = "thin") -> Fixture:
+    """One investigation whose persisted observation(s) are the only legitimate
+    citation targets in the evidence package. ``variant`` selects the oracle:
+    thin (disputed), actionable (hypothesis expected), abstain (empty expected)."""
     intake = IntakeService(session, store)
     app, _ = intake.create_application(_make_apk(), "nexus-fixture.apk", uploaded_by="u")
     auth = intake.create_authorization(
@@ -113,31 +183,18 @@ def build_fixture(session: Session, store: ArtifactStore, *, provider: str = "mo
         summary="Bounded DEX graph fixture",
         produced_by="SPECTRE",
     )
-    observation = ObservationRow(
-        id=new_id(IdPrefix.OBSERVATION),
-        investigation_id=investigation.id,
-        agent="SPECTRE",
-        kind=ObservationKind.INFERENCE.value,
-        fidelity=Fidelity.DECOMPILED.value,
-        subject_type="component",
-        subject_ref="com.example.Entry",
-        statement="Static call path reaches a file output sink",
-        attributes={
-            "reachability": "reached-unguarded",
-            "path": ["Lcom/example/Entry;->onCreate()V"],
-            "sink": "Ljava/io/FileOutputStream;-><init>()V",
-            "guards": [],
-            "index_truncated": False,
-            "exhaustive": True,
-        },
-        maswe=["MASWE-0001"],
-        confidence=0.8,
-        evidence_refs=[evidence.id],
-        created_at="2026-11-16T00:00:00Z",
-    )
-    session.add(observation)
+    observations = []
+    for spec in _VARIANTS[variant]:
+        obs = ObservationRow(
+            id=new_id(IdPrefix.OBSERVATION),
+            investigation_id=investigation.id,
+            evidence_refs=[evidence.id],
+            **spec,
+        )
+        session.add(obs)
+        observations.append(obs)
     session.commit()
-    return Fixture(investigation.id, observation.id, evidence.id)
+    return Fixture(investigation.id, observations[0].id, evidence.id)
 
 
 class SequencedProvider(DeterministicMockProvider):
@@ -398,56 +455,66 @@ def _live_report(mode: str = "ollama") -> Report:
             store = ArtifactStore(Path(tmp) / "artifacts")
             session = context.session()
             try:
-                fx = build_fixture(session, store, provider=fx_provider)
                 gateway = StructuredModelGateway(provider, model=model, timeout_seconds=timeout)
                 factory = sessionmaker(bind=session.get_bind(), expire_on_commit=False, future=True)
                 report = Report(mode=mode)
-                started = time.monotonic()
-                try:
-                    result = NexusHypothesisService(
-                        session, gateway=gateway, session_factory=factory, store=store
-                    ).generate(fx.investigation_id)
-                    elapsed = time.monotonic() - started
-                    # The floor requires at least one hypothesis: a schema-valid
-                    # but EMPTY reply is a quality failure, not an accept.
-                    accepted = result["mode"] == "model_gateway" and len(result["hypotheses"]) >= 1
-                    grounded = sum(
-                        1 for h in result["hypotheses"] if h.get("derived_from")
-                    )
-                    claims = " | ".join(
-                        str(h.get("claim", ""))[:80] for h in result["hypotheses"][:5]
-                    )
-                    report.results.append(CaseResult(
-                        case=Case("live-seeded-fixture", "quality-floor", [],
-                                  "accepted:model_gateway", 1),
-                        ok=accepted,
-                        observed=(f"accepted:{result['mode']}, "
-                                  f"hypotheses={len(result['hypotheses'])}"),
-                        detail=(f"measured {elapsed:.1f}s (timeout budget {timeout}s); "
-                                f"repair_attempts={result['repair_attempts']}; "
-                                f"tokens in/out: {result['token_usage'].get('input_tokens')}"
-                                f"/{result['token_usage'].get('output_tokens')}; "
-                                f"hypotheses={len(result['hypotheses'])} "
-                                f"({grounded} with evidence refs); "
-                                f"claims: {claims}" + (
-                                    f"; CLI totals in/out: "
-                                    f"{provider.last_cli_input_tokens}/"
-                                    f"{provider.last_cli_output_tokens} "
-                                    f"(includes OpenCode platform overhead)"
-                                    if mode == "opencode" else ""
-                                )),
-                    ))
-                except (ModelConsentRequired, ModelOutputInvalid, ModelBudgetExceeded) as exc:
-                    elapsed = time.monotonic() - started
-                    report.results.append(CaseResult(
-                        case=Case("live-seeded-fixture", "quality-floor", [],
-                                  "accepted:model_gateway", 1),
-                        ok=False,
-                        observed=f"refused:{type(exc).__name__}",
-                        detail=f"guards rejected the live response after {elapsed:.1f}s",
-                    ))
+                for variant in ("actionable", "abstain", "thin"):
+                    fx = build_fixture(session, store, provider=fx_provider, variant=variant)
+                    started = time.monotonic()
+                    try:
+                        result = NexusHypothesisService(
+                            session, gateway=gateway, session_factory=factory, store=store
+                        ).generate(fx.investigation_id)
+                        elapsed = time.monotonic() - started
+                        n_hyp = len(result["hypotheses"])
+                        grounded = sum(
+                            1 for h in result["hypotheses"] if h.get("derived_from")
+                        )
+                        cli_note = (
+                            f"; CLI totals in/out: "
+                            f"{provider.last_cli_input_tokens}/"
+                            f"{provider.last_cli_output_tokens} "
+                            f"(includes OpenCode platform overhead)"
+                            if mode == "opencode" else ""
+                        )
+                        if variant == "thin":
+                            # Disputed oracle: report behavior, never pass/fail.
+                            report.probes.append(
+                                f"thin-fixture (disputed oracle): mode={result['mode']}, "
+                                f"hypotheses={n_hyp} ({grounded} grounded), "
+                                f"repair_attempts={result['repair_attempts']}, "
+                                f"{elapsed:.1f}s{cli_note}")
+                            continue
+                        if variant == "actionable":
+                            ok = result["mode"] == "model_gateway" and n_hyp >= 1
+                            expected = "accepted:model_gateway with >=1 grounded hypothesis"
+                        else:  # abstain
+                            ok = result["mode"] == "model_gateway" and n_hyp == 0
+                            expected = "accepted:model_gateway with 0 hypotheses (correct abstention)"
+                        claims = " | ".join(
+                            str(h.get("claim", ""))[:80] for h in result["hypotheses"][:5]
+                        )
+                        report.results.append(CaseResult(
+                            case=Case(f"live-{variant}-fixture", "quality-floor", [], expected, 1),
+                            ok=ok,
+                            observed=f"accepted:{result['mode']}, hypotheses={n_hyp} ({grounded} grounded)",
+                            detail=(f"measured {elapsed:.1f}s (timeout budget {timeout}s); "
+                                    f"repair_attempts={result['repair_attempts']}; "
+                                    f"tokens in/out: {result['token_usage'].get('input_tokens')}"
+                                    f"/{result['token_usage'].get('output_tokens')}; "
+                                    f"claims: {claims}" + cli_note),
+                        ))
+                    except (ModelConsentRequired, ModelOutputInvalid, ModelBudgetExceeded) as exc:
+                        elapsed = time.monotonic() - started
+                        report.results.append(CaseResult(
+                            case=Case(f"live-{variant}-fixture", "quality-floor", [],
+                                      "accepted:model_gateway", 1),
+                            ok=False,
+                            observed=f"refused:{type(exc).__name__}",
+                            detail=f"guards rejected the live response after {elapsed:.1f}s",
+                        ))
                 report.probes.append(
-                    "note: live mode measures ONE seeded fixture; a pass is a minimum "
+                    "note: live mode measures small seeded fixtures; a pass is a minimum "
                     "quality floor for hypothesis generation, not a quality endorsement, "
                     "and not evidence about investigation-wide intelligence")
                 session.close()
