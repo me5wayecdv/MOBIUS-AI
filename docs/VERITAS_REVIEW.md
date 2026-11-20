@@ -1,6 +1,6 @@
 # VERITAS independent finding review
 
-**Status:** implemented as an opt-in service on PR #39; not yet wired into the default investigation pipeline or War Room.
+**Status:** implemented as an opt-in service on PR #39; manually invoked via `POST /scans/{id}/findings/{finding_id}/veritas-review` (PR #64). As of 2026-11-20, an optional post-pipeline auto-review pass wires it into the NEXUS route behind a default-off per-investigation flag (`auto_veritas` on `PUT /scans/{id}/model-consent`). Advisory-only in both modes; deterministic gates remain the sole verdict authority. Real-model review quality remains unverified (see the 2026-11-19 measurement rows in TASK_BOARD/IMPLEMENTATION_STATUS: small local models failed the integrity guards or timed out).
 
 ## Purpose
 
@@ -32,8 +32,21 @@ A `DecisionRow` stores the validated structured result and D-025 provenance (pro
 
 ## Invocation
 
-The service is available to application code as `VeritasReviewService(session, gateway=..., session_factory=...).review(finding_id, producer_model_id=...)`. It is not automatically invoked by validation or the scan pipeline in this slice. The caller must supply a trustworthy producer model ID from the discovery provenance; the service does not infer one.
+The service is available to application code as `VeritasReviewService(session, gateway=..., session_factory=...).review(finding_id, producer_model_id=...)`. The manual route requires the caller to supply a trustworthy producer model ID from the discovery provenance; the service does not infer one.
+
+## Optional auto-review pass (added 2026-11-20)
+
+When an investigation opts in (`auto_veritas: true` on the consent endpoint, which requires `enabled: true`), `POST /scans/{id}/nexus` runs a bounded review pass AFTER the deterministic pipeline transaction commits, and adds a `veritas_auto_review` summary block to the response. Without the flag the response is unchanged.
+
+Design constraints, all test-pinned:
+
+- **Post-commit only.** The pipeline session holds the investigation row write lock (event_seq allocator) until commit; an in-pipeline review would self-block because the review's budget reserve/settle run on independent sessions. The route commits first, then the pass runs per-finding on fresh sessions.
+- **Fail-closed provenance.** Only confirmed findings from a known deterministic producer with persisted evidence references are eligible; they are sent with the explicit `deterministic-pipeline` sentinel producer ID. Anything else is skipped with a fixed reason token, and a sentinel review always reports `producer_model_verified: false` / `independence_assured: false`.
+- **Per-finding rechecks.** Consent, provider match, and the auto flag are re-read immediately before each review, not once per pass.
+- **Concurrency-safe.** A PostgreSQL advisory transaction lock per (investigation, finding) prevents double-review and double budget reservation under simultaneous runs; contention is reported as the fixed skip token `review-in-progress`. On SQLite (single-process development) the lock is skipped by design.
+- **Fail-isolated.** Per-finding failures persist a `veritas_review_failed` diagnostic event with a fixed reason token (`consent-missing`, `provider-error`, `output-invalid`, `budget-exhausted`, `review-pass-error`) on its own transaction; raw errors, prompts, and exception chains never leave the server. A pass-level failure is reported as `status: review-pass-error` in the response block and never changes the scan's HTTP result.
+- **Bounded and idempotent.** At most 10 reviews per run; a finding with a persisted review is skipped (`already-reviewed`).
 
 ## Verification boundaries
 
-Unit tests cover different-model enforcement (including provider aliases), consent, evidence-reference confinement, persisted audit provenance, and the invariant that a VERITAS challenge cannot alter the stored deterministic verdict. A real Ollama review and model-quality benchmark remain unverified. No migration is included.
+Unit, HTTP, and PostgreSQL tests cover different-model enforcement (including provider aliases), consent, evidence-reference confinement, persisted audit provenance, the invariant that a VERITAS challenge cannot alter the stored deterministic verdict, the auto-pass skip/failure tokens, idempotency, and concurrent-pass single-review semantics under PostgreSQL. A real Ollama review and model-quality benchmark remain unverified; the auto pass has only ever run against scripted mock providers. No migration is included.

@@ -386,14 +386,22 @@ def set_model_consent(
     if not payload.enabled and payload.provider is not None:
         from ..services.errors import ScanStateConflict
         raise ScanStateConflict("disabled model consent must not name a provider")
+    if payload.auto_veritas and not payload.enabled:
+        from ..services.errors import ScanStateConflict
+        raise ScanStateConflict("auto VERITAS review requires enabled model consent")
     scan.llm_data_sharing = {
         "enabled": payload.enabled,
         "provider": payload.provider if payload.enabled else None,
+        "auto_veritas": bool(payload.auto_veritas and payload.enabled),
     }
     SqlEventStore(session).emit(
         scan_id,
         "model_consent_updated",
-        {"enabled": payload.enabled, "provider": payload.provider if payload.enabled else None},
+        {
+            "enabled": payload.enabled,
+            "provider": payload.provider if payload.enabled else None,
+            "auto_veritas": bool(payload.auto_veritas and payload.enabled),
+        },
         actor=who,
     )
     return {"investigation_id": scan_id, "llm_data_sharing": scan.llm_data_sharing}
@@ -1596,7 +1604,57 @@ def run_nexus(
                 "step runs through the isolated DEX worker (MOBIUS_SPECTRE_INLINE=1 is local-development-only)"
             ),
         )
-    return NexusService(session, ctx.store).run(scan_id, max_steps=max_steps)
+    result = NexusService(session, ctx.store).run(scan_id, max_steps=max_steps)
+    # Commit the pipeline transaction BEFORE the optional advisory review pass.
+    # The pipeline session holds the investigation row write lock (event_seq
+    # allocator) until commit; the review pass reserves/settles token budget on
+    # independent sessions that need the same row, so running it earlier would
+    # self-block under PostgreSQL. The teardown commit below stays a no-op.
+    session.commit()
+    try:
+        auto_review = _maybe_veritas_auto_review(ctx, scan_id)
+    except Exception:
+        # The optional pass must never mask the deterministic scan result: a
+        # review-pass failure after the core commit is reported with a fixed
+        # token, never surfaced as a whole-scan failure.
+        auto_review = {
+            "attempted": 0,
+            "completed": 0,
+            "failed": 0,
+            "skipped": 0,
+            "failures": [],
+            "skips": [],
+            "advisory_only": True,
+            "status": "review-pass-error",
+        }
+    if auto_review is not None:
+        result = {**result, "veritas_auto_review": auto_review}
+    return result
+
+
+def _maybe_veritas_auto_review(ctx, scan_id: str):
+    """Run the opt-in post-commit VERITAS auto-review pass, or return None.
+
+    Reads the consent flag on a short fresh session (the pipeline session is
+    already committed and closed to new work). Returns None when the
+    investigation did not opt in, so the response shape is unchanged for
+    existing clients.
+    """
+    probe = ctx.session()
+    try:
+        scan = probe.get(InvestigationRow, scan_id)
+        consent = dict(scan.llm_data_sharing or {}) if scan is not None else {}
+    finally:
+        probe.close()
+    if consent.get("enabled") is not True or consent.get("auto_veritas") is not True:
+        return None
+    from ..services.veritas_auto import run_auto_review_pass
+
+    return run_auto_review_pass(
+        session_factory=ctx.session_factory,
+        gateway=ctx.model_gateway,
+        investigation_id=scan_id,
+    )
 
 
 

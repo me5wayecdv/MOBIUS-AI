@@ -65,6 +65,10 @@ class ValidationRequest(_Base):
 class ModelConsentRequest(_Base):
     enabled: bool
     provider: str | None = Field(default=None, pattern=r"^ollama$")
+    # Opt-in for the post-investigation advisory VERITAS auto-review pass.
+    # Default-off; requires enabled consent. Advisory only - deterministic
+    # gates remain the sole verdict authority either way.
+    auto_veritas: bool = False
 
 
 class PoCApprovalRequest(_Base):
