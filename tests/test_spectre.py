@@ -394,3 +394,21 @@ def test_a_truncated_index_cannot_confirm_even_when_the_sink_is_reached(
     assert entry["attributes"]["sink_reachable"] is True
     assert entry["attributes"]["caller_check_absent"] is None
     assert result["confirmed"] == 0
+
+
+def test_finding_cites_both_graph_and_manifest_evidence(session, store, surface_ready):
+    """A manifest-derived finding must cite the MANIFEST evidence establishing
+    export/permission facts alongside the code-index evidence, so downstream
+    review packages (VERITAS) see the established manifest facts."""
+    from mobius.adapters.models import EvidenceRow
+    from mobius.core.enums import EvidenceKind
+
+    _spectre(session, store, _index()).analyse(surface_ready)
+    finding = session.query(FindingRow).filter_by(investigation_id=surface_ready).one()
+    refs = list(finding.evidence_refs)
+    assert len(refs) >= 2
+    kinds = {
+        session.get(EvidenceRow, ref).kind for ref in refs
+    }
+    assert EvidenceKind.MANIFEST.value in kinds
+    assert EvidenceKind.DEX_STRING.value in kinds
