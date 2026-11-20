@@ -185,6 +185,13 @@ class VeritasReviewService:
                 "evidence_ids": refs,
                 "challenge_types": sorted(CHALLENGE_TYPES),
                 "verdict_authority": "deterministic_validation_gates_only",
+                "gate_evidence_semantics": (
+                    "gate_evidence maps each validation-gate clause name to whether "
+                    "that clause HELD (true = the clause's condition was established); "
+                    "it never records raw manifest values. For example "
+                    "permission:true means the clause 'no android:permission guards "
+                    "the component' held, i.e. no permission protects it."
+                ),
             },
         }
         bound = InvestigationModelGateway(
