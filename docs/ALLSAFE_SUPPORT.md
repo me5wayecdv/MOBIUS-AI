@@ -1,6 +1,7 @@
 # Allsafe capability matrix
 
-**Status date:** 2026-11-20, current main `a663b210`.
+**Status date:** 2026-11-20, measured on main `a663b210` (app-first budget allocation merged after
+that measurement; the inline-path section notes where it changes the ordering guarantee).
 **Target:** the pinned Allsafe training APK, SHA-256
 `d6792d6634a033f048f935f1269179d3c27b859c4c34b1e9e5b008a88375efd9` (Apache-2.0/GPL security-education
 app, source: `github.com/t0thkr1s/allsafe`, challenge list from its README).
@@ -23,14 +24,17 @@ clause stayed unresolved for all 5, and sink reachability was established only f
   matching the historical journey; an unsourced "~88k" handoff figure previously quoted here was
   dropped). That exceeds the bound, and measured 2026-11-20 on the current head the two paths
   behave differently:
-  - *Inline path.* `index_apk` indexes entries in lexicographic name order and truncates at the
-    budget with per-entry coverage marked `truncated`. On this APK, `classes.dex` (49,328 methods,
-    library-only) is fully indexed, the five app-containing entries `classes2`-`classes6` (646
-    methods, including all 276 app-package methods in 88 app classes) fit the remaining budget,
-    and only `classes7.dex` (library-only) is truncated, 26 of 42,843 methods. The full pipeline
-    completes: all 5 exported components are investigated and close at `manual_review_required`.
-    App-class coverage is complete for this APK by layout, not by policy: the budget is spent in
-    name order, not app-first, so an APK whose app code sits in a later entry would lose coverage.
+  - *Inline path.* `index_apk` spends the budget app-first: entries containing classes under the
+    manifest package are indexed before library-only entries (a prioritization heuristic, not a
+    trust boundary; the 50,000 cap is unchanged), and truncation is disclosed per entry with
+    coverage marked `truncated`. Measured 2026-11-20 on the pinned APK (run above, before the
+    ordering change): all 88 app-package classes (276 methods, in entries `classes2`-`classes6`)
+    were indexed and only `classes7.dex` (library-only) was truncated, 26 of 42,843 methods;
+    re-measured after the change with identical coverage. The ordering now prioritizes
+    app-bearing entries over library-only ones, but admission within an entry stays file order,
+    so an app entry larger than the budget would still lose app methods; the 88/88 app-class
+    figure is this APK's measurement, not a general guarantee. The full pipeline completes:
+    all 5 exported components are investigated and close at `manual_review_required`.
   - *Worker path.* The dex-index worker job uses the same bounded index and succeeds with the
     truncation disclosed. The provider-analysis worker job adapts all discovered methods without
     a budget and refuses this APK outright: `provider_analysis.py` exits "too large for this
@@ -69,8 +73,9 @@ covers it, measure bounded reachability. It does not mean the challenge is detec
 both measured journeys closed all five investigated components undetermined. On the current head
 the inline path investigates the full app surface under the bound (truncation falls on a
 library-only entry for this APK); the provider-analysis worker job refuses the APK outright.
-Raising the bound, reordering budget allocation, or loosening the soundness policy to change
-these outcomes is out of scope for this document and is a product decision, not a repair.
+Raising the bound, changing the provider-analysis refusal stance, or loosening the soundness
+policy to change these outcomes is out of scope for this document and is a product decision,
+not a repair.
 
 ## Sources
 

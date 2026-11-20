@@ -221,3 +221,118 @@ def test_androguard_cfg_extraction_uses_real_basic_blocks(dex_bytes):
         for block in flow.blocks
         for successor in block.successors
     )
+
+
+# -- app-first budget allocation -------------------------------------------------
+
+
+class _FakeMethod:
+    def __init__(self, name, descriptor="()V"):
+        self._name, self._descriptor = name, descriptor
+
+    def get_name(self):
+        return self._name
+
+    def get_descriptor(self):
+        return self._descriptor
+
+    def get_code(self):
+        return None
+
+
+class _FakeClass:
+    def __init__(self, descriptor, methods):
+        self._name, self._methods = descriptor, list(methods)
+
+    def get_name(self):
+        return self._name
+
+    def get_methods(self):
+        return list(self._methods)
+
+
+class _FakeDex:
+    def __init__(self, classes):
+        self._classes = list(classes)
+
+    def get_classes(self):
+        return list(self._classes)
+
+
+def _fake_layout(monkeypatch):
+    fakes = {
+        b"lib-dex": _FakeDex([_FakeClass("Lcom/lib/Util;", [_FakeMethod(n) for n in ("a", "b", "c")])]),
+        b"app-dex": _FakeDex([_FakeClass("Lcom/example/app/Main;", [_FakeMethod(n) for n in ("onCreate", "onStart")])]),
+    }
+    monkeypatch.setattr("androguard.core.dex.DEX", lambda raw: fakes[raw])
+
+
+def test_app_package_entries_spend_the_budget_first(monkeypatch):
+    _fake_layout(monkeypatch)
+    idx = index_dex(b"lib-dex", b"app-dex", max_methods=3, app_package="com.example.app")
+    assert idx.methods == 3
+    assert idx.truncated is True
+    # complete stays False, which is what keeps caller_check_absent unknown downstream
+    assert idx.complete is False
+    # coverage is reported in original source order, not admission order
+    by_entry = {c.entry: c for c in idx.dex_coverage}
+    assert [c.entry for c in idx.dex_coverage] == ["classes1.dex", "classes2.dex"]
+    assert by_entry["classes2.dex"].status == "indexed"
+    assert by_entry["classes2.dex"].methods == 2
+    assert by_entry["classes1.dex"].status == "truncated"
+    assert by_entry["classes1.dex"].methods == 1
+    assert by_entry["classes1.dex"].error == "global method budget exhausted"
+    assert "com.example.app.Main" in idx.classes
+    assert idx.describe()["dex_truncated"] == 1
+    # deterministic: identical inputs give identical allocation
+    again = index_dex(b"lib-dex", b"app-dex", max_methods=3, app_package="com.example.app")
+    assert again.describe() == idx.describe()
+    assert [c.describe() for c in again.dex_coverage] == [c.describe() for c in idx.dex_coverage]
+
+
+def test_unknown_or_missing_package_keeps_name_order(monkeypatch):
+    _fake_layout(monkeypatch)
+    for package in ("com.other", None):
+        idx = index_dex(b"lib-dex", b"app-dex", max_methods=2, app_package=package)
+        assert idx.methods == 2
+        assert idx.truncated is True
+        by_entry = {c.entry: c for c in idx.dex_coverage}
+        # the library entry is cut at the budget and the app entry is skipped:
+        # name order decides coverage when the package matches nothing (or is absent)
+        assert by_entry["classes1.dex"].status == "truncated"
+        assert by_entry["classes1.dex"].methods == 2
+        assert by_entry["classes2.dex"].status == "skipped"
+        assert by_entry["classes2.dex"].methods == 0
+
+
+def test_apk_manifest_package_drives_prioritization(dex_bytes):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("AndroidManifest.xml", "<manifest package='AnalysisTest'/>")
+        zf.writestr("classes.dex", dex_bytes)
+        zf.writestr("classes2.dex", dex_bytes)
+    result = index_apk(buf.getvalue(), max_methods=1)
+    # the fixture class IS the manifest package, so both entries are app-bearing and
+    # keep stable order: first entry truncated at the budget, second skipped
+    assert result.truncated is True
+    assert result.dex_coverage[0].status == "truncated"
+    assert result.dex_coverage[1].status == "skipped"
+    assert result.complete is False
+
+
+def test_unreadable_manifest_never_blocks_indexing(dex_bytes):
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("AndroidManifest.xml", b"\x03\x00\x08\x00 not a real manifest")
+        zf.writestr("classes.dex", dex_bytes)
+    result = index_apk(buf.getvalue())
+    assert result.methods == index_dex(dex_bytes).methods
+    assert result.complete is True
+
+
+def test_oversized_entry_fails_before_parsing(monkeypatch, dex_bytes):
+    from mobius.adapters import dex as dex_module
+
+    monkeypatch.setattr(dex_module, "MAX_DEX_BYTES", 10)
+    with pytest.raises(DexIndexError, match="no DEX entry could be indexed"):
+        index_dex(dex_bytes)

@@ -1,9 +1,19 @@
-"""Build a bounded, provenance-aware call graph from every APK DEX entry."""
+"""Build a bounded, provenance-aware call graph from every APK DEX entry.
+
+Budget allocation is app-first: when the manifest package is known, DEX entries that
+contain classes under it are indexed before library-only entries, so the 50,000-method
+budget does not depend on lexicographic entry order. This is a prioritization heuristic,
+not a trust boundary: it changes which code is admitted under the cap, never what the
+cap is, and truncation is disclosed per entry exactly as before. Every entry up to the
+byte caps is parsed even when the budget would previously have skipped it; total work
+stays bounded by MAX_DEX_BYTES / MAX_TOTAL_DEX_BYTES.
+"""
 from __future__ import annotations
 import re
 import zipfile
 from dataclasses import asdict, dataclass, field
 from io import BytesIO
+from .android_manifest import extract_manifest_bytes, parse_surface, to_text_xml
 from ..core.reachability import Boundary, CallGraph, CallTarget, MethodRef
 from ..core.dataflow import (DataFlowFinding, FlowBlock, FlowInstruction, MethodFlow, analyse_method, is_source_api, is_sink_api)
 
@@ -72,6 +82,31 @@ def _dotted(descriptor: str) -> str:
 def _parse_reference(output: str) -> tuple[str, str, str] | None:
     match = _REFERENCE.search(output.strip())
     return (match.group(1), match.group(2), match.group(3) or "") if match else None
+
+
+def _manifest_package(apk_bytes: bytes) -> str | None:
+    """Best-effort manifest package for app-first budget prioritization.
+
+    Prioritization heuristic only: any manifest problem simply means no
+    prioritization, never an indexing failure.
+    """
+    try:
+        surface = parse_surface(to_text_xml(extract_manifest_bytes(apk_bytes)))
+    except Exception:
+        return None
+    return surface.package_name or None
+
+
+def _has_app_classes(dex: object, app_package: str | None) -> bool:
+    """Whether a parsed DEX defines classes under the app package (heuristic)."""
+    if not app_package:
+        return False
+    prefix = app_package + "."
+    for cls in dex.get_classes():
+        name = _dotted(cls.get_name())
+        if name == app_package or name.startswith(prefix):
+            return True
+    return False
 
 
 def _instruction_effect(opcode: str, registers: tuple[int, ...]) -> tuple[int | None, tuple[int, ...], bool]:
@@ -170,8 +205,13 @@ def _build_method_flow(vm, encoded_method: object) -> MethodFlow | None:
     )
     return MethodFlow(method_ref, tuple(blocks), min(item.start for item in blocks), extraction_complete)
 
-def index_apk(apk_bytes: bytes, *, max_methods: int = MAX_METHODS) -> CodeIndex:
-    """Index root-level classes*.dex entries and account for every discovered entry."""
+def index_apk(apk_bytes: bytes, *, max_methods: int = MAX_METHODS, app_package: str | None = None) -> CodeIndex:
+    """Index root-level classes*.dex entries and account for every discovered entry.
+
+    When app_package is not given, the manifest package is derived best-effort and
+    used only to prioritize app-bearing entries under the method budget; a missing
+    or unreadable manifest simply means no prioritization.
+    """
     try:
         with zipfile.ZipFile(BytesIO(apk_bytes)) as archive:
             names = [n for n in archive.namelist() if _DEX_ENTRY.fullmatch(n)]
@@ -193,85 +233,102 @@ def index_apk(apk_bytes: bytes, *, max_methods: int = MAX_METHODS) -> CodeIndex:
         raise
     except (zipfile.BadZipFile, OSError, RuntimeError) as exc:
         raise DexIndexError(f"cannot read APK: {exc}") from exc
-    return _index(sources, max_methods)
+    if app_package is None:
+        app_package = _manifest_package(apk_bytes)
+    return _index(sources, max_methods, app_package=app_package)
 
-def index_dex(*blobs: bytes, max_methods: int = MAX_METHODS) -> CodeIndex:
-    """Index one or more bare DEX blobs."""
+def index_dex(*blobs: bytes, max_methods: int = MAX_METHODS, app_package: str | None = None) -> CodeIndex:
+    """Index one or more bare DEX blobs.
+
+    app_package is the same prioritization heuristic as index_apk; bare blobs carry
+    no manifest, so callers pass it explicitly when they know it.
+    """
     if not blobs:
         raise DexIndexError("no dex supplied")
-    return _index([(f"classes{i + 1}.dex", blob) for i, blob in enumerate(blobs)], max_methods)
+    return _index([(f"classes{i + 1}.dex", blob) for i, blob in enumerate(blobs)], max_methods, app_package=app_package)
 
-def _index(sources: list[tuple[str, bytes]], max_methods: int) -> CodeIndex:
+def _index(sources: list[tuple[str, bytes]], max_methods: int, app_package: str | None = None) -> CodeIndex:
     from androguard.core.dex import DEX
     if max_methods < 1:
         raise ValueError("max_methods must be at least 1")
+    # Phase 1: parse every entry once (bounded by the caller-enforced byte caps), so
+    # the method budget can be spent app-first instead of lexicographic-name-first.
+    parsed: list[tuple[str, bytes, object, bool]] = []
+    coverage_by_entry: dict[str, DexCoverage] = {}
+    for entry, raw in sources:
+        if len(raw) > MAX_DEX_BYTES:
+            coverage_by_entry[entry] = DexCoverage(entry, "failed", len(raw), error=f"exceeds {MAX_DEX_BYTES} byte limit")
+            continue
+        try:
+            dex = DEX(raw)
+        except Exception as exc:
+            coverage_by_entry[entry] = DexCoverage(entry, "failed", len(raw), error=f"cannot parse: {type(exc).__name__}: {exc}")
+            continue
+        parsed.append((entry, raw, dex, _has_app_classes(dex, app_package)))
+    # App-bearing entries spend the budget first; stable order within each group.
+    parsed.sort(key=lambda item: 0 if item[3] else 1)
+    # Phase 2: admit methods in that order, with the same per-entry semantics as before.
     defined, all_methods = set(), set()
     calls, strings = {}, {}
     class_sources, method_sources = {}, {}
-    coverage = []
     flow_candidates = []
     source_methods = set()
     sink_methods = set()
     method_count = 0
     budget_exhausted = False
-    for entry, raw in sources:
+    for entry, raw, dex, _app in parsed:
         if budget_exhausted:
-            coverage.append(DexCoverage(entry, "skipped", len(raw), error="global method budget exhausted"))
+            coverage_by_entry[entry] = DexCoverage(entry, "skipped", len(raw), error="global method budget exhausted")
             continue
-        if len(raw) > MAX_DEX_BYTES:
-            coverage.append(DexCoverage(entry, "failed", len(raw), error=f"exceeds {MAX_DEX_BYTES} byte limit"))
-            continue
-        try:
-            dex = DEX(raw)
-            entry_classes, entry_methods = set(), 0
-            for cls in dex.get_classes():
-                name = _dotted(cls.get_name())
-                defined.add(name)
-                entry_classes.add(name)
-                class_sources.setdefault(name, set()).add(entry)
-                for method in cls.get_methods():
-                    if method_count >= max_methods:
-                        budget_exhausted = True
-                        break
-                    method_count += 1
-                    entry_methods += 1
-                    ref = MethodRef(name, method.get_name(), method.get_descriptor())
-                    all_methods.add(ref)
-                    method_sources.setdefault(ref, set()).add(entry)
-                    code = method.get_code()
-                    if code is None:
-                        continue
-                    literals = []
-                    has_source = False
-                    has_sink = False
-                    for instruction in code.get_bc().get_instructions():
-                        opcode = instruction.get_name()
-                        if opcode.startswith("invoke"):
-                            parsed = _parse_reference(instruction.get_output())
-                            if parsed:
-                                calls.setdefault(ref, set()).add((parsed[0], parsed[1]))
-                                has_source = has_source or is_source_api(parsed[0], parsed[1])
-                                has_sink = has_sink or is_sink_api(parsed[0], parsed[1])
-                        elif opcode.startswith("const-string") and len(literals) < MAX_STRING_CONSTANTS:
-                            literal = instruction.get_output().split(",", 1)[-1].strip().strip('"')
-                            if literal:
-                                literals.append(literal)
-                    if literals:
-                        strings[ref] = tuple(dict.fromkeys((*strings.get(ref, ()), *literals)))
-                    if has_source:
-                        source_methods.add(ref)
-                    if has_sink:
-                        sink_methods.add(ref)
-                    if has_source and has_sink:
-                        flow_candidates.append((dex, method))
-                if budget_exhausted:
+        entry_classes, entry_methods = set(), 0
+        for cls in dex.get_classes():
+            name = _dotted(cls.get_name())
+            defined.add(name)
+            entry_classes.add(name)
+            class_sources.setdefault(name, set()).add(entry)
+            for method in cls.get_methods():
+                if method_count >= max_methods:
+                    budget_exhausted = True
                     break
-            coverage.append(DexCoverage(
-                entry, "truncated" if budget_exhausted else "indexed",
-                len(raw), len(entry_classes), entry_methods,
-                "global method budget exhausted" if budget_exhausted else None))
-        except Exception as exc:
-            coverage.append(DexCoverage(entry, "failed", len(raw), error=f"cannot parse: {type(exc).__name__}: {exc}"))
+                method_count += 1
+                entry_methods += 1
+                ref = MethodRef(name, method.get_name(), method.get_descriptor())
+                all_methods.add(ref)
+                method_sources.setdefault(ref, set()).add(entry)
+                code = method.get_code()
+                if code is None:
+                    continue
+                literals = []
+                has_source = False
+                has_sink = False
+                for instruction in code.get_bc().get_instructions():
+                    opcode = instruction.get_name()
+                    if opcode.startswith("invoke"):
+                        target = _parse_reference(instruction.get_output())
+                        if target:
+                            calls.setdefault(ref, set()).add((target[0], target[1]))
+                            has_source = has_source or is_source_api(target[0], target[1])
+                            has_sink = has_sink or is_sink_api(target[0], target[1])
+                    elif opcode.startswith("const-string") and len(literals) < MAX_STRING_CONSTANTS:
+                        literal = instruction.get_output().split(",", 1)[-1].strip().strip('"')
+                        if literal:
+                            literals.append(literal)
+                if literals:
+                    strings[ref] = tuple(dict.fromkeys((*strings.get(ref, ()), *literals)))
+                if has_source:
+                    source_methods.add(ref)
+                if has_sink:
+                    sink_methods.add(ref)
+                if has_source and has_sink:
+                    flow_candidates.append((dex, method))
+            if budget_exhausted:
+                break
+        coverage_by_entry[entry] = DexCoverage(
+            entry, "truncated" if budget_exhausted else "indexed",
+            len(raw), len(entry_classes), entry_methods,
+            "global method budget exhausted" if budget_exhausted else None)
+    # Coverage is reported in original source order regardless of admission order.
+    coverage = [coverage_by_entry[entry] for entry, _raw in sources]
     # A DEX parsed up to the method budget is a valid partial index.
     if not any(x.status in {"indexed", "truncated"} for x in coverage):
         details = "; ".join(f"{x.entry}: {x.error or x.status}" for x in coverage)
