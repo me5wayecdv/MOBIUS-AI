@@ -77,8 +77,13 @@ class SafePoCRunner:
     VERSION = "mobius-safe-poc/0.1.0"
     _HARNESS_VERSION = "mobius-local-harness/1.0.0"
 
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: Session, emulator_adapter=None) -> None:
         self.session = session
+        # Optional PHANTOM adapter (services/phantom.py). Duck-typed on
+        # purpose: poc_runner must not import phantom (phantom imports the
+        # runner's error types). None preserves the historical fail-closed
+        # behavior for emulator-target plans.
+        self._emulator_adapter = emulator_adapter
         self._harnesses: dict[str, Callable[[dict[str, str | bool | int]], dict[str, Any]]] = {
             "unsafe_webview_forwarder_v1": self._unsafe_webview_forwarder,
             "safe_webview_guard_v1": self._safe_webview_guard,
@@ -100,7 +105,7 @@ class SafePoCRunner:
                 raise PoCApprovalRequired("a matching, unexpired granted PoC approval is required")
         elif plan.safety_class != "read_only":
             raise PoCApprovalRequired("non-read-only plans require explicit approval")
-        if plan.target_kind == "emulator":
+        if plan.target_kind == "emulator" and self._emulator_adapter is None:
             raise PoCAdapterUnavailable("no verified Android emulator adapter is configured on this host")
         if plan.cleanup_steps and plan.target_kind != "local_harness":
             raise PoCAdapterUnavailable("cleanup adapters are currently limited to local_harness targets")
@@ -125,12 +130,28 @@ class SafePoCRunner:
                     actual, tool, version = self._run_manifest_step(plan, step.action, step.target_ref)
                 elif plan.target_kind == "local_harness":
                     actual, tool, version = self._run_harness_step(step.action, step.target_ref, step.input_values, context)
+                elif plan.target_kind == "emulator":
+                    actual, tool, version = self._run_emulator_step(plan, step)
                 else:
                     raise PoCAdapterUnavailable(f"unsupported target kind: {plan.target_kind}")
                 versions.add(f"{tool}/{version}")
-                passed = actual == step.expected_value if step.action in {
-                    "assert_manifest_component", "assert_manifest_permission", "assert_local_harness_result"
-                } else True
+                if step.action in {
+                    "assert_manifest_component", "assert_manifest_permission", "assert_local_harness_result",
+                    "assert_emulator_package_present",
+                }:
+                    passed = actual == step.expected_value
+                elif step.action == "assert_emulator_provider_rows":
+                    # Documented threshold semantics: the runtime probe proves
+                    # at least the expected number of rows is readable without
+                    # a permission. A refused query (actual None) never passes.
+                    passed = (
+                        isinstance(actual, int) and not isinstance(actual, bool)
+                        and isinstance(step.expected_value, int)
+                        and not isinstance(step.expected_value, bool)
+                        and actual >= step.expected_value
+                    )
+                else:
+                    passed = True
                 duration_ms = max(0, int((time.monotonic() - step_started) * 1000))
                 results.append(PoCStepResult(index=index, action=step.action, target_ref=step.target_ref,
                     status="passed" if passed else "failed", passed=passed, actual_value=actual,
@@ -174,8 +195,14 @@ class SafePoCRunner:
         return PoCExecutionResult(plan_id=plan.id, investigation_id=plan.investigation_id,
             target_sha256=plan.target_sha256, status=status, started_at=started_at, finished_at=finished_at,
             duration_ms=total_ms, steps=tuple(results), output_json=output, tool_versions=tuple(sorted(versions)),
-            limitations=("Local harness results are deterministic simulations, not execution of the APK.",
-                "No shell, subprocess, network, emulator, or state-changing action is available.",
+            limitations=(
+                ("Emulator probes ran read-only via adb against a verified emulator; physical "
+                 "devices are refused; no install, delete, Frida or proxy capability exists."
+                 if plan.target_kind == "emulator" else
+                 "Local harness results are deterministic simulations, not execution of the APK."),
+                ("No shell, network, or state-changing action is available."
+                 if plan.target_kind == "emulator" else
+                 "No shell, subprocess, network, emulator, or state-changing action is available."),
                 "Cancellation is cooperative between bounded allowlisted steps; it cannot interrupt a running step."),
             cleanup_results=tuple(cleanup_results))
 
@@ -237,6 +264,32 @@ class SafePoCRunner:
             declared = any((row.attributes or {}).get("permission") == target_ref for row in rows)
             return declared, "persisted-manifest-observation", "1"
         raise PoCAdapterUnavailable(f"action {action} is not available for lab_apk targets")
+
+    def _run_emulator_step(self, plan: PoCTestPlan, step):
+        adapter = self._emulator_adapter
+        if adapter is None:
+            raise PoCAdapterUnavailable("no verified Android emulator adapter is configured on this host")
+        if step.action == "assert_emulator_package_present":
+            if step.target_ref != plan.target_package:
+                raise PoCScopeRejected(
+                    "emulator package probes must target the plan's authorized package"
+                )
+            result = adapter.probe_package_present(step.target_ref)
+            return result.actual, "phantom-adb", adapter.VERSION
+        if step.action == "assert_emulator_provider_rows":
+            authority, sep, path = step.target_ref.partition("/")
+            if (
+                not sep or not path or "/" in path
+                or authority == plan.target_package
+                or not authority.startswith(plan.target_package + ".")
+            ):
+                raise PoCScopeRejected(
+                    "emulator provider probes must target one authority path "
+                    "within the plan's authorized package"
+                )
+            result = adapter.probe_provider_query_rows(authority, path)
+            return result.actual, "phantom-adb", adapter.VERSION
+        raise PoCAdapterUnavailable(f"action {step.action} is not available for emulator targets")
 
     def _run_harness_step(
         self,

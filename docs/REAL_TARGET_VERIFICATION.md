@@ -66,8 +66,13 @@ slice, not the full PHANTOM adapter.
 
 ## Remaining boundaries (unchanged by the above)
 
-- Full PHANTOM adapter (emulator orchestration inside Mobius, Frida
-  instrumentation): not implemented.
+- PHANTOM adapter: first read-only slice implemented inside Mobius
+  (`services/phantom.py`): env-gated adb probes (package presence,
+  provider row counts) wired into the D-041 runner for `emulator` plans,
+  with qemu-only device verification and same-package target binding.
+  Emulator orchestration inside Mobius and Frida instrumentation remain
+  unimplemented; end-to-end execution of an emulator plan through the
+  API on CI infrastructure is the next integration step.
 - JADX OCI image: unpublished by design; the queue returns 503 until an
   approved immutable digest is configured. RECON/DEX/provider OCI worker
   transport is CI-verified (worker pipeline smoke, provider runtime
@@ -75,5 +80,5 @@ slice, not the full PHANTOM adapter.
 - Deployed worker host: unverified (demo-first deferral).
 - Detection breadth: catalogue-bounded (provider operations, hardcoded keys,
   secrets); the broader catalogue (D-063) is deferred.
-- Dynamic analysis is a smoke slice only: no mitmproxy, no Frida hooks, no
-  persistent emulator infrastructure.
+- Dynamic analysis: standalone smoke plus read-only Mobius probes; no
+  mitmproxy, no Frida hooks, no persistent emulator infrastructure.
