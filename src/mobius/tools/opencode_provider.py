@@ -81,6 +81,40 @@ def parse_ndjson_events(stdout: str) -> tuple[str, int | None, int | None]:
     )
 
 
+def extract_json_object(text: str) -> str:
+    """Return the first balanced {...} object in text, or the text unchanged.
+
+    The CLI may split an answer into multiple text parts or add commentary
+    around the object; that is transport noise for this eval adapter, not
+    model-output invalidity (schema validation stays with the gateway).
+    """
+    start = text.find("{")
+    if start == -1:
+        return text
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return text
+
+
 class OpenCodeCliProvider:
     """ModelProvider that drives OpenCode's free-tier models via the official CLI.
 
@@ -162,6 +196,7 @@ class OpenCodeCliProvider:
         content, cli_input, cli_output = parse_ndjson_events(proc.stdout)
         self.last_cli_input_tokens = cli_input
         self.last_cli_output_tokens = cli_output
+        content = extract_json_object(content)
         if not content.strip():
             tail = (proc.stdout or "")[-_MAX_ERROR_CHARS:].strip()
             raise ModelProviderError(f"OpenCode CLI returned no assistant text: {tail}")

@@ -38,6 +38,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from ..adapters.models import DecisionRow, EvidenceRow, FindingRow, InvestigationRow, VerdictRow
+from ..core.schemas import SourceRef
 from ..core.enums import Severity
 from ..services.artifacts import ArtifactStore
 from ..services.intake import IntakeService
@@ -78,10 +79,13 @@ class Fixture:
     other_evidence_id: str
 
 
-def build_fixture(session: Session, store: ArtifactStore) -> Fixture:
+def build_fixture(session: Session, store: ArtifactStore, *, variant: str = "challengeable") -> Fixture:
     """A confirmed finding with persisted evidence, plus a second investigation whose
     evidence ID exists but is OUTSIDE the finding's investigation (for the
-    cross-investigation citation case)."""
+    cross-investigation citation case). ``variant`` selects the oracle:
+    challengeable (thin evidence under a strong claim; a challenge is correct)
+    or solid (evidence covers every claim element; no material challenge is
+    correct - the review false-positive control)."""
     future = _future_iso()
 
     def _one(suffix: str) -> tuple[str, str, str, str]:
@@ -107,7 +111,19 @@ def build_fixture(session: Session, store: ArtifactStore) -> Fixture:
         row.llm_data_sharing = {"enabled": True, "provider": "mock"}
         row.budget_json = {"max_model_tokens": 1_000_000}
         session.flush()
-        evidence_id = f"ev_acceptance_{suffix}"
+        evidence_id = f"ev_acceptance_{variant}_{suffix}"
+        summary = (
+            "A persisted code observation showing a reachable file write."
+            if variant == "challengeable"
+            else "Decompiled code shows exported activity com.example.Entry with no "
+                 "android:permission attribute and no runtime caller check, reading the "
+                 "untrusted Intent extra 'path' without validation and using it as the "
+                 "filename passed directly to java.io.FileOutputStream inside the app's "
+                 "private files directory on the main onCreate path; the sink is "
+                 "reachable from the attacker-supplied extra, so another app can make "
+                 "this app overwrite its own private files (privileged sink: writes to "
+                 "app-private storage the calling app could not write itself)."
+        )
         session.add(EvidenceRow(
             id=evidence_id,
             investigation_id=investigation.id,
@@ -117,11 +133,33 @@ def build_fixture(session: Session, store: ArtifactStore) -> Fixture:
             byte_size=128,
             truncated=False,
             redacted=True,
-            summary="A persisted code observation showing a reachable file write.",
+            summary=summary,
             produced_by="SPECTRE",
             created_at=future,
         ))
         session.flush()
+        extra_evidence: tuple[str, ...] = ()
+        if variant == "solid":
+            manifest_evidence_id = f"ev_acceptance_{variant}_manifest_{suffix}"
+            session.add(EvidenceRow(
+                id=manifest_evidence_id,
+                investigation_id=investigation.id,
+                kind="manifest_excerpt",
+                sha256="b" * 64,
+                object_key=f"evidence/{suffix}-manifest",
+                byte_size=256,
+                truncated=False,
+                redacted=True,
+                summary=(
+                    "AndroidManifest excerpt: <activity android:name=\".Entry\" "
+                    "android:exported=\"true\"> with an intent-filter and no "
+                    "android:permission attribute; no protectionLevel declared."
+                ),
+                produced_by="SPECTRE",
+                created_at=future,
+            ))
+            session.flush()
+            extra_evidence = (manifest_evidence_id,)
         finding, verdict = ValidationService(session).validate(
             investigation_id=investigation.id,
             category="exported-component-no-permission",
@@ -133,10 +171,15 @@ def build_fixture(session: Session, store: ArtifactStore) -> Fixture:
             },
             title="Exported activity writes attacker-supplied path",
             description="The exported activity forwards an untrusted path to a privileged file sink.",
-            evidence_refs=(evidence_id,),
+            evidence_refs=(evidence_id,) + extra_evidence,
             discovered_by="SPECTRE",
             validated_by="DETERMINISTIC_GATE",
             severity=Severity.HIGH,
+            component_ref=("com.example.Entry" if variant == "solid" else None),
+            source_ref=(SourceRef(file="com/example/Entry.java",
+                                  class_name="com.example.Entry",
+                                  method="onCreate", lines=(41, 58))
+                        if variant == "solid" else None),
         )
         session.flush()
         return finding.id, investigation.id, verdict.id, evidence_id
@@ -410,45 +453,61 @@ def _live_report(mode: str = "ollama") -> Report:
             store = ArtifactStore(Path(tmp) / "artifacts")
             session = context.session()
             try:
-                fx = build_fixture(session, store)
-                row = session.get(InvestigationRow, fx.investigation_id)
-                row.llm_data_sharing = {"enabled": True, "provider": mode}
-                session.commit()
                 gateway = StructuredModelGateway(provider, model=model, timeout_seconds=timeout)
                 factory = sessionmaker(bind=session.get_bind(), expire_on_commit=False, future=True)
                 report = Report(mode=mode)
-                started = time.monotonic()
-                try:
-                    result = VeritasReviewService(
-                        session, gateway=gateway, session_factory=factory
-                    ).review(fx.finding_id, producer_model_id=PRODUCER_MODEL)
-                    elapsed = time.monotonic() - started
-                    accepted = result["disposition"] == "challenge"
-                    report.results.append(CaseResult(
-                        case=Case("live-challengeable-fixture", "quality-floor",
-                                  {}, "persisted:challenge"),
-                        ok=accepted,
-                        observed=f"persisted:{result['disposition']}",
-                        detail=(f"measured {elapsed:.1f}s (timeout budget {timeout}s); "
-                                f"tokens in/out: {result.get('input_tokens')}/{result.get('output_tokens')}" + (
-                                    f"; CLI totals in/out: "
-                                    f"{provider.last_cli_input_tokens}/"
-                                    f"{provider.last_cli_output_tokens} "
-                                    f"(includes OpenCode platform overhead)"
-                                    if mode == "opencode" else ""
-                                )),
-                    ))
-                except (ModelConsentRequired, ModelOutputInvalid, ModelBudgetExceeded) as exc:
-                    elapsed = time.monotonic() - started
-                    report.results.append(CaseResult(
-                        case=Case("live-challengeable-fixture", "quality-floor",
-                                  {}, "persisted:challenge"),
-                        ok=False,
-                        observed=f"refused:{type(exc).__name__}",
-                        detail=f"guards rejected the live response after {elapsed:.1f}s",
-                    ))
+                # challengeable: the discriminating floor (must challenge).
+                # solid: grounded-completion floor (any disposition passes; the
+                # disposition is reported informationally). A strict reviewer can
+                # always argue impact materiality, so "no challenge" cannot be a
+                # floor; what this case measures is groundedness (guards reject
+                # citations outside the package) and challenge rate over repeats.
+                for variant, expected_disp in (
+                    ("challengeable", "challenge"),
+                    ("solid", "any"),
+                ):
+                    fx = build_fixture(session, store, variant=variant)
+                    row = session.get(InvestigationRow, fx.investigation_id)
+                    row.llm_data_sharing = {"enabled": True, "provider": mode}
+                    session.commit()
+                    started = time.monotonic()
+                    try:
+                        result = VeritasReviewService(
+                            session, gateway=gateway, session_factory=factory
+                        ).review(fx.finding_id, producer_model_id=PRODUCER_MODEL)
+                        elapsed = time.monotonic() - started
+                        accepted = (
+                            result["disposition"] == expected_disp
+                            if expected_disp != "any"
+                            else result["disposition"] in {
+                                "challenge", "no_material_challenge", "insufficient_evidence"
+                            }
+                        )
+                        report.results.append(CaseResult(
+                            case=Case(f"live-{variant}-fixture", "quality-floor",
+                                      {}, f"persisted:{expected_disp if expected_disp != 'any' else 'grounded-completion'}"),
+                            ok=accepted,
+                            observed=f"persisted:{result['disposition']}",
+                            detail=(f"measured {elapsed:.1f}s (timeout budget {timeout}s); "
+                                    f"tokens in/out: {result.get('input_tokens')}/{result.get('output_tokens')}" + (
+                                        f"; CLI totals in/out: "
+                                        f"{provider.last_cli_input_tokens}/"
+                                        f"{provider.last_cli_output_tokens} "
+                                        f"(includes OpenCode platform overhead)"
+                                        if mode == "opencode" else ""
+                                    )),
+                        ))
+                    except (ModelConsentRequired, ModelOutputInvalid, ModelBudgetExceeded) as exc:
+                        elapsed = time.monotonic() - started
+                        report.results.append(CaseResult(
+                            case=Case(f"live-{variant}-fixture", "quality-floor",
+                                      {}, f"persisted:{expected_disp}"),
+                            ok=False,
+                            observed=f"refused:{type(exc).__name__}",
+                            detail=f"guards rejected the live response after {elapsed:.1f}s",
+                        ))
                 report.probes.append(
-                    "note: live mode measures ONE seeded challengeable fixture; a pass is a "
+                    "note: live mode measures small seeded fixtures; a pass is a "
                     "minimum quality floor, not a quality endorsement")
                 session.close()
                 return report

@@ -130,6 +130,39 @@ _VARIANTS = {
             confidence=0.9,
         ),
     ],
+    # Second actionable family: exported broadcast receiver plus an unguarded
+    # SQL sink with attacker-controlled extra. Floor: >=1 grounded hypothesis.
+    "actionable2": [
+        _observation(
+            statement="Static call path reaches a raw SQL execution sink",
+            subject_ref="com.example.SyncReceiver",
+            attributes={
+                "reachability": "reached-unguarded",
+                "path": ["Lcom/example/SyncReceiver;->onReceive()V"],
+                "sink": "Landroid/database/sqlite/SQLiteDatabase;->rawQuery()V",
+                "guards": [],
+                "index_truncated": False,
+                "exhaustive": True,
+            },
+            maswe=["MASWE-0003"],
+        ),
+        _observation(
+            statement="Exported broadcast receiver forwards an Intent extra into the SQL query unvalidated",
+            subject_ref="com.example.SyncReceiver",
+            attributes={
+                "reachability": "reached-unguarded",
+                "exported": True,
+                "entry_point": "Lcom/example/SyncReceiver;->onReceive()V",
+                "input_source": "android.intent.extra.TEXT",
+                "input_validation": "none",
+                "sink": "Landroid/database/sqlite/SQLiteDatabase;->rawQuery()V",
+                "index_truncated": False,
+                "exhaustive": True,
+            },
+            maswe=["MASWE-0003"],
+            confidence=0.9,
+        ),
+    ],
     # Correct abstention: an app-internal, guarded, non-sensitive write. No
     # useful hypothesis exists; floor: exactly 0 hypotheses.
     "abstain": [
@@ -458,7 +491,10 @@ def _live_report(mode: str = "ollama") -> Report:
                 gateway = StructuredModelGateway(provider, model=model, timeout_seconds=timeout)
                 factory = sessionmaker(bind=session.get_bind(), expire_on_commit=False, future=True)
                 report = Report(mode=mode)
-                for variant in ("actionable", "abstain", "thin"):
+                selected = os.environ.get(
+                    "MOBIUS_LIVE_VARIANTS", "actionable,actionable2,abstain,thin"
+                ).split(",")
+                for variant in [v.strip() for v in selected if v.strip() in _VARIANTS]:
                     fx = build_fixture(session, store, provider=fx_provider, variant=variant)
                     started = time.monotonic()
                     try:
@@ -485,7 +521,7 @@ def _live_report(mode: str = "ollama") -> Report:
                                 f"repair_attempts={result['repair_attempts']}, "
                                 f"{elapsed:.1f}s{cli_note}")
                             continue
-                        if variant == "actionable":
+                        if variant in ("actionable", "actionable2"):
                             ok = result["mode"] == "model_gateway" and n_hyp >= 1
                             expected = "accepted:model_gateway with >=1 grounded hypothesis"
                         else:  # abstain

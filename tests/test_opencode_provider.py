@@ -44,3 +44,10 @@ def test_parse_ignores_non_json_lines_and_missing_tokens():
     assert content == "hi"
     assert input_tokens is None
     assert output_tokens is None
+
+
+def test_extract_json_object_strips_commentary():
+    from mobius.tools.opencode_provider import extract_json_object
+    assert extract_json_object('Here is the reply: {"a": "}"} trailing') == '{"a": "}"}'
+    assert extract_json_object("no object") == "no object"
+    assert extract_json_object('{"a": 1} {"b": 2}') == '{"a": 1}'
