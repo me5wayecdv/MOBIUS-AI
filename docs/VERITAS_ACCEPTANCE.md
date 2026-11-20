@@ -32,6 +32,14 @@ reviewer model therefore does NOT mean trusting its judgement. It means two narr
 
 ## Measured standing (provenance, not fresh runs)
 
+- 2026-11-20: domain-skills conditioning added to the VERITAS and NEXUS system prompts
+  (`src/mobius/services/model_skills.py`, prompt versions bumped to `veritas-independent-review-v2`
+  / `nexus-hypothesis-generation-v2`; exact bytes are recorded per decision in
+  `system_prompt_sha256`). The skills anchor the stages to the catalogue families this build can
+  evidence and state the citation discipline against the measured 2026-11-19 failure mode. This
+  is CONDITIONING, not a measured quality improvement: its effect on a real model is unknown
+  until a live-mode harness run measures it.
+
 - 2026-11-19, owner host, Ollama 0.40.16: `qwen2.5:0.5b`, `qwen2.5:1.5b`,
   `qwen2.5-coder:1.5b` all produced schema-valid JSON for NEXUS hypothesis generation and all
   were rejected by the integrity guards (fabricated/wrong-kind citations); the deterministic

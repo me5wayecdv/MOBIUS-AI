@@ -18,9 +18,10 @@ from .model_provider import (
     ModelOutputInvalid,
     StructuredModelGateway,
 )
+from .model_skills import NEXUS_HYPOTHESIS_SKILLS
 
 AGENT = "NEXUS"
-PROMPT_VERSION = "nexus-hypothesis-generation-v1"
+PROMPT_VERSION = "nexus-hypothesis-generation-v2"
 REQUIRED_EVIDENCE = frozenset({
     "source_location",
     "caller_chain",
@@ -118,7 +119,9 @@ must cite one or more supplied observation IDs and list the specific evidence st
 before testing. Do not claim exploitability, do not upgrade findings, do not invent source
 locations or evidence, and do not request arbitrary commands, external targets, destructive
 tests, stealth, persistence or credential collection. A call path is not proof of attacker-
-controlled data flow. Return an empty list if evidence does not justify a useful hypothesis."""
+controlled data flow. Return an empty list if evidence does not justify a useful hypothesis.
+
+""" + NEXUS_HYPOTHESIS_SKILLS
 
 
 class NexusHypothesisService:

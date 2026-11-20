@@ -133,7 +133,7 @@ def test_veritas_challenge_is_persisted_and_cannot_change_gate_verdict(
     )).scalar_one()
     assert decision.model_id == "reviewer-v2"
     assert decision.provider == "mock"
-    assert decision.prompt_version == "veritas-independent-review-v1"
+    assert decision.prompt_version == "veritas-independent-review-v2"
     assert decision.considered_evidence == [evidence_id]
     assert decision.output_json["disposition"] == "challenge"
     assert decision.output_json["challenges"][0]["evidence_refs"] == [evidence_id]
