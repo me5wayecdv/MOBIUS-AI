@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from mobius.tools.opencode_provider import _model_tag, parse_ndjson_events
+from mobius.services.model_provider import _model_tag, parse_ndjson_events
 
 
 def _text_event(text: str) -> str:
@@ -47,13 +47,13 @@ def test_parse_ignores_non_json_lines_and_missing_tokens():
 
 
 def test_extract_json_object_accepts_single_whitespace_padded_object():
-    from mobius.tools.opencode_provider import extract_json_object
+    from mobius.services.model_provider import extract_json_object
     assert extract_json_object('  {"a": {"b": 2}}\n') == '{"a": {"b": 2}}'
     assert extract_json_object('{"a": "}"}') == '{"a": "}"}'
 
 
 def test_extract_json_object_rejects_competing_or_trailing_payloads():
-    from mobius.tools.opencode_provider import extract_json_object
+    from mobius.services.model_provider import extract_json_object
     for bad in (
         '{"a": 1} {"b": 2}',                       # two competing objects
         '{"a": 1}\n{"contradictory": true}',      # trailing contradictory payload

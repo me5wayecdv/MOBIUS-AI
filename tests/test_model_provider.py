@@ -232,3 +232,37 @@ def test_deterministic_mock_implements_the_same_core_model_gateway_port():
     assert result["input_tokens"] == 4
     assert result["output_tokens"] == 3
     assert result["schema_valid"] is True
+
+
+def test_gateway_factory_opencode_is_explicit_opt_in(monkeypatch, tmp_path):
+    """MOBIUS-OPT-IN: opencode builds only when explicitly configured, and the
+    per-investigation consent gate still fails closed without consent naming it."""
+    import mobius.services.model_provider as mp
+
+    fake_bin = tmp_path / "opencode"
+    fake_bin.write_text("#!/bin/sh\nexit 1\n")
+    fake_bin.chmod(0o755)
+    monkeypatch.setenv("MOBIUS_OPENCODE_BIN", str(fake_bin))
+
+    gateway = mp.create_model_gateway(
+        "opencode", base_url="", model="deepseek-v4.1-flash-free", timeout_seconds=30
+    )
+    assert gateway is not None
+    assert gateway.provider.name == "opencode"
+
+    # Consent gate: a gateway built for opencode refuses a call whose
+    # investigation consent names a different provider, before any CLI runs.
+    import asyncio
+    import pytest
+
+    with pytest.raises(mp.ModelConsentRequired):
+        asyncio.run(gateway.with_consent(
+            enabled=True, provider="ollama", remaining_tokens=1000
+        ).complete_structured(
+            role="reasoning", system="s", user="u", schema=PlannerReply, max_tokens=16
+        ))
+
+    # Default stays disabled; unknown providers still raise.
+    assert mp.create_model_gateway("disabled", base_url="", model="x") is None
+    with pytest.raises(ValueError):
+        mp.create_model_gateway("openrouter", base_url="", model="x")
