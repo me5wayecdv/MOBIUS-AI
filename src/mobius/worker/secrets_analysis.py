@@ -68,6 +68,20 @@ from ..core.secrets import (
     detect_hardcoded_secrets,
 )
 
+
+class MethodsBoundExceeded(Exception):
+    """Adapted method count exceeded the service's explicit method bound.
+
+    Raised before any detection work: an over-bounds input is an explicit
+    service limit (same 50,000 bound the provider worker refuses at and the
+    payload schema enforces), never a detector verdict and never a malformed
+    payload. Carries the structural count only - never app data.
+    """
+
+    def __init__(self, methods: int) -> None:
+        super().__init__()
+        self.methods = methods
+
 #: The only path this binary may read; the OCI contract stages exactly one file.
 _STAGED_INPUT = Path("/work/input.apk")
 
@@ -493,6 +507,13 @@ def run(apk: bytes) -> dict:
     digest = hashlib.sha256(apk).hexdigest()
     surface = parse_apk(apk)
     flows, registers_sizes, superclasses, try_regions, ledger = adapt_code(apk)
+    # Truthful bounds reporting, mirroring the provider worker: refuse an
+    # over-bounds APK explicitly and BEFORE spending detection time on it,
+    # so it can never die late as a schema-validation failure that reads as
+    # a malformed payload. 50,000 is the service's method bound, mirrored by
+    # the payload schema's methods_adapted le=50000.
+    if len(flows) > 50000:
+        raise MethodsBoundExceeded(len(flows))
     static = _static_flags(apk, flows)
     frame_info = {
         ref: (registers_sizes.get(ref, 0), static.get(ref, False)) for ref in flows
@@ -531,6 +552,16 @@ def main() -> int:
     try:
         payload = run(source.read_bytes())
         encoded = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    except MethodsBoundExceeded as exc:
+        # Explicit service limit, labelled as such (provider-worker pattern);
+        # the count is structural accounting, never app data.
+        print(
+            f"secrets analysis input exceeds the service method bound "
+            f"({exc.methods} adapted methods > 50000); the APK is too large "
+            "for this service's explicit limits",
+            file=sys.stderr,
+        )
+        return 4
     except Exception as exc:
         # Type name only: an exception message could embed app data.
         print(f"secrets analysis failed: {type(exc).__name__}", file=sys.stderr)

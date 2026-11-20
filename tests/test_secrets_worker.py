@@ -459,3 +459,70 @@ def test_via_prefix_fallback_wrong_call_offset_not_recovered():
     payload = _build(flows, [_candidate(detail=detail, ref=init)])
     result = _validate(payload)
     assert result.conversion_failed == 1 and not result.candidates
+
+
+# -- explicit service method bound (provider-worker pattern) ------------------
+
+def _flows_of_size(n):
+    return {MethodRef(f"com.synthetic.C{i}", "m", "()V"): [] for i in range(n)}
+
+
+def test_run_refuses_over_methods_bound_before_detection(monkeypatch):
+    from types import SimpleNamespace
+
+    from mobius.worker import secrets_analysis as entry
+
+    detected = []
+    monkeypatch.setattr(entry, "parse_apk",
+                        lambda apk: SimpleNamespace(package_name="com.example.app"))
+    monkeypatch.setattr(entry, "adapt_code",
+                        lambda apk: (_flows_of_size(50001), {}, {}, [], []))
+    monkeypatch.setattr(entry, "detect_hardcoded_secrets",
+                        lambda *a, **k: detected.append(True))
+    with pytest.raises(entry.MethodsBoundExceeded) as excinfo:
+        entry.run(b"apk-bytes")
+    assert excinfo.value.methods == 50001
+    assert not detected  # refused BEFORE any detection work
+
+
+def test_run_accepts_exactly_at_methods_bound(monkeypatch):
+    from types import SimpleNamespace
+
+    from mobius.worker import secrets_analysis as entry
+
+    monkeypatch.setattr(entry, "parse_apk",
+                        lambda apk: SimpleNamespace(package_name="com.example.app"))
+    monkeypatch.setattr(entry, "adapt_code",
+                        lambda apk: (_flows_of_size(50000), {}, {}, [], []))
+    monkeypatch.setattr(entry, "_static_flags", lambda apk, flows: {})
+    monkeypatch.setattr(entry, "detect_hardcoded_secrets", lambda *a, **k: [])
+    monkeypatch.setattr(entry, "build_secrets_payload", lambda **k: {"ok": True})
+    monkeypatch.setattr(entry, "validate_secrets_analysis_payload",
+                        lambda raw, digest: None)
+    assert entry.run(b"apk-bytes") == {"ok": True}  # the bound itself is inclusive
+
+
+def test_main_reports_explicit_method_bound_refusal(tmp_path, monkeypatch, capsys):
+    import sys
+
+    from mobius.worker import secrets_analysis as entry
+
+    staged = tmp_path / "input.apk"
+    staged.write_bytes(b"apk-bytes")
+    monkeypatch.setattr(entry, "_STAGED_INPUT", staged)
+
+    def _raise(_apk):
+        raise entry.MethodsBoundExceeded(88350)
+
+    monkeypatch.setattr(entry, "run", _raise)
+    argv = sys.argv
+    try:
+        sys.argv = ["mobius-secrets-analysis", "--input", str(staged)]
+        assert entry.main() == 4
+    finally:
+        sys.argv = argv
+    err = capsys.readouterr().err
+    assert "too large" in err
+    assert "service method bound" in err
+    assert "88350" in err            # structural accounting, never app data
+    assert "Traceback" not in err
