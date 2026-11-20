@@ -579,6 +579,7 @@ def run_veritas_review(
             session,
             gateway=ctx.model_gateway,
             session_factory=ctx.session_factory,
+            store=ctx.store,
         ).review(finding_id, producer_model_id=producer_model_id)
     except ModelConsentRequired as exc:
         raise ModelConsentRequiredError(str(exc)) from exc
@@ -1657,6 +1658,7 @@ def _maybe_veritas_auto_review(ctx, scan_id: str):
         session_factory=ctx.session_factory,
         gateway=ctx.model_gateway,
         investigation_id=scan_id,
+        store=ctx.store,
     )
 
 

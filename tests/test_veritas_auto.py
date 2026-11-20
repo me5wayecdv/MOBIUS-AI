@@ -258,7 +258,7 @@ def test_provider_error_is_isolated_with_a_fixed_token(session, store, future_is
     assert _review_decisions(session, investigation_id) == []
 
 
-def test_invalid_model_output_is_isolated_with_a_fixed_token(session, store, future_iso):
+def test_invalid_model_output_is_captured_needs_review_not_a_verdict(session, store, future_iso):
     _, investigation_id, _, _ = _seed(session, store, future_iso, consent=dict(AUTO_CONSENT))
     provider = CountingProvider("{not json")
 
@@ -266,11 +266,13 @@ def test_invalid_model_output_is_isolated_with_a_fixed_token(session, store, fut
         session_factory=_factory(session), gateway=_gateway(provider), investigation_id=investigation_id
     )
 
-    assert summary["failed"] == 1
-    assert summary["failures"][0]["reason"] == "output-invalid"
-    events = _failure_events(session, investigation_id)
-    assert [e.payload["reason"] for e in events] == ["output-invalid"]
-    assert _review_decisions(session, investigation_id) == []
+    assert summary["failed"] == 0
+    assert summary["completed"] == 0
+    assert summary["needs_review"] == 1
+    decisions = _review_decisions(session, investigation_id)
+    assert len(decisions) == 1
+    assert decisions[0].output_json["status"] == "needs_review"
+    assert decisions[0].output_json["failure_class"].startswith("model reply unconvertible")
 
 
 def test_budget_exhaustion_is_a_distinct_visible_token(session, store, future_iso):

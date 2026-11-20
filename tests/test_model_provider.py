@@ -101,7 +101,7 @@ def test_gateway_rejects_invalid_structured_output():
     ))
     gateway = StructuredModelGateway(provider, model="qwen3:8b")
 
-    with pytest.raises(ModelOutputInvalid, match="failed"):
+    with pytest.raises(ModelOutputInvalid, match="unconvertible"):
         gateway.generate(
             output_model=PlannerReply,
             system_prompt="Return JSON.",

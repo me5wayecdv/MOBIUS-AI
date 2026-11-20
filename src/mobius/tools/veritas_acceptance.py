@@ -255,11 +255,12 @@ def cases(fx: Fixture) -> list[Case]:
               "summary": "The supplied summaries cannot support a meaningful review.",
               "challenges": []},
              "persisted:insufficient_evidence"),
-        Case("malformed-json-refused", "schema-validity",
-             "{ not json", "refused:ModelOutputInvalid"),
-        Case("truncated-json-refused", "schema-validity",
-             '{"disposition": "challenge", "summary": "cut off mid-pay', "refused:ModelOutputInvalid",
-             detail="a token-cap truncation must fail closed, not be salvaged"),
+        Case("malformed-json-needs-review", "schema-validity",
+             "{ not json", "needs_review", expected_provider_calls=2,
+             detail="unconvertible reply is captured as needs-review after one bounded repair pass; no verdict is fabricated"),
+        Case("truncated-json-needs-review", "schema-validity",
+             '{"disposition": "challenge", "summary": "cut off mid-pay', "needs_review", expected_provider_calls=2,
+             detail="a token-cap truncation can never become a verdict; captured needs-review after repair"),
         Case("fabricated-evidence-ref-refused", "evidence-confinement",
              fabricated, "refused:ModelOutputInvalid"),
         Case("cross-investigation-ref-refused", "evidence-confinement",
@@ -274,15 +275,15 @@ def cases(fx: Fixture) -> list[Case]:
              {"disposition": "no_material_challenge",
               "summary": "Claims nothing while still attaching a challenge.",
               "challenges": valid["challenges"]}, "refused:ModelOutputInvalid"),
-        Case("disposition-enum-abuse-refused", "disposition-discipline",
-             {**valid, "disposition": "confirmed"}, "refused:ModelOutputInvalid",
-             detail="a model can never pronounce a finding confirmed"),
-        Case("statement-too-short-refused", "schema-validity",
+        Case("disposition-enum-abuse-needs-review", "disposition-discipline",
+             {**valid, "disposition": "confirmed"}, "needs_review", expected_provider_calls=2,
+             detail="a model can never pronounce a finding confirmed; the invalid disposition cannot be converted and is captured needs-review"),
+        Case("statement-too-short-needs-review", "schema-validity",
              {**valid, "challenges": [{**valid["challenges"][0], "statement": "too short"}]},
-             "refused:ModelOutputInvalid"),
-        Case("extra-field-refused", "schema-validity",
-             {**valid, "verdict_override": "confirmed"}, "refused:ModelOutputInvalid",
-             detail="the reply schema forbids extra fields, so a verdict-override attempt fails"),
+             "needs_review", expected_provider_calls=2),
+        Case("extra-field-dropped-persisted", "schema-validity",
+             {**valid, "verdict_override": "confirmed"}, "persisted:challenge",
+             detail="undeclared fields are presentation noise: dropped and recorded in normalization provenance; verdict authority stays with deterministic gates"),
         Case("same-requested-model-refused", "independence",
              valid, "refused:ModelConsentRequired", expected_provider_calls=0,
              requested_model=PRODUCER_MODEL,
@@ -334,6 +335,15 @@ def run_case(session: Session, fx: Fixture, case: Case) -> CaseResult:
         result = VeritasReviewService(
             session, gateway=gateway, session_factory=factory
         ).review(fx.finding_id, producer_model_id=PRODUCER_MODEL)
+        if result.get("status") == "needs_review":
+            observed = "needs_review"
+            ok = case.expected == "needs_review"
+            if ok:
+                row = session.get(DecisionRow, result["decision_id"])
+                if row is None or row.output_json.get("status") != "needs_review":
+                    ok = False
+                    detail = "needs-review result without a persisted needs-review record"
+            return _finish(session, fx, case, provider, CaseResult(case=case, ok=ok, observed=observed, detail=detail))
         observed = f"persisted:{result['disposition']}"
         ok = expected_kind == "persisted" and observed == case.expected
         if ok and result["disposition"] == "challenge":
@@ -354,6 +364,11 @@ def run_case(session: Session, fx: Fixture, case: Case) -> CaseResult:
             if persisted:
                 ok = False
                 detail = "a refused review was persisted anyway"
+    return _finish(session, fx, case, provider, CaseResult(case=case, ok=ok, observed=observed, detail=detail))
+
+
+def _finish(session: Session, fx: Fixture, case: Case, provider: CountingProvider, result: CaseResult) -> CaseResult:
+    ok, detail = result.ok, result.detail
     if provider.calls != case.expected_provider_calls:
         ok = False
         detail = (detail + "; " if detail else "") + (
@@ -364,7 +379,7 @@ def run_case(session: Session, fx: Fixture, case: Case) -> CaseResult:
     row.llm_data_sharing = {"enabled": True, "provider": "mock"}
     row.budget_json = {"max_model_tokens": 1_000_000}
     session.commit()
-    return CaseResult(case=case, ok=ok, observed=observed, detail=detail)
+    return CaseResult(case=case, ok=ok, observed=result.observed, detail=detail)
 
 
 @dataclass(slots=True)

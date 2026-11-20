@@ -53,7 +53,7 @@ MAX_AUTO_REVIEWS_PER_RUN = 10
 REVIEW_ACTION = "review_finding"
 FAILURE_EVENT = "veritas_review_failed"
 
-_SUMMARY_KEYS = ("attempted", "completed", "failed", "skipped")
+_SUMMARY_KEYS = ("attempted", "completed", "failed", "skipped", "needs_review")
 
 
 def _lock_key(investigation_id: str, finding_id: str) -> int:
@@ -104,7 +104,7 @@ def _fail(summary: dict[str, Any], session_factory, investigation_id: str, findi
         diag.close()
 
 
-def _review_one(summary: dict[str, Any], session_factory, gateway, investigation_id: str, finding_id: str) -> None:
+def _review_one(summary: dict[str, Any], session_factory, gateway, investigation_id: str, finding_id: str, store=None) -> None:
     session = session_factory()
     try:
         if session.get_bind().dialect.name == "postgresql":
@@ -140,10 +140,11 @@ def _review_one(summary: dict[str, Any], session_factory, gateway, investigation
             return
         summary["attempted"] += 1
         try:
-            VeritasReviewService(
+            result = VeritasReviewService(
                 session,
                 gateway=gateway,
                 session_factory=session_factory,
+                store=store,
             ).review(finding_id, producer_model_id=SENTINEL_PRODUCER_MODEL_ID)
             session.commit()
         except ModelConsentRequired:
@@ -162,7 +163,12 @@ def _review_one(summary: dict[str, Any], session_factory, gateway, investigation
             session.rollback()
             _fail(summary, session_factory, investigation_id, finding_id, "review-pass-error")
         else:
-            summary["completed"] += 1
+            if result.get("status") == "needs_review":
+                # Explicitly incomplete: the unconvertible reply is captured by
+                # the service as a needs-review record, never a verdict.
+                summary["needs_review"] += 1
+            else:
+                summary["completed"] += 1
     finally:
         session.close()
 
@@ -173,6 +179,7 @@ def run_auto_review_pass(
     gateway,
     investigation_id: str,
     max_reviews: int = MAX_AUTO_REVIEWS_PER_RUN,
+    store=None,
 ) -> dict[str, Any]:
     """Review each confirmed, unreviewed, deterministically-produced finding once.
 
@@ -183,6 +190,7 @@ def run_auto_review_pass(
         "completed": 0,
         "failed": 0,
         "skipped": 0,
+        "needs_review": 0,
         "failures": [],
         "skips": [],
         "advisory_only": True,
@@ -206,5 +214,5 @@ def run_auto_review_pass(
         if summary["attempted"] >= max_reviews:
             _skip(summary, finding_id, "run-cap-reached")
             continue
-        _review_one(summary, session_factory, gateway, investigation_id, finding_id)
+        _review_one(summary, session_factory, gateway, investigation_id, finding_id, store=store)
     return summary

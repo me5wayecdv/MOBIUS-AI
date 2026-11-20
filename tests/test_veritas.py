@@ -275,3 +275,160 @@ def test_veritas_requires_explicit_investigation_consent(
             session, gateway=gateway, session_factory=factory
         ).review(finding_id, producer_model_id="producer-v1")
     assert provider.calls == 0
+
+
+class SequenceProvider:
+    """Mock provider returning a different raw reply per call."""
+
+    name = "mock"
+
+    def __init__(self, replies, *, model_id="veritas-model"):
+        self.replies = list(replies)
+        self.model_id = model_id
+        self.calls = 0
+
+    def complete_json(self, **kwargs):
+        from mobius.services.model_provider import ProviderResult
+
+        content = self.replies[min(self.calls, len(self.replies) - 1)]
+        self.calls += 1
+        return ProviderResult(
+            content=content, model_id=self.model_id, prompt_tokens=30, completion_tokens=20
+        )
+
+
+def _challenge_reply(evidence_id, **overrides):
+    reply = {
+        "disposition": "challenge",
+        "summary": "The evidence establishes reachability but does not establish attacker control of the path.",
+        "challenges": [{
+            "challenge_type": "unsupported_claim",
+            "statement": "The supplied summary does not show that the path value is attacker controlled.",
+            "evidence_refs": [evidence_id],
+            "requested_proof": "Provide a source-level trace from the exported input to the file sink.",
+        }],
+    }
+    reply.update(overrides)
+    return reply
+
+
+def test_veritas_accepts_reply_with_undeclared_decorative_fields(session, reviewed_finding):
+    """The exact observed DeepSeek defect: extra 'title' on each challenge."""
+    finding_id, investigation_id, _, evidence_id = reviewed_finding
+    reply = _challenge_reply(evidence_id)
+    reply["challenges"][0]["title"] = "Unsupported exported-component claim"
+    provider = CountingProvider(json.dumps(reply))
+    gateway = StructuredModelGateway(provider, model="reviewer-v2")
+    factory = sessionmaker(bind=session.get_bind(), expire_on_commit=False, future=True)
+
+    result = VeritasReviewService(
+        session, gateway=gateway, session_factory=factory
+    ).review(finding_id, producer_model_id="producer-v1")
+
+    assert result["status"] == "completed"
+    assert result["disposition"] == "challenge"
+    assert provider.calls == 1
+    assert result["normalization"]["dropped_fields"] == ["challenges.0.title"]
+
+
+def test_veritas_accepts_fenced_or_prose_wrapped_reply(session, reviewed_finding):
+    finding_id, investigation_id, _, evidence_id = reviewed_finding
+    body = json.dumps(_challenge_reply(evidence_id))
+    provider = CountingProvider(f"Here is my review.\n```json\n{body}\n```\nEnd.")
+    gateway = StructuredModelGateway(provider, model="reviewer-v2")
+    factory = sessionmaker(bind=session.get_bind(), expire_on_commit=False, future=True)
+
+    result = VeritasReviewService(
+        session, gateway=gateway, session_factory=factory
+    ).review(finding_id, producer_model_id="producer-v1")
+
+    assert result["status"] == "completed"
+    assert result["disposition"] == "challenge"
+    assert result["normalization"]["method"] == "extracted"
+
+
+def test_veritas_plain_text_reply_is_repaired_by_bounded_conversion(session, reviewed_finding):
+    finding_id, investigation_id, _, evidence_id = reviewed_finding
+    plain = "I challenge this finding: the evidence does not show attacker control of the path."
+    provider = SequenceProvider([plain, json.dumps(_challenge_reply(evidence_id))])
+    gateway = StructuredModelGateway(provider, model="reviewer-v2")
+    factory = sessionmaker(bind=session.get_bind(), expire_on_commit=False, future=True)
+
+    result = VeritasReviewService(
+        session, gateway=gateway, session_factory=factory
+    ).review(finding_id, producer_model_id="producer-v1")
+
+    assert result["status"] == "completed"
+    assert result["disposition"] == "challenge"
+    assert result["repair_attempted"] is True
+    assert provider.calls == 2
+
+
+def test_veritas_unconvertible_reply_is_captured_needs_review_not_fabricated(session, reviewed_finding):
+    finding_id, investigation_id, _, evidence_id = reviewed_finding
+    provider = SequenceProvider(["totally unparseable prose", "still not json"])
+    gateway = StructuredModelGateway(provider, model="reviewer-v2")
+    factory = sessionmaker(bind=session.get_bind(), expire_on_commit=False, future=True)
+
+    result = VeritasReviewService(
+        session, gateway=gateway, session_factory=factory
+    ).review(finding_id, producer_model_id="producer-v1")
+
+    assert result["status"] == "needs_review"
+    assert result["disposition"] is None
+    assert result["challenges"] == []
+    assert result["failure_class"].startswith("model reply unconvertible")
+    assert result["gate_verdict_unchanged"] is True
+    assert provider.calls == 2
+
+    decision = session.execute(select(DecisionRow).where(
+        DecisionRow.investigation_id == investigation_id,
+        DecisionRow.id == result["decision_id"],
+    )).scalar_one()
+    assert decision.output_json["status"] == "needs_review"
+    assert decision.response_sha256 is not None
+    # the raw reply is preserved for the operator, clipped and flagged
+    assert decision.output_json["raw_response"] == "still not json"
+    assert decision.output_json["raw_response_clipped"] is False
+
+
+def test_veritas_needs_review_raw_preservation_is_clipped(session, store, reviewed_finding):
+    from mobius.services.veritas import _NEEDS_REVIEW_RAW_LIMIT
+
+    finding_id, investigation_id, _, evidence_id = reviewed_finding
+    huge = "x" * (_NEEDS_REVIEW_RAW_LIMIT + 500)
+    provider = SequenceProvider([huge, huge])
+    gateway = StructuredModelGateway(provider, model="reviewer-v2")
+    factory = sessionmaker(bind=session.get_bind(), expire_on_commit=False, future=True)
+
+    result = VeritasReviewService(
+        session, gateway=gateway, session_factory=factory, store=store
+    ).review(finding_id, producer_model_id="producer-v1")
+
+    assert result["status"] == "needs_review"
+    decision = session.execute(select(DecisionRow).where(
+        DecisionRow.id == result["decision_id"],
+    )).scalar_one()
+    out = decision.output_json
+    # the inline copy is a clip and SAYS so; the full raw is a stored artifact
+    assert len(out["raw_response"]) == _NEEDS_REVIEW_RAW_LIMIT
+    assert out["raw_response_clipped"] is True
+    assert out["raw_response_length"] == _NEEDS_REVIEW_RAW_LIMIT + 500
+    assert out["raw_artifact_key"]
+    assert store.get(out["raw_artifact_key"]).decode() == huge
+
+
+def test_veritas_conflicting_payloads_are_never_silently_chosen(session, reviewed_finding):
+    finding_id, investigation_id, _, evidence_id = reviewed_finding
+    good = json.dumps(_challenge_reply(evidence_id))
+    contradictory = json.dumps(_challenge_reply(evidence_id, disposition="no_material_challenge", challenges=[]))
+    provider = SequenceProvider([good + "\n" + contradictory] * 2)
+    gateway = StructuredModelGateway(provider, model="reviewer-v2")
+    factory = sessionmaker(bind=session.get_bind(), expire_on_commit=False, future=True)
+
+    result = VeritasReviewService(
+        session, gateway=gateway, session_factory=factory
+    ).review(finding_id, producer_model_id="producer-v1")
+
+    assert result["status"] == "needs_review"
+    assert "multiple_conflicting_payloads" in result["failure_class"]
