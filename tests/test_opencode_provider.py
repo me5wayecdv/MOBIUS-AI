@@ -134,3 +134,38 @@ def test_compose_prompt_measures_json_escaping_growth_at_real_scale():
     )
     assert envelope > legacy_estimate
     assert json.dumps({"input": user}) in composed
+
+
+def test_complete_json_populates_provider_reported_usage(monkeypatch, tmp_path):
+    """The adapter keeps conservative accounting units and the CLI's real
+    token report as distinct fields on the result."""
+    import subprocess as sp
+    from mobius.services.model_provider import OpenCodeCliProvider
+
+    ndjson = "\n".join([
+        _text_event('{"a": 1}'),
+        _finish_event(13000, 200),
+        _finish_event(463, 33),
+    ])
+
+    def fake_run(args, **kwargs):
+        return sp.CompletedProcess(args, 0, stdout=ndjson, stderr="")
+
+    monkeypatch.setattr(sp, "run", fake_run)
+    provider = OpenCodeCliProvider(binary="/bin/true")
+    result = provider.complete_json(
+        model="deepseek-v4.1-flash-free", system_prompt="sys",
+        user_payload={"input": "payload with\nnewlines"},
+        response_schema={"type": "object"}, max_tokens=2048,
+    )
+    # Accounting units: composed-envelope bytes and CLI output sum.
+    assert result.prompt_tokens == len(
+        provider.compose_prompt(
+            system_prompt="sys", user_payload={"input": "payload with\nnewlines"},
+            response_schema={"type": "object"},
+        ).encode("utf-8")
+    )
+    assert result.completion_tokens == 233
+    # Provider-reported real usage, distinctly named.
+    assert result.provider_prompt_tokens == 13463
+    assert result.provider_completion_tokens == 233

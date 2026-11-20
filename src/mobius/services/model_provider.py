@@ -51,8 +51,15 @@ class ModelBudgetExceeded(ModelProviderError):
 class ProviderResult:
     content: str
     model_id: str
+    # Accounting units charged against the investigation budget. For providers
+    # that transform the envelope (OpenCode CLI adapter) these are conservative
+    # byte-ceiling measurements, NOT the provider's real token count.
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
+    # The provider's own reported real token usage when it differs from the
+    # accounting units above; None means no distinct provider report exists.
+    provider_prompt_tokens: int | None = None
+    provider_completion_tokens: int | None = None
     duration_ms: int = 0
 
 
@@ -371,21 +378,30 @@ class InvestigationModelGateway:
             )
 
         actual = result.prompt_tokens + result.completion_tokens
+        # Budget accounting uses the conservative accounting units; when the
+        # provider reports its own real token usage (OpenCode CLI totals), keep
+        # it distinctly named so audits never confuse the two.
+        usage_detail: dict[str, Any] = {
+            "accounting_prompt_units": result.prompt_tokens,
+            "accounting_completion_units": result.completion_tokens,
+        }
+        if result.provider_prompt_tokens is not None:
+            usage_detail["provider_reported_prompt_tokens"] = result.provider_prompt_tokens
+        if result.provider_completion_tokens is not None:
+            usage_detail["provider_reported_completion_tokens"] = result.provider_completion_tokens
         if result.prompt_tokens > prompt_ceiling or result.completion_tokens > max_tokens:
             budget.settle(
                 reservation, actual_tokens=reservation.reserved_tokens + 1,
                 provider=self.gateway.provider.name, model_id=result.model_id,
-                usage={
-                    "reported_prompt_tokens": result.prompt_tokens,
-                    "reported_completion_tokens": result.completion_tokens,
-                    "prompt_ceiling": prompt_ceiling,
-                    "max_tokens": max_tokens,
-                },
+                usage={**usage_detail,
+                       "prompt_ceiling": prompt_ceiling,
+                       "max_tokens": max_tokens},
             )
             raise ModelBudgetExceeded("provider usage exceeded the pre-call token ceiling")
         budget.settle(
             reservation, actual_tokens=actual,
             provider=self.gateway.provider.name, model_id=result.model_id,
+            usage=usage_detail,
         )
 
         norm = normalize_structured_reply(result.content, schema)
@@ -408,6 +424,8 @@ class InvestigationModelGateway:
             "input_sha256": hashlib.sha256(user.encode("utf-8")).hexdigest(),
             "schema_sha256": hashlib.sha256(schema_json.encode("utf-8")).hexdigest(),
             "response_sha256": hashlib.sha256(result.content.encode("utf-8")).hexdigest(),
+            "provider_input_tokens": result.provider_prompt_tokens,
+            "provider_output_tokens": result.provider_completion_tokens,
             "input_tokens": result.prompt_tokens,
             "output_tokens": result.completion_tokens,
             "latency_ms": result.duration_ms,
@@ -724,10 +742,16 @@ class OpenCodeCliProvider:
         return ProviderResult(
             content=content,
             model_id=_model_tag(model),
+            # Accounting units: composed-envelope bytes / CLI output sum (or the
+            # answer's byte length fallback), both conservative for budgeting.
             prompt_tokens=len(prompt.encode("utf-8")),
             completion_tokens=(
                 cli_output if cli_output is not None else len(content.encode("utf-8"))
             ),
+            # The CLI's own real token report, including its platform overhead;
+            # provenance for harnesses, never the budget charge.
+            provider_prompt_tokens=cli_input,
+            provider_completion_tokens=cli_output,
             duration_ms=duration_ms,
         )
 

@@ -604,10 +604,13 @@ class _EnvelopeProvider:
 
     name = "ollama"
 
-    def __init__(self, *, envelope: int, report_prompt: int, report_completion: int = 5):
+    def __init__(self, *, envelope: int, report_prompt: int, report_completion: int = 5,
+                 provider_prompt: int | None = None, provider_completion: int | None = None):
         self.envelope = envelope
         self.report_prompt = report_prompt
         self.report_completion = report_completion
+        self.provider_prompt = provider_prompt
+        self.provider_completion = provider_completion
         self.calls = 0
 
     def prompt_envelope_bytes(self, *, system_prompt, user_payload, response_schema):
@@ -620,6 +623,8 @@ class _EnvelopeProvider:
             model_id="local-test-model",
             prompt_tokens=self.report_prompt,
             completion_tokens=self.report_completion,
+            provider_prompt_tokens=self.provider_prompt,
+            provider_completion_tokens=self.provider_completion,
         )
 
 
@@ -675,10 +680,50 @@ def test_investigation_gateway_rejection_records_true_usage(session, store, futu
     event = session.query(EventRow).filter_by(
         investigation_id=scan_id, type="model_budget_rejected"
     ).one()
-    # True measured usage is retained alongside the sentinel.
-    assert event.payload["reported_prompt_tokens"] == 99999
-    assert event.payload["reported_completion_tokens"] == 17
+    # Measured accounting units are retained alongside the sentinel.
+    assert event.payload["accounting_prompt_units"] == 99999
+    assert event.payload["accounting_completion_units"] == 17
     assert event.payload["prompt_ceiling"] == 5000
     assert event.payload["max_tokens"] == 32
     assert event.payload["reserved_tokens"] == 5032
     assert event.payload["reported_tokens"] == 5033
+
+
+def test_investigation_gateway_records_provider_reported_usage_distinctly(
+    session, store, future_iso
+):
+    """Conservative accounting units and provider-reported real tokens are
+    persisted under distinct names, never conflated."""
+    from mobius.services.model_provider import InvestigationModelGateway
+
+    scan_id, _ = _scan_with_observation(session, store, future_iso, consent=True)
+    session.commit()
+    provider = _EnvelopeProvider(
+        envelope=5000, report_prompt=4900, report_completion=100,
+        provider_prompt=6100, provider_completion=97,
+    )
+    gateway = StructuredModelGateway(provider, model="local-test-model")
+    factory = sessionmaker(bind=session.get_bind(), expire_on_commit=False, future=True)
+    bound = InvestigationModelGateway(gateway, factory, scan_id)
+
+    import asyncio
+    result = asyncio.run(bound.complete_structured(
+        role="reasoning", system="s", user="u", schema=HypothesisReply, max_tokens=120
+    ))
+
+    assert result["input_tokens"] == 4900
+    assert result["output_tokens"] == 100
+    assert result["provider_input_tokens"] == 6100
+    assert result["provider_output_tokens"] == 97
+    session.expire_all()
+    row = session.get(InvestigationRow, scan_id)
+    # Ledger charged the conservative accounting units.
+    assert row.used_json["model_tokens"] == 5000
+    event = session.query(EventRow).filter_by(
+        investigation_id=scan_id, type="model_tokens_consumed"
+    ).one()
+    assert event.payload["input_and_output_tokens"] == 5000
+    assert event.payload["accounting_prompt_units"] == 4900
+    assert event.payload["accounting_completion_units"] == 100
+    assert event.payload["provider_reported_prompt_tokens"] == 6100
+    assert event.payload["provider_reported_completion_tokens"] == 97
