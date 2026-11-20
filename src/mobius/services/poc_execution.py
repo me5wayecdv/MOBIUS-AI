@@ -58,7 +58,10 @@ class PoCExecutionService:
                 raise RuntimeError("a PoC execution with this plan ID is already running")
             _CANCEL_EVENTS[plan.id] = cancel_event
         try:
-            result = SafePoCRunner(self.session).run(plan, cancel_check=cancel_event.is_set)
+            from .phantom import adapter_from_env
+            result = SafePoCRunner(
+                self.session, emulator_adapter=adapter_from_env()
+            ).run(plan, cancel_check=cancel_event.is_set)
         finally:
             with _CANCEL_LOCK:
                 _CANCEL_EVENTS.pop(plan.id, None)

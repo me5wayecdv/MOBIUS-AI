@@ -17,6 +17,11 @@ Allowed step actions:
 - `assert_manifest_permission`
 - `invoke_local_harness`
 - `assert_local_harness_result`
+- `assert_emulator_package_present` (emulator targets only; boolean `expected_value`;
+  target must equal the plan's authorized package)
+- `assert_emulator_provider_rows` (emulator targets only; non-negative integer
+  `expected_value`; pass when at least that many rows are readable without a permission;
+  target must be one authority path inside the authorized package)
 
 Cleanup actions:
 - `remove_temporary_workspace`
@@ -32,6 +37,7 @@ Each step has a bounded target reference and timeout. No free-form command field
 - State-changing plans require explicit approval.
 - Non-read-only plans require cleanup steps.
 - Manifest assertions cannot target a local harness.
+- Emulator probes cannot target a non-emulator target kind, and stay read-only.
 
 D-040 defines the contract only. D-041 implements allowlisted adapters; D-042 persists
 reproducible execution evidence; D-043 owns approval, timeout, cancellation and cleanup.

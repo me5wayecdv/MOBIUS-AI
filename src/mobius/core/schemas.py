@@ -65,6 +65,8 @@ class PoCStep(_Model):
         "assert_manifest_permission",
         "invoke_local_harness",
         "assert_local_harness_result",
+        "assert_emulator_package_present",
+        "assert_emulator_provider_rows",
     ]
     target_ref: str = Field(min_length=1, max_length=500)
     expected_value: str | bool | int | None = None
@@ -85,6 +87,15 @@ class PoCStep(_Model):
             "sink_invoked", "blocked", "scheme", "forwarded_url", "source", "simulation"
         }:
             raise ValueError("local harness result key is not allowlisted")
+        if self.action == "assert_emulator_package_present":
+            if not isinstance(self.expected_value, bool):
+                raise ValueError("emulator package presence expects a boolean expected_value")
+        if self.action == "assert_emulator_provider_rows":
+            # Threshold semantics: pass when at least expected_value rows are
+            # readable without a permission.
+            if not isinstance(self.expected_value, int) or isinstance(self.expected_value, bool) \
+                    or self.expected_value < 0:
+                raise ValueError("emulator provider rows expects a non-negative integer expected_value")
         return self
 
 
@@ -133,6 +144,11 @@ class PoCTestPlan(_Model):
             for step in self.steps
         ):
             raise ValueError("manifest assertions require a lab_apk or emulator target")
+        if any(
+            step.action in {"assert_emulator_package_present", "assert_emulator_provider_rows"}
+            for step in self.steps
+        ) and self.target_kind != "emulator":
+            raise ValueError("emulator probes require an emulator target")
         return self
 
 
