@@ -196,6 +196,25 @@ class ProviderAnalysisService:
         ledger = list(ledger)
         origins = origins or {}
 
+        # Two coverage scopes, kept explicit wherever a reviewer reads them:
+        # operation-scope flags describe only the analyzed operation methods
+        # and resolved helpers; package-scope coverage is the DEX ledger
+        # (whole-APK). An incomplete package scope never erases sound
+        # operation-scope evidence, and sound operation-scope evidence is
+        # never stated as whole-APK completeness.
+        incomplete_entries = [
+            f"{b.entry} ({b.status})"
+            for b in ledger
+            if b.status != "parsed" or b.ambiguous
+        ]
+        package_scope = (
+            "package dex coverage: complete (all entries parsed)"
+            if dex_complete
+            else "package dex coverage: incomplete ("
+            + "; ".join(incomplete_entries)
+            + ")"
+        )
+
         def _origin_sound(dotted: str) -> bool:
             """The analysed copy of this class is the copy a runtime loads.
 
@@ -248,7 +267,12 @@ class ProviderAnalysisService:
             for operation in exposure.operations:
                 document = {
                     "provider": exposure.provider,
+                    # The manifest facts this analysis itself parsed: the
+                    # finding's own evidence establishes them, so no ref
+                    # outside this evidence is ever cited for them.
+                    "exported": exposure.exported,
                     "dex_coverage": [b.describe() for b in ledger],
+                    "package_dex_complete": dex_complete,
                     "grant_uri_permissions": exposure.grant_uri_permissions,
                     "uri_patterns": list(exposure.uri_patterns),
                     "numeric_uri_patterns": list(exposure.numeric_uri_patterns),
@@ -304,6 +328,9 @@ class ProviderAnalysisService:
                     produced_by=AGENT,
                 )
                 attributes = _gate_attributes(exposure, operation)
+                sink_kinds = ", ".join(
+                    sorted({s.sink for s in operation.sink_flows})
+                ) or "none"
                 finding, verdict = validator.validate(
                     investigation_id=investigation_id,
                     category=CATEGORY,
@@ -314,10 +341,13 @@ class ProviderAnalysisService:
                     ),
                     description=(
                         f"{operation.protection_basis}; caller-check absent: "
-                        f"{operation.caller_check_absent}; sink flows: "
-                        f"{len(operation.sink_flows)}; coverage complete: "
+                        f"{operation.caller_check_absent} (scope: analyzed "
+                        "operation methods and resolved helpers only); "
+                        "operation-scope coverage complete: "
                         f"{operation.coverage_complete}; flow complete: "
-                        f"{operation.flow_complete}."
+                        f"{operation.flow_complete}; sink flows recorded in "
+                        f"this evidence: {len(operation.sink_flows)} "
+                        f"(sink kinds: {sink_kinds}); {package_scope}."
                     ),
                     evidence_refs=(evidence.id,),
                     discovered_by=AGENT,
