@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -55,11 +56,29 @@ class CountingProvider(DeterministicMockProvider):
         return super().complete_json(**kwargs)
 
 
-def _make_scan_with_finding(factory, store, future_iso):
+class SlowProvider(DeterministicMockProvider):
+    """A provider that stays inside the call long enough for a second pass to
+    genuinely overlap, proving the advisory lock is held across the provider
+    call rather than released before it."""
+
+    def __init__(self):
+        super().__init__(REPLY, model_id="veritas-model", prompt_tokens=30, completion_tokens=20)
+        self.entered = threading.Event()
+        self.release = threading.Event()
+        self.calls = 0
+
+    def complete_json(self, **kwargs):
+        self.calls += 1
+        self.entered.set()
+        assert self.release.wait(timeout=30)
+        return super().complete_json(**kwargs)
+
+
+def _make_scan_with_finding(factory, store, future_iso, suffix):
     setup = factory()
     try:
         intake = IntakeService(setup, store)
-        app, _ = intake.create_application(make_apk(), "pg-auto-review.apk", uploaded_by="pg-auto-test")
+        app, _ = intake.create_application(make_apk(), f"pg-auto-review-{suffix}.apk", uploaded_by="pg-auto-test")
         auth = intake.create_authorization(
             apk_sha256=app.sha256,
             target_package="com.example",
@@ -80,7 +99,7 @@ def _make_scan_with_finding(factory, store, future_iso):
         row = setup.get(InvestigationRow, scan.id)
         row.llm_data_sharing = {"enabled": True, "provider": "mock", "auto_veritas": True}
         setup.add(EvidenceRow(
-            id="ev_pg_auto",
+            id=f"ev_pg_auto_{suffix}",
             investigation_id=scan.id,
             kind="code_analysis",
             sha256="d" * 64,
@@ -104,7 +123,7 @@ def _make_scan_with_finding(factory, store, future_iso):
             },
             title="Exported activity writes attacker-supplied path",
             description="The exported activity forwards an untrusted path to a privileged file sink.",
-            evidence_refs=("ev_pg_auto",),
+            evidence_refs=(f"ev_pg_auto_{suffix}",),
             discovered_by="SPECTRE",
             validated_by="DETERMINISTIC_GATE",
             severity=Severity.HIGH,
@@ -120,7 +139,7 @@ def test_postgres_concurrent_passes_review_exactly_once(tmp_path, future_iso):
     Base.metadata.create_all(engine)
     factory = make_session_factory(engine)
     store = ArtifactStore(tmp_path / "pg-artifacts")
-    scan_id, finding_id = _make_scan_with_finding(factory, store, future_iso)
+    scan_id, finding_id = _make_scan_with_finding(factory, store, future_iso, "concurrent")
     provider = CountingProvider()
     gateway = StructuredModelGateway(provider, model="reviewer-v2")
 
@@ -155,5 +174,49 @@ def test_postgres_concurrent_passes_review_exactly_once(tmp_path, future_iso):
             EventRow.type == "veritas_review_completed",
         )).scalars().all()
         assert len(events) == 1
+    finally:
+        check.close()
+
+
+def test_postgres_lock_is_held_across_the_provider_call(tmp_path, future_iso):
+    """A second pass on its own connection while the first pass is INSIDE the
+    provider call must observe review-in-progress - proof the advisory lock is
+    not committed or rolled back before provider/persistence completes."""
+    engine = make_engine(PG_URL)
+    Base.metadata.create_all(engine)
+    factory = make_session_factory(engine)
+    store = ArtifactStore(tmp_path / "pg-artifacts-slow")
+    scan_id, finding_id = _make_scan_with_finding(factory, store, future_iso, "slow")
+    provider = SlowProvider()
+    gateway = StructuredModelGateway(provider, model="reviewer-v2")
+
+    def _pass():
+        return run_auto_review_pass(
+            session_factory=factory, gateway=gateway, investigation_id=scan_id
+        )
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        first = pool.submit(_pass)
+        assert provider.entered.wait(timeout=30), "first pass never reached the provider"
+        # Independently opened connections: the factory creates a fresh session
+        # (and connection) per pass, on a separate thread from the first pass.
+        overlapping = _pass()
+        provider.release.set()
+        first_summary = first.result(timeout=30)
+
+    assert overlapping["attempted"] == 0, overlapping
+    assert overlapping["skipped"] == 1
+    assert overlapping["skips"] == [{"finding_id": finding_id, "reason": "review-in-progress"}]
+    assert first_summary["completed"] == 1, first_summary
+    assert provider.calls == 1
+
+    check = factory()
+    try:
+        reviews = check.execute(select(DecisionRow).where(
+            DecisionRow.investigation_id == scan_id,
+            DecisionRow.agent == "VERITAS",
+            DecisionRow.action == "review_finding",
+        )).scalars().all()
+        assert len(reviews) == 1
     finally:
         check.close()
