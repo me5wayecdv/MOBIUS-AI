@@ -255,6 +255,8 @@ POST /scans/{id}/nexus?max_steps=20
 }
 ```
 
+When the investigation has opted in via `PUT /scans/{id}/model-consent` with `{"enabled":true,"provider":"ollama","auto_veritas":true}`, the route commits the pipeline transaction and then runs an advisory VERITAS auto-review pass over the confirmed, deterministically-produced findings, adding a `veritas_auto_review` summary block (`attempted`/`completed`/`failed`/`skipped` with fixed reason tokens; `advisory_only: true`). A pass failure is reported inside that block (`status: review-pass-error`) and never changes the scan's HTTP result. Without the flag the response is unchanged.
+
 `stop_reason` is `completed` or `budget_exhausted`. Entries that were not run keep their state
 so they can be named: `queued` when the budget stopped the loop, `dropped` when nothing could
 execute them. A dropped entry always carries a `reason` — either the agent does not exist in
