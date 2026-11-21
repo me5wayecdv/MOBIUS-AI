@@ -13,12 +13,35 @@ import resource
 import subprocess
 import sys
 import tempfile
+from cleanup import attempt, error_record, ordinary_signals_ignored
+from wire import atomic_json
 
 APPROVED_FOR_EXECUTION = False
 CLEAN = {'PATH':'/usr/sbin:/usr/bin:/sbin:/bin','LANG':'C.UTF-8','HOME':'/nonexistent'}
 
 def run(argv):
     subprocess.run(argv,env=CLEAN,stdin=subprocess.DEVNULL,close_fds=True,check=True,timeout=10)
+
+def snapshot():
+    commands=[
+      ['/usr/sbin/ip','-j','-d','link','show'],
+      ['/usr/sbin/ip','-j','address','show'],
+      ['/usr/sbin/ip','-4','-j','route','show','table','all'],
+      ['/usr/sbin/ip','-6','-j','route','show','table','all'],
+      ['/usr/sbin/ip','-4','-j','rule','show'],
+      ['/usr/sbin/ip','-6','-j','rule','show'],
+      ['/usr/sbin/iptables-save'], ['/usr/sbin/ip6tables-save'],
+      ['/usr/sbin/nft','list','ruleset'],
+      ['/usr/bin/unshare','--version'], ['/usr/bin/setpriv','--version'],
+      ['/usr/bin/mount','--version'], ['/usr/sbin/ip','-Version'],
+      ['/usr/bin/openssl','version','-a']]
+    result={'commands':[],'namespaces':{name:os.readlink('/proc/self/ns/'+name) for name in ('net','pid','mnt','user')},
+            'status':Path('/proc/self/status').read_text()}
+    for argv in commands:
+        p=subprocess.run(argv,env=CLEAN,stdin=subprocess.DEVNULL,close_fds=True,
+                         capture_output=True,text=True,timeout=10)
+        result['commands'].append({'argv':argv,'rc':p.returncode,'stdout':p.stdout,'stderr':p.stderr})
+    return result
 
 def inside(root, source, runtime, base_prefix):
     # This branch is PID1 in fresh anonymous PID/net/mount namespaces.
@@ -60,10 +83,16 @@ def inside(root, source, runtime, base_prefix):
     interfaces=Path('/proc/net/dev').read_text()
     if any(line.strip().split(':')[0]!='lo' for line in interfaces.splitlines()[2:]):
         raise RuntimeError('unexpected network interface')
-    (bind_output/'namespace-setup.json').write_text(json.dumps({
-        'netns':os.readlink('/proc/self/ns/net'),'pidns':os.readlink('/proc/self/ns/pid'),
-        'interfaces':interfaces,'runtime':'/opt/d061-runtime','source':'/fixture'})+'\n')
-    os.chown(bind_output/'namespace-setup.json',65534,65534)
+    topology=snapshot()
+    topology.update({'interfaces':interfaces,'runtime':'/opt/d061-runtime','source':'/fixture',
+        'effective_launch':['/usr/sbin/chroot',str(root),'/usr/bin/setpriv',
+        '--bounding-set=-all','--inh-caps=-all','--ambient-caps=-all','--no-new-privs',
+        '--reuid=65534','--regid=65534','--clear-groups','/opt/d061-runtime/venv/bin/python',
+        '/fixture/driver.py','/work/evidence','/opt/d061-runtime/venv'],
+        'environment':CLEAN,'limits':{'cpu_seconds':60,'address_space_bytes':1536*1024*1024,
+        'open_files':128,'processes':64,'file_bytes':32*1024*1024,'core':0}})
+    atomic_json(bind_output/'namespace-setup.json',topology)
+    if any(row['rc'] for row in topology['commands']):raise RuntimeError('namespace snapshot incomplete')
     resource.setrlimit(resource.RLIMIT_CORE,(0,0))
     resource.setrlimit(resource.RLIMIT_NOFILE,(128,128))
     resource.setrlimit(resource.RLIMIT_NPROC,(64,64))
@@ -102,7 +131,9 @@ def main():
     status={'complete':False,'errors':[]}
     def interrupted(signum,frame):raise SystemExit(128+signum)
     for sig in (signal.SIGTERM,signal.SIGINT,signal.SIGHUP):signal.signal(sig,interrupted)
+    original=None
     try:
+        atomic_json(output/'host-before.json',snapshot())
         child=subprocess.Popen(['/usr/bin/unshare','--net','--mount','--pid','--fork',
             '--kill-child=SIGKILL',sys.executable,str(Path(__file__).resolve()),
             '--source',str(source),'--runtime',str(runtime),'--base-prefix',str(base),
@@ -111,27 +142,48 @@ def main():
         rc=child.wait(timeout=75)
         status['exit_code']=rc
         if rc:raise RuntimeError('fixture namespace failed')
+    except BaseException as e:
+        original=e
+        status['original_error']=error_record(e)
     finally:
-        if child is not None and child.poll() is None:
-            # Killing unshare's child PID1 kills all members of that PID
-            # namespace, including nested namespaces and new process groups.
-            try:os.killpg(child.pid,signal.SIGKILL)
-            except ProcessLookupError:pass
-            try:child.wait(timeout=5)
-            except subprocess.TimeoutExpired:status['errors'].append('namespace_wait_timeout')
-        status['namespace_supervisor_exited']=child is not None and child.poll() is not None
-        if not status['namespace_supervisor_exited']:status['errors'].append('namespace_unreaped')
-        # Anonymous namespace, no persistent named netns. Mounts disappear when
-        # last namespace member dies. Keep evidence, delete signing material even
-        # when driver was killed before its finally block.
-        import shutil
-        for key in (output/'evidence'/'origin.key',):
-            key.unlink(missing_ok=True)
-        home=output/'evidence'/'home'
-        if home.exists():shutil.rmtree(home)
-        shutil.rmtree(root)
-        status['complete']=not status['errors']
-        (output/'wrapper-cleanup.json').write_text(json.dumps(status,sort_keys=True)+'\n')
-    if not status['complete']:raise RuntimeError('wrapper cleanup incomplete')
+        with ordinary_signals_ignored():
+            errors=status['errors']
+            if child is not None and child.poll() is None:
+                attempt(errors,'kill_namespace_group',lambda:os.killpg(child.pid,signal.SIGKILL))
+            if child is not None:attempt(errors,'reap_namespace_supervisor',lambda:child.wait(timeout=5))
+            status['namespace_supervisor_exited']=child is not None and child.poll() is not None
+            if not status['namespace_supervisor_exited']:errors.append({'stage':'namespace','class':'unreaped'})
+            # Verify no host-visible process still holds the created netns.
+            def remaining_members():
+                setup=json.loads((output/'namespace-setup.json').read_text())
+                inode=setup['namespaces']['net']
+                remaining=[]
+                for path in Path('/proc').glob('[0-9]*/ns/net'):
+                    try:
+                        if os.readlink(path)==inode:remaining.append(str(path))
+                    except FileNotFoundError:pass
+                return remaining
+            if (output/'namespace-setup.json').exists():
+                status['remaining_namespace_members']=attempt(errors,'verify_no_namespace_members',remaining_members)
+                if status['remaining_namespace_members']!=[]:errors.append({'stage':'namespace','class':'members_unresolved'})
+            else:errors.append({'stage':'namespace','class':'setup_evidence_missing'})
+            import shutil
+            attempt(errors,'remove_origin_key',lambda:(output/'evidence'/'origin.key').unlink(missing_ok=True))
+            home=output/'evidence'/'home'
+            if home.exists():attempt(errors,'remove_private_home',lambda:shutil.rmtree(home))
+            if root.exists():attempt(errors,'remove_jail_root',lambda:shutil.rmtree(root))
+            status['private_keys_absent']=not ((output/'evidence'/'origin.key').exists() or home.exists())
+            status['jail_root_absent']=not root.exists()
+            if not status['private_keys_absent'] or not status['jail_root_absent']:
+                errors.append({'stage':'sanitize','class':'incomplete'})
+            attempt(errors,'host_after',lambda:atomic_json(output/'host-after.json',snapshot()))
+            status['complete']=not errors and original is None
+            if not status['complete']:
+                attempt(errors,'invalidate_candidate',lambda:(output/'evidence'/'candidate-result.json').unlink(missing_ok=True))
+            attempt(errors,'write_wrapper_summary',lambda:atomic_json(output/'wrapper-cleanup.json',status))
+    if original is not None:
+        if status['errors']:original.add_note('Cleanup errors retained in wrapper-cleanup.json: '+repr(status['errors']))
+        raise original
+    if status['errors']:raise RuntimeError('wrapper cleanup incomplete')
 
 if __name__=='__main__':main()

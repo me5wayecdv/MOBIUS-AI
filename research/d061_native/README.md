@@ -98,3 +98,50 @@ validated any of those paths. Do not merge permission with execution approval:
 source gates stay FALSE until exact technical review and a separately bounded
 activation patch. No spending, account, production, secret-disclosure or real
 third-party target authority is added.
+
+## Combined cleanup and activation review revision
+
+`activation-workflow.yml.proposed` remains outside active workflows. It targets
+ubuntu-24.04 and CPython3.12 with actual runner/interpreter version recording,
+SHA-pinned checkout/setup-python/upload-artifact actions, no saved checkout
+credentials, manual exact reviewed-SHA comparison and non-cancelling concurrency.
+`activate.py` independently holds INSTALL_ONLY and POSITIVE_FIXTURE at FALSE.
+A later exact activation disposition can allow install-only while leaving the
+positive runtime false. The orchestrator stages root-owned source copies and
+records original file digests; only the selected reviewed mode's source gate is
+changed in that copy. Product checkout and three original source gates stay
+false. No submitted workflow, import, installation or execution is implied.
+
+`stage_wheels.py` performs only allowlisted HTTPS wheel downloads and SHA checks.
+`installer.py` is the isolated no-index43-wheel path above. Positive mode, if
+separately authorized, calls the exact namespace wrapper. No apt, elevated proxy,
+transparent/native-helper workaround, model/Android/Allsafe/product action is in
+this proposal. Workflow collects sanitized diagnostics with always() even when
+command fails, and then uploads only the safe collector output directory.
+
+`cleanup.py` masks ordinary INT/TERM/HUP signals during bounded cleanup. Driver
+and wrapper independently guard each signal, wait, fallback kill/reap, key/home
+removal, root removal and evidence write. Original error and all observed cleanup
+errors are retained. Original failure is not replaced with a clean result;
+incomplete cleanup invalidates candidate-result and exits nonzero. Wrapper also
+scans host-visible process netns references after supervisor exit. SIGKILL,
+whole-host loss or filesystem failure can prevent any software's final evidence;
+those limits remain, not a claim of guaranteed cleanup under host loss.
+
+Before any positive fixture process launches, namespace setup records actual
+links/addresses, IPv4 and IPv6 all-table routes/rules, iptables/ip6tables/nft
+rulesets, namespace IDs, effective launch, privilege status, limits, clean env and
+actual tool versions. Any requested namespace command failing blocks the launch.
+Host before/after snapshots are retained too. No traffic/capture readiness probe
+is substituted for this evidence. These paths remain runtime-untested.
+
+`collect.py` has a literal bounded file allowlist, rejects symlink components and
+nonregular files, records hashes/missing files/copy errors, never recurses into
+raw output and never uploads private HOME, origin.key or CA key files. Candidate
+result is copied only after zero command exit and complete wrapper cleanup;
+required evidence is checked by mode. Failure artifacts include original/error,
+cleanup, source activation, command and safe logs even on nonzero exit. Artifact
+collection itself cannot turn a failed command into success.
+
+The combined patch has AST-only Python and YAML syntax parsing. No new tests
+simulate runtime success or manufacture network evidence.
