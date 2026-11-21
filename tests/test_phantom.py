@@ -47,7 +47,7 @@ PIDOF_OK = ("shell", "pidof", "com.example")
 def _frida_adapter(class_count=1420, rc=0):
     return _adapter(
         {PIDOF_OK: (0, b"1234\n", b""),
-         ("-q", "-n", "com.example", "-e", _FRIDA_ENUMERATE_SCRIPT):
+         ("-q", "-p", "1234", "-e", _FRIDA_ENUMERATE_SCRIPT):
             (rc, f"MOBIUS_CLASSES:{class_count}\n".encode(), b"")},
         frida="/fake/frida",
     )
@@ -192,7 +192,7 @@ def test_frida_failure_detail_uses_fixed_classes_never_target_strings():
     # detail must carry only the fixed class label.
     leaky = _adapter(
         {PIDOF_OK: (0, b"1234\n", b""),
-         ("-q", "-n", "com.example", "-e", _FRIDA_ENUMERATE_SCRIPT):
+         ("-q", "-p", "1234", "-e", _FRIDA_ENUMERATE_SCRIPT):
             (1, b"", b"Failed to attach: unable to find process with name "
                       b"com.example and path /data/app/com.example.private/libsecret.so")},
         frida="/fake/frida",
@@ -205,7 +205,7 @@ def test_frida_failure_detail_uses_fixed_classes_never_target_strings():
     assert "com.example" not in result.detail.split("frida-process-not-found")[-1]
     unknown = _adapter(
         {PIDOF_OK: (0, b"1234\n", b""),
-         ("-q", "-n", "com.example", "-e", _FRIDA_ENUMERATE_SCRIPT):
+         ("-q", "-p", "1234", "-e", _FRIDA_ENUMERATE_SCRIPT):
             (7, b"weird tool-specific text", b"")},
         frida="/fake/frida",
     )
@@ -239,6 +239,10 @@ def test_frida_probe_launches_app_when_process_is_gone(monkeypatch):
     result = adapter.probe_frida_enumerate_classes("com.example")
     assert result.actual == 900
     assert any("monkey" in c for c in calls)
+    # Attach by the observed pid, not the package name (process names are
+    # app labels, so name matching can miss a running process).
+    attach = [c for c in calls if "-e" in c]
+    assert attach and "-p" in attach[0] and "4321" in attach[0]
 
 
 def test_stop_instrumentation_is_idempotent_cleanup():
