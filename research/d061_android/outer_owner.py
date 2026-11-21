@@ -38,11 +38,16 @@ def terminate(record,seconds=10):
     finally:os.close(fd)
 
 
-def recover(root):
+def recover(root,*,attempt_id=None):
     # Independently called after relay death/failure. Separate recovery report,
     # never rewrite missing original cleanup into a fake successful wrapper log.
     from sibling_supervisor import check_absent
     root=Path(root);errors=[];roles=[]
+    attempt_id=attempt_id or secrets.token_hex(16)
+    import re
+    if re.fullmatch('[0-9a-f]{32}',attempt_id) is None:raise ValueError('unique recovery attempt ID required')
+    json_write(root/('outer-recovery-intent-'+attempt_id+'.json'),{'attempt_id':attempt_id,
+        'root':str(root),'stage':'before_recovery_effects','scope':'independent_outer_recovery'})
     stage_path=root/'runtime-root-stage.json'
     stage=json.loads(read(stage_path,65536)) if exists(stage_path) else None
     for role in ('runtime','control'):
@@ -56,14 +61,14 @@ def recover(root):
             # Parent-death closes unshare PID1. Membership/FD absence is checked
             # independently; a missing setup record remains unverified, not clean.
             wrapper=root/role/'wrapper-cleanup.json'
-            state['absence']=check_absent(root/role,stage if role=='runtime' else None,record_name='outer-independent-absence.json',recover_missing_wrapper=True)
+            state['absence']=check_absent(root/role,stage if role=='runtime' else None,record_name='outer-independent-absence-'+attempt_id+'.json',recover_missing_wrapper=True)
             state['state']='verified_absent'
         except BaseException as error:
             errors.append({'role':role,'class':type(error).__name__})
         roles.append(state)
-    result={'complete':not errors,'errors':errors,'roles':roles,
+    result={'attempt_id':attempt_id,'complete':not errors,'errors':errors,'roles':roles,
         'scope':'outer_recovery_only_not_original_runtime_or_capture_proof'}
-    json_write(root/'outer-recovery.json',result)
+    json_write(root/('outer-recovery-'+attempt_id+'.json'),result)
     return result
 
 

@@ -173,3 +173,25 @@ external exact locator and identity-bound recovery. This is NOT an always-run
 recovery service: no workflow/always-run invocation is registered, and an
 outer-owner SIGKILL has no living code to invoke recovery by itself. External
 workflow ownership and actual fault evidence remain required before activation.
+
+## Always-run invocation preparation, still unregistered
+
+Repeated recover calls now create unique per-attempt intent/result and per-role
+absence records. A reused attempt ID refuses before effects; normal-owner
+recovery and later unconditional recovery preserve every earlier record. Pure
+regression invokes two attempts against the same synthetic already-absent
+identities and verifies original cleanup bytes unchanged. No native/device work.
+
+owned-siblings.yml is unregistered workflow SOURCE with manual-only event,
+exact-SHA+FALSE gate before effects, fixed outer invocation and bounded always()
+recover-only step. This is not an operational workflow: archive acquisition,
+reviewed source/closure staging locks and allowlisted final artifact exporter
+remain missing and the source explicitly refuses without them. No ambient SDK
+fallback, runner-wide KVM permission changes or broad runtime-work upload.
+
+stage_archives.py is held exact-member streaming materialization source for a
+reviewed manifest, not dependency resolution or SDK license approval. It rejects
+archive links/duplicate members, requires all materialized regular file hashes,
+uses bounded streaming for the3GB system image and immutable root-owned outputs.
+Its transitive runtime/control stage lock does not exist yet. No archive was
+extracted, SDK installed, license accepted or downloaded binary executed here.

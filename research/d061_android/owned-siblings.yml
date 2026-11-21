@@ -1,0 +1,68 @@
+# HELD SOURCE ONLY outside .github/workflows. No registration/activation.
+# Missing reviewed staging/source locks are deliberate execution blockers.
+name: D061 owned Android sibling integration candidate
+on:
+  workflow_dispatch:
+    inputs:
+      reviewed_sha:
+        description: Exact separately reviewed source, never an owner-consent claim
+        type: string
+        required: true
+permissions:
+  contents: read
+concurrency:
+  group: d061-owned-android-siblings
+  cancel-in-progress: false
+jobs:
+  held-owned-android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - name: Refuse before downloads, installation or privileged effects unless exact source is reviewed
+        env:
+          REVIEWED_SHA: ${{ inputs.reviewed_sha }}
+        run: |
+          python - <<'PY'
+          import ast,os,re,subprocess
+          from pathlib import Path
+          expected=os.environ['REVIEWED_SHA']
+          actual=subprocess.check_output(['git','rev-parse','HEAD'],text=True).strip()
+          if not re.fullmatch('[0-9a-f]{40}',expected) or expected!=actual:raise SystemExit('exact reviewed SHA required')
+          root=Path('research/d061_android')
+          # All are currently FALSE. No workflow input or repository prose grants authority.
+          for name,flag in [('outer_owner.py','APPROVED_FOR_EXECUTION'),('stage_archives.py','APPROVED_FOR_EXECUTION')]:
+              assignments={t.id:n.value.value for n in ast.parse((root/name).read_text()).body
+                  if isinstance(n,ast.Assign) and isinstance(n.value,ast.Constant)
+                  for t in n.targets if isinstance(t,ast.Name)}
+              if assignments.get(flag) is not True:raise SystemExit('HELD source/build/runtime review missing')
+          if not (root/'reviewed-stage-lock.json').is_file():raise SystemExit('no reviewed transitive stage lock')
+          if not (root/'reviewed-source-lock.json').is_file():raise SystemExit('no reviewed exact source activation lock')
+          PY
+      # Exact archive acquisition and root-owned source/closure staging remain
+      # held and must be completed in this source before any registration.
+      # No ambient runner SDK/AVD/ADB may substitute for the reviewed closure.
+      - name: Verify already reviewed immutable roots, no ambient SDK fallback
+        run: |
+          test -f /opt/d061-owned-reviewed-source/source-manifest.json
+          test -f /opt/d061-android-closure/closure-lock.json
+          test -f /opt/d061-control-closure/closure-lock.json
+      - name: One fixed owned fixture owner, not an unrestricted emulator action
+        id: owned
+        run: |
+          sudo python /opt/d061-owned-reviewed-source/outer_owner.py
+      - name: Independent exact-locator recovery, even when owner fails or is cancelled
+        if: always()
+        timeout-minutes: 3
+        run: |
+          if sudo test -f /opt/d061-owned-android-owner.json; then
+            # recover-only writes UNIQUE attempt/absence records on every call,
+            # preserving prior normal-owner recovery and all original failures.
+            timeout --signal=TERM --kill-after=10s 120s sudo python /opt/d061-owned-reviewed-source/outer_owner.py --recover-only
+          else
+            echo 'Outer owner locator not reached; no cleanup success asserted.'
+          fi
+      # No broad artifact upload from runtime work/build/home is safe. Reviewed
+      # allowlisted exporter/archive publication remains a concrete source gap.

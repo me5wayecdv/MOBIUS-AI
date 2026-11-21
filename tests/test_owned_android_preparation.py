@@ -10,7 +10,7 @@ ROOT=Path(__file__).parents[1]/'research/d061_android'
 
 def test_owned_source_and_build_are_held_without_workflow():
     for name,flags in [('profile.py',['APPROVED_FOR_BUILD','APPROVED_FOR_EXECUTION']),('build_owned.py',['APPROVED_FOR_BUILD']),('namespace_supervisor.py',['APPROVED_FOR_EXECUTION']),('emulator_scope.py',['APPROVED_FOR_EXECUTION']),('owned_product_setup.py',['APPROVED_FOR_EXECUTION']),('owned_absence.py',['APPROVED_FOR_EXECUTION']),('contained_driver.py',['APPROVED_FOR_EXECUTION']),
-        ('control_driver.py',['APPROVED_FOR_EXECUTION']),('sibling_supervisor.py',['APPROVED_FOR_EXECUTION']),('owned_collect.py',['APPROVED_FOR_EXECUTION']),('outer_owner.py',['APPROVED_FOR_EXECUTION'])]:
+        ('control_driver.py',['APPROVED_FOR_EXECUTION']),('sibling_supervisor.py',['APPROVED_FOR_EXECUTION']),('owned_collect.py',['APPROVED_FOR_EXECUTION']),('outer_owner.py',['APPROVED_FOR_EXECUTION']),('stage_archives.py',['APPROVED_FOR_EXECUTION'])]:
         tree=ast.parse((ROOT/name).read_text())
         values={target.id:node.value.value for node in tree.body if isinstance(node,ast.Assign) and isinstance(node.value,ast.Constant)
             for target in node.targets if isinstance(target,ast.Name)}
@@ -367,3 +367,62 @@ def test_readonly_public_inbox_modes_survive_real_umask077(tmp_path,monkeypatch)
         assert stat.S_IMODE(public_file.stat().st_mode)==0o444
         assert read(public_file)==b'{"public_test_only":true}'
     finally:os.umask(old)
+
+
+def test_repeated_outer_recovery_has_unique_records_preserves_originals(tmp_path,monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT))
+    import outer_owner,sibling_supervisor
+    root=tmp_path/'exact-run';root.mkdir()
+    runtime=root/'runtime';runtime.mkdir()
+    (root/'runtime-launch-intent.json').write_text('{}')
+    (root/'runtime-launch.json').write_text(json.dumps({'identity':{'pid':123,'starttime':'unit','boot_id':'unit'}}))
+    original=runtime/'wrapper-cleanup.json';original.write_bytes(b'UNIT ORIGINAL PRESERVE')
+    monkeypatch.setattr(outer_owner,'terminate',lambda record:{'state':'already_absent'})
+    calls=[]
+    def inspect(output,root_stage=None,**kwargs):
+        calls.append(kwargs['record_name'])
+        from handoff_io import json_write
+        json_write(output/kwargs['record_name'],{'complete':True,'scope':'unit-no-native'})
+        return {'complete':True}
+    monkeypatch.setattr(sibling_supervisor,'check_absent',inspect)
+    first=outer_owner.recover(root,attempt_id='a'*32)
+    second=outer_owner.recover(root,attempt_id='b'*32)
+    assert first['complete'] and second['complete']
+    assert (root/('outer-recovery-'+'a'*32+'.json')).is_file()
+    assert (root/('outer-recovery-'+'b'*32+'.json')).is_file()
+    assert len(set(calls))==2 and original.read_bytes()==b'UNIT ORIGINAL PRESERVE'
+    import pytest
+    with pytest.raises(FileExistsError):outer_owner.recover(root,attempt_id='a'*32)
+
+
+def test_archive_stager_only_opens_reviewed_regular_members(tmp_path,monkeypatch):
+    import io,tarfile,zipfile,pytest
+    monkeypatch.syspath_prepend(str(ROOT))
+    import stage_archives
+    with pytest.raises(SystemExit):stage_archives.main()
+    archive=tmp_path/'fixture.zip'
+    with zipfile.ZipFile(archive,'w') as out:out.writestr('regular',b'unit only')
+    with stage_archives.member_stream(archive,'regular',9) as source:assert source.read()==b'unit only'
+    with pytest.raises(ValueError):
+        with stage_archives.member_stream(archive,'../regular',9):pass
+    with pytest.raises(ValueError):
+        with stage_archives.member_stream(archive,'regular',8):pass
+    links=tmp_path/'links.tar'
+    with tarfile.open(links,'w') as out:
+        item=tarfile.TarInfo('linked');item.type=tarfile.SYMTYPE;item.linkname='/unrelated';out.addfile(item)
+    with pytest.raises(ValueError):
+        with stage_archives.member_stream(links,'linked',0):pass
+
+
+def test_held_workflow_is_manual_unregistered_and_recovery_always_runs():
+    import yaml
+    candidate=ROOT/'owned-siblings.yml'
+    data=yaml.safe_load(candidate.read_text())
+    assert set(data.get('on',data.get(True)))=={'workflow_dispatch'}
+    steps=data['jobs']['held-owned-android']['steps']
+    recovery=[step for step in steps if '--recover-only' in step.get('run','')]
+    assert len(recovery)==1 and recovery[0]['if']=='always()'
+    assert 'HELD source/build/runtime review missing' in steps[1]['run']
+    assert not (ROOT.parents[1]/'.github/workflows/owned-siblings.yml').exists()
+    assert not (ROOT/'reviewed-stage-lock.json').exists()
+    assert not (ROOT/'reviewed-source-lock.json').exists()
