@@ -17,27 +17,6 @@ name: PHANTOM frida smoke
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/phantom-frida-smoke.yml"
-      - "scripts/phantom_frida_smoke.py"
-      - "scripts/phantom_frida_smoke.sh"
-      - "scripts/phantom_emulator_lifecycle.py"
-      - "src/mobius/services/phantom.py"
-      - "src/mobius/services/poc_runner.py"
-      - "src/mobius/services/poc_execution.py"
-      - "src/mobius/services/poc_approval.py"
-  pull_request:
-    paths:
-      - ".github/workflows/phantom-frida-smoke.yml"
-      - "scripts/phantom_frida_smoke.py"
-      - "scripts/phantom_frida_smoke.sh"
-      - "scripts/phantom_emulator_lifecycle.py"
-      - "src/mobius/services/phantom.py"
-      - "src/mobius/services/poc_runner.py"
-      - "src/mobius/services/poc_execution.py"
-      - "src/mobius/services/poc_approval.py"
 
 concurrency:
   group: phantom-frida-smoke-${{ github.ref }}

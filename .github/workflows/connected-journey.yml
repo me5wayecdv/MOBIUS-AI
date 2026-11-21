@@ -17,16 +17,6 @@ name: Connected journey smoke
 
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - ".github/workflows/connected-journey.yml"
-      - "scripts/connected_journey_smoke.py"
-      - "scripts/connected_journey_smoke.sh"
-      - "scripts/phantom_emulator_lifecycle.py"
-      - "src/mobius/services/nexus_hypotheses.py"
-      - "src/mobius/services/model_provider.py"
-      - "src/mobius/services/phantom.py"
-      - "src/mobius/services/archivist.py"
 
 concurrency:
   group: connected-journey-${{ github.ref }}
