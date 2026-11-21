@@ -40,6 +40,16 @@ def verify_archive(archive):
     return SOURCE_ARCHIVE_SHA256
 
 
+def build_plan(scan_id,authorization_id,hypothesis_ids):
+    from mobius.core.schemas import PoCTestPlan
+    return PoCTestPlan(investigation_id=scan_id,authorization_id=authorization_id,target_sha256=APK_SHA256,
+        target_package=PACKAGE,target_kind='native_local_fixture',hypothesis_ids=tuple(hypothesis_ids),
+        expected_outcome='Controlled stdlib loopback capture/request replay, NOT hypothesis validation or APK traffic.',
+        safety_class='non_destructive',requires_approval=True,max_duration_seconds=130,max_output_bytes=1048576,
+        steps=[{'action':'capture_native_local_fixture_v1','target_ref':'trusted-local-positive-v1','timeout_seconds':60}],
+        cleanup_steps=[{'action':'stop_native_local_fixture','target_ref':'trusted-local-positive-v1','timeout_seconds':60}])
+
+
 def prepare(context,client,source,output):
     from sqlalchemy import select
     from mobius.adapters.db import make_engine,make_session_factory
@@ -134,12 +144,7 @@ def prepare(context,client,source,output):
             fresh.flush()
             SqlEventStore(fresh).emit(scan_id,'historical_hypothesis_fixture_import',source_manifest,actor=ACTOR)
             fresh.commit()
-        plan=PoCTestPlan(investigation_id=scan_id,authorization_id=auth['id'],target_sha256=APK_SHA256,
-            target_package=PACKAGE,target_kind='native_local_fixture',hypothesis_ids=tuple(new_ids),
-            expected_outcome='Controlled stdlib loopback capture/request replay, NOT hypothesis validation or APK traffic.',
-            safety_class='non_destructive',requires_approval=True,max_duration_seconds=300,max_output_bytes=1048576,
-            steps=[{'action':'capture_native_local_fixture_v1','target_ref':'trusted-local-positive-v1','timeout_seconds':230}],
-            cleanup_steps=[{'action':'stop_native_local_fixture','target_ref':'trusted-local-positive-v1','timeout_seconds':60}])
+        plan=build_plan(scan_id,auth['id'],new_ids)
         approval=api('/scans/'+scan_id+'/poc/approvals',{'plan':plan.model_dump(mode='json'),
             'justification':'DISPOSABLE TEST ACTOR grants this exact fixed local-only plan, not owner approval.',
             'risk_summary':'No APK execution, external target, model call, production changes or image publication.',

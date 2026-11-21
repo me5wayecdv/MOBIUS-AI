@@ -247,3 +247,19 @@ producers stop is required. Only this proxy-chain case is implemented; hostname
 mismatch and untrusted-origin cases remain unimplemented. Product positive
 report still says TLS controls untested in that profile; separate workflow
 control cannot silently be promoted into product profile coverage.
+
+### Consolidated review corrections
+
+The setup's230-second step did not fit the existing60-second generic action
+cap. Corrected without widening any policy:60s operation+60s teardown+10s
+collection reserve=130s total. The setup constructs its actual plan through a
+separate pure build_plan function, tested against the real schema. This is a
+permission ceiling, not a promise the heavy fixture will finish in60s; timeout
+must remain FAILED with cleanup/recovery, never silently extend its grant.
+
+ordinary_signals_ignored now leaves process handler ownership untouched on API
+worker threads, including restoration, while still running its cleanup body.
+The workflow main-thread supervisor retains process signal handling. A real
+ThreadPoolExecutor regression raises before finally, executes all cleanup seams
+and verifies process handlers unchanged. It runs no native fixture or host.
+All source execution gates remain FALSE and workflow unregistered.

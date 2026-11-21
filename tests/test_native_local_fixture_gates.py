@@ -224,3 +224,35 @@ def test_exact_consolidated_workflow_is_unregistered_manual_and_source_held():
             if isinstance(node,ast.Assign) and isinstance(node.value,ast.Constant)
             for target in node.targets if isinstance(target,ast.Name)}
         assert values['APPROVED_FOR_EXECUTION'] is False
+
+
+def test_held_setup_actual_plan_obeys_existing_operation_cap(monkeypatch):
+    import sys
+    from pathlib import Path
+    monkeypatch.syspath_prepend(str(Path(__file__).parents[1]/'research/d061_native'))
+    from product_setup import build_plan
+    plan=build_plan('scn_unit','ath_unit',['hyp_unit'])
+    assert plan.steps[0].timeout_seconds==60
+    assert plan.cleanup_steps[0].timeout_seconds==60
+    assert plan.max_duration_seconds==130
+    assert plan.steps[0].timeout_seconds+plan.cleanup_steps[0].timeout_seconds+10==plan.max_duration_seconds
+
+
+def test_cleanup_context_executes_in_real_sync_worker_without_signal_mutation(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from pathlib import Path
+    import signal
+    monkeypatch.syspath_prepend(str(Path(__file__).parents[1]/'research/d061_native'))
+    from cleanup import ordinary_signals_ignored
+    before={sig:signal.getsignal(sig) for sig in (signal.SIGINT,signal.SIGTERM,signal.SIGHUP)}
+    actions=[]
+    def worker():
+        try:
+            raise OSError('unit failure before cleanup')
+        finally:
+            with ordinary_signals_ignored():
+                actions.extend(['TERM-or-reap-seam','emergency-seam','summary-seam'])
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with pytest.raises(OSError,match='unit failure'):pool.submit(worker).result()
+    assert actions==['TERM-or-reap-seam','emergency-seam','summary-seam']
+    assert {sig:signal.getsignal(sig) for sig in before}==before
