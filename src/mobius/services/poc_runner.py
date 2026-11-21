@@ -108,7 +108,15 @@ class SafePoCRunner:
         if plan.target_kind == "emulator" and self._emulator_adapter is None:
             raise PoCAdapterUnavailable("no verified Android emulator adapter is configured on this host")
         if plan.cleanup_steps and plan.target_kind != "local_harness":
-            raise PoCAdapterUnavailable("cleanup adapters are currently limited to local_harness targets")
+            emulator_cleanup_ok = (
+                plan.target_kind == "emulator"
+                and all(c.action == "stop_emulator_instrumentation" for c in plan.cleanup_steps)
+            )
+            if not emulator_cleanup_ok:
+                raise PoCAdapterUnavailable(
+                    "cleanup adapters are limited to local_harness targets and "
+                    "emulator instrumentation stops"
+                )
 
         started_clock = time.monotonic()
         started_at = utcnow()
@@ -140,10 +148,10 @@ class SafePoCRunner:
                     "assert_emulator_package_present",
                 }:
                     passed = actual == step.expected_value
-                elif step.action == "assert_emulator_provider_rows":
+                elif step.action in {"assert_emulator_provider_rows", "assert_emulator_frida_classes"}:
                     # Documented threshold semantics: the runtime probe proves
-                    # at least the expected number of rows is readable without
-                    # a permission. A refused query (actual None) never passes.
+                    # at least the expected count is observed. A failed or
+                    # refused probe (actual None) never passes.
                     passed = (
                         isinstance(actual, int) and not isinstance(actual, bool)
                         and isinstance(step.expected_value, int)
@@ -172,6 +180,13 @@ class SafePoCRunner:
                 elif cleanup.action == "remove_temporary_workspace":
                     cleanup_status = "completed"
                     detail = "no temporary workspace was created by the in-process harness"
+                elif cleanup.action == "stop_emulator_instrumentation":
+                    if self._emulator_adapter is None:
+                        cleanup_status = "unavailable"
+                        detail = "no emulator adapter is configured"
+                    else:
+                        detail = self._emulator_adapter.stop_instrumentation()
+                        cleanup_status = "completed"
                 else:
                     cleanup_status = "unavailable"
                     detail = "cleanup action is not registered"
@@ -196,8 +211,7 @@ class SafePoCRunner:
             target_sha256=plan.target_sha256, status=status, started_at=started_at, finished_at=finished_at,
             duration_ms=total_ms, steps=tuple(results), output_json=output, tool_versions=tuple(sorted(versions)),
             limitations=(
-                ("Emulator probes ran read-only via adb against a verified emulator; physical "
-                 "devices are refused; no install, delete, Frida or proxy capability exists."
+                (self._emulator_limitation(plan)
                  if plan.target_kind == "emulator" else
                  "Local harness results are deterministic simulations, not execution of the APK."),
                 ("No shell, network, or state-changing action is available."
@@ -265,6 +279,15 @@ class SafePoCRunner:
             return declared, "persisted-manifest-observation", "1"
         raise PoCAdapterUnavailable(f"action {action} is not available for lab_apk targets")
 
+    @staticmethod
+    def _emulator_limitation(plan: PoCTestPlan) -> str:
+        if any(step.action == "assert_emulator_frida_classes" for step in plan.steps):
+            return ("Observation-only Frida instrumentation attached to the lab app on a "
+                    "verified emulator under an approved plan; no method tampering; "
+                    "instrumentation was stopped by the cleanup step; no proxy capability exists.")
+        return ("Emulator probes ran read-only via adb against a verified emulator; physical "
+                "devices are refused; no install, delete, Frida or proxy capability exists.")
+
     def _run_emulator_step(self, plan: PoCTestPlan, step):
         adapter = self._emulator_adapter
         if adapter is None:
@@ -289,6 +312,13 @@ class SafePoCRunner:
                 )
             result = adapter.probe_provider_query_rows(authority, path)
             return result.actual, "phantom-adb", adapter.VERSION
+        if step.action == "assert_emulator_frida_classes":
+            if step.target_ref != plan.target_package:
+                raise PoCScopeRejected(
+                    "emulator instrumentation probes must target the plan's authorized package"
+                )
+            result = adapter.probe_frida_enumerate_classes(step.target_ref)
+            return result.actual, "phantom-frida", adapter.VERSION
         raise PoCAdapterUnavailable(f"action {step.action} is not available for emulator targets")
 
     def _run_harness_step(

@@ -1,10 +1,13 @@
-"""PHANTOM emulator adapter (D-060, first slice): bounded read-only runtime probes.
+"""PHANTOM emulator adapter (D-060): bounded runtime probes.
 
 A closed set of adb probes against a verified emulator only - physical devices
 are refused before any probe runs. Every invocation is an argv list (never a
-shell string) with a bounded timeout and capped output. Probes are read-only:
-no install, no delete, no Frida, no proxy. An unconfigured environment fails
-closed with PoCAdapterUnavailable, preserving the pre-adapter behavior.
+shell string) with a bounded timeout and capped output. adb probes are
+read-only: no install, no delete, no proxy. The optional Frida probe is
+observation-only instrumentation (a fixed enumeration script embedded in this
+module - callers cannot supply scripts), gated upstream by the PoC approval
+flow. An unconfigured environment fails closed with PoCAdapterUnavailable,
+preserving the pre-adapter behavior.
 """
 from __future__ import annotations
 
@@ -17,7 +20,20 @@ from .poc_runner import PoCAdapterUnavailable
 
 MAX_OUTPUT_BYTES = 262_144
 PROBE_TIMEOUT_SECONDS = 30
+FRIDA_TIMEOUT_SECONDS = 90
 _DETAIL_OUTPUT_BYTES = 4_000
+
+# Fixed observation-only Frida script: count classes loaded in the target
+# process. No user-controlled script ever reaches Frida through this adapter.
+_FRIDA_ENUMERATE_SCRIPT = (
+    "var __mobiusCount = 0;"
+    "Java.perform(function () {"
+    "Java.enumerateLoadedClasses({"
+    "onMatch: function () { __mobiusCount++; },"
+    "onComplete: function () { console.log('MOBIUS_CLASSES:' + __mobiusCount); }"
+    "});"
+    "});"
+)
 
 # (argv, timeout_seconds) -> (returncode, stdout_bytes, stderr_bytes)
 Runner = Callable[[Sequence[str], int], "tuple[int, bytes, bytes]"]
@@ -47,11 +63,13 @@ class PhantomEmulatorAdapter:
         *,
         adb_path: str,
         serial: str | None = None,
+        frida_path: str | None = None,
         runner: Runner | None = None,
         emulator_check: Callable[[], bool] | None = None,
     ) -> None:
         self._adb = adb_path
         self._serial = serial
+        self._frida = frida_path
         self._runner = runner or _subprocess_runner
         self._emulator_check = emulator_check
 
@@ -111,13 +129,58 @@ class PhantomEmulatorAdapter:
             "content query row count", text[:_DETAIL_OUTPUT_BYTES],
         )
 
+    def probe_frida_enumerate_classes(self, package: str) -> EmulatorProbeResult:
+        """Observation-only instrumentation: attach to the running lab app and
+        count loaded classes with the fixed embedded script. actual is the
+        class count, or None when attach/enumeration failed. Requires frida
+        tooling configured and a frida-server already running on the verified
+        emulator (the CI job owns the server lifecycle); the upstream PoC
+        approval flow gates this probe."""
+        self._require_emulator()
+        if not self._frida:
+            raise PoCAdapterUnavailable(
+                "frida tooling is not configured on this host"
+            )
+        device = ["-D", self._serial] if self._serial else ["-U"]
+        argv = [self._frida, *device, "-q", "-n", package, "-e", _FRIDA_ENUMERATE_SCRIPT]
+        rc, out, err = self._runner(argv, FRIDA_TIMEOUT_SECONDS)
+        text = (out + err)[:MAX_OUTPUT_BYTES].decode("utf-8", "replace")
+        count = None
+        for line in text.splitlines():
+            if line.startswith("MOBIUS_CLASSES:"):
+                try:
+                    count = int(line.split(":", 1)[1].strip())
+                except ValueError:
+                    count = None
+        if rc != 0 or count is None:
+            return EmulatorProbeResult(
+                "frida_enumerate_classes", package, None,
+                f"frida attach/enumeration failed (rc={rc})", text[:_DETAIL_OUTPUT_BYTES],
+            )
+        return EmulatorProbeResult(
+            "frida_enumerate_classes", package, count,
+            "observation-only frida class enumeration", text[:_DETAIL_OUTPUT_BYTES],
+        )
+
+    def stop_instrumentation(self) -> str:
+        """Best-effort cleanup: stop any frida-server on the verified
+        emulator. Idempotent; a missing server is not an error."""
+        self._require_emulator()
+        rc, text = self._run(self._argv("shell", "pkill", "-f", "frida-server"))
+        if rc == 0:
+            return "frida-server stopped on the emulator"
+        return f"no running frida-server found (rc={rc}) or stop refused"
+
 
 def adapter_from_env() -> PhantomEmulatorAdapter | None:
     """Configured only when MOBIUS_PHANTOM_ADB names an adb binary; the
-    optional MOBIUS_PHANTOM_SERIAL pins one device. Absent config = no
-    adapter, and emulator-target plans fail closed as before."""
+    optional MOBIUS_PHANTOM_SERIAL pins one device and MOBIUS_PHANTOM_FRIDA
+    names a frida CLI binary for the observation-only instrumentation probe.
+    Absent config = no adapter, and emulator-target plans fail closed as
+    before."""
     adb = os.environ.get("MOBIUS_PHANTOM_ADB", "").strip()
     if not adb:
         return None
     serial = os.environ.get("MOBIUS_PHANTOM_SERIAL", "").strip() or None
-    return PhantomEmulatorAdapter(adb_path=adb, serial=serial)
+    frida = os.environ.get("MOBIUS_PHANTOM_FRIDA", "").strip() or None
+    return PhantomEmulatorAdapter(adb_path=adb, serial=serial, frida_path=frida)
