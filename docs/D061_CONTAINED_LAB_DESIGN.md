@@ -127,3 +127,27 @@ build, namespace capability, APK build or capture path. No model call or retry.
 3. Submit the corrected exact harness for safety and scope review.
 4. Only after disposition, run the authorized bounded slice and preserve real
    evidence. Until then D-061 remains unverified, neither optional nor complete.
+
+### Infrastructure candidate correction after exact-script review
+
+The infrastructure-only Python candidate now has controlled SIGTERM/SIGHUP/
+SIGINT failure handling, protected finite cleanup, separate guarded process
+inventory/kill/poll/delete/absence/snapshot/report steps and retained original
+plus cleanup errors. A failed process cleanup remains failure after name removal.
+It uses a UUID namespace, refuses existing names and journals successful creation
+plus the namespace inode; cleanup requires matching identity and never adopts a
+pre-existing or journal-less name. Optimization is rejected before safety checks.
+Raw host evidence is kept; comparison removes only declared address/route expiry
+metadata and firewall packet/byte counts, leaving unknown differences as failures.
+IPv4 loopback is the proposed exercised path; IPv6 is inspection only.
+
+An independent always-run CI cleanup candidate is stored at
+scripts/d061/draft/infra-only-ci.yml.disabled, outside active workflows. It uses
+only the successful-create journal from that job, bounded timeouts, identity
+checks and no prefix-based deletion. SIGKILL or runner loss may prevent cleanup;
+the create-to-journal SIGKILL window cannot be safely auto-adopted and must fail
+with evidence missing rather than delete an unverified namespace. No cleanup
+claim can survive absent/incomplete process and final-name evidence.
+
+Only parsing and a local normalization unit check have run on this correction.
+No namespace, socket roundtrip, host snapshot or cleanup operation has run.
