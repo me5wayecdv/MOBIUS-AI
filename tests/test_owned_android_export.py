@@ -1379,3 +1379,16 @@ def test_runner_capability_probe_is_readonly_and_held(tmp_path,monkeypatch):
     assert out['kvm']['present'] is False and out['cgroup_v2']['controllers']=='cpu memory pids' and 'no sudo' in out['claims']
     assert before==sorted(str(x) for x in tmp_path.rglob('*'))
     with pytest.raises(SystemExit):r.main()
+
+
+def test_audience_gate_refuses_public_and_unreviewed(monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1]/'research'/'d061_android'))
+    import audience_gate as g
+    assert g.APPROVED_FOR_EXECUTION is False
+    ok={'audience':'local_private_file','destination':'/var/private/inv.json','content_class':'package_hash_inventory','retention_days':7,'reviewed_private_destination':True}
+    assert g.check_plan(ok)
+    for mut in ({'audience':'workflow_log'},{'audience':'public_artifact'},{'audience':'pr_comment'},{'audience':'x'},{'audience':['a']},
+        {'content_class':'device_logs'},{'content_class':'user_data'},{'retention_days':0},{'retention_days':99},{'retention_days':True},
+        {'destination':'rel/x'},{'destination':'/a/../b'},{'reviewed_private_destination':False},{'extra':1}):
+        with pytest.raises(ValueError):g.check_plan({**ok,**mut})
+    with pytest.raises(ValueError):g.check_plan('x')
