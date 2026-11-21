@@ -1255,3 +1255,15 @@ def test_member_hash_inspect_streams_zip_and_tar_without_writes(tmp_path,monkeyp
     os.close(fd)
     assert not (tmp_path/'p').exists() and not (tmp_path/'j').exists()
     with pytest.raises(SystemExit):m.main()
+
+
+def test_runner_capability_probe_is_readonly_and_held(tmp_path,monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1]/'research'/'d061_android'))
+    import runner_capability_probe as r
+    assert r.APPROVED_FOR_EXECUTION is False
+    (tmp_path/'sys/fs/cgroup').mkdir(parents=True);(tmp_path/'sys/fs/cgroup/cgroup.controllers').write_text('cpu memory pids')
+    before=sorted(str(x) for x in tmp_path.rglob('*'))
+    out=r.probe(str(tmp_path))
+    assert out['kvm']['present'] is False and out['cgroup_v2']['controllers']=='cpu memory pids'
+    assert before==sorted(str(x) for x in tmp_path.rglob('*'))
+    with pytest.raises(SystemExit):r.main()
