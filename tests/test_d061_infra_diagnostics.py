@@ -119,3 +119,37 @@ class ExactWorkflowContractTests(unittest.TestCase):
             self.assertEqual(summary['cleanup_errors'], ['injected cleanup evidence failure', 'injected diagnostic failure'])
             self.assertIn('artifacts=', stdout.getvalue())
             self.assertNotIn('UnboundLocalError', stdout.getvalue())
+
+class CounterNormalizationTests(unittest.TestCase):
+    def test_chain_counters_only_are_ignored(self):
+        a = '*filter\n:OUTPUT ACCEPT [673:172648]\n:PRIVATE - [0:0]\n-A OUTPUT -d 192.0.2.1 -j DROP\nCOMMIT\n'
+        b = a.replace('[673:172648]', '[677:174871]').replace('[0:0]', '[2:300]')
+        self.assertEqual(infra.normalized(a), infra.normalized(b))
+
+    def test_rule_policy_chain_and_unknown_brackets_remain_detected(self):
+        a = '*filter\n:OUTPUT ACCEPT [673:172648]\n-A OUTPUT -d 192.0.2.1 -j DROP\nCOMMIT\n'
+        for changed in (
+            a.replace('ACCEPT', 'DROP'),
+            a.replace(':OUTPUT', ':FORWARD'),
+            a.replace('192.0.2.1', '192.0.2.2'),
+            a.replace('-j DROP', '-j ACCEPT'),
+            a + '-A INPUT -p tcp --dport 443 -j ACCEPT\n',
+            a + '# opaque value [8:9]\n',
+            a.replace('*filter', '*security'),
+        ):
+            with self.subTest(changed=changed):
+                self.assertNotEqual(infra.normalized(a), infra.normalized(changed))
+
+    def test_absence_field_is_persisted_by_cleanup(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            (out / 'host-before.json').write_text('{}')
+            ownership = {'name': 'd061-infra-' + 'a' * 32, 'created': False, 'inode': None}
+            # No network commands. Name chosen is nonexistent; snapshot mocked.
+            with mock.patch.object(infra, 'host_snapshot', return_value={}):
+                errors = infra.cleanup(out, ownership)
+            self.assertEqual(errors, [])
+            record = json.loads((out / 'final-name-absence.json').read_text())
+            self.assertTrue(record['absent'])
+            self.assertTrue(record['check_complete'])
