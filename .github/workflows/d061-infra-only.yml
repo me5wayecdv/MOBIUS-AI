@@ -1,0 +1,36 @@
+# REVIEW CANDIDATE ONLY. Not under .github/workflows, cannot dispatch.
+# No emulator, proxy, app, dependency install or packet to nonlocal address.
+name: D061 infrastructure-only candidate
+on: workflow_dispatch
+jobs:
+  infra:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reviewed infrastructure candidate
+        timeout-minutes: 2
+        run: |
+          sudo /usr/bin/python3 scripts/d061/infra_netns_check.py --review-authorized --journal-pointer "$RUNNER_TEMP/d061-own-journal"
+      - name: Independent cleanup even on prior failure or ordinary cancellation
+        if: always()
+        timeout-minutes: 4
+        run: |
+          sudo /usr/bin/python3 - "$RUNNER_TEMP/d061-own-journal" <<'PY'
+          import pathlib, subprocess, sys
+          pointer = pathlib.Path(sys.argv[1])
+          if not pointer.exists():
+              raise SystemExit('FAILED cleanup ownership evidence absent; no namespace adopted or deleted')
+          journal = pathlib.Path(pointer.read_text().strip())
+          if journal.name != 'ownership.json' or journal.parent.parent != pathlib.Path('/tmp') or not journal.parent.name.startswith('d061-infra-'):
+              raise SystemExit('FAILED unexpected journal path; nothing deleted')
+          raise SystemExit(subprocess.run(['/usr/bin/python3', 'scripts/d061/infra_netns_check.py', '--review-authorized', '--cleanup-only', str(journal)], timeout=210).returncode)
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: d061-infrastructure-evidence
+          path: /tmp/d061-infra-*/
+# SIGKILL/runner loss may prevent even always() steps. No guarantee then.
+# A SIGKILL between namespace creation and ownership journaling leaves an
+# unverified name: fail/report, never adopt/delete it by guessed prefix.
