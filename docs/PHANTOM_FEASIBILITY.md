@@ -30,13 +30,11 @@ A free route exists and stays inside the established safety posture:
 4. First slice is observation-only: attach to the lab app and enumerate
    (loaded classes/modules), no method tampering, no bypass scripts.
 
-**Open gating decision (product, not research):** AGENT_DESIGN.md scopes
-`frida_script` to intensity >= 2, and injection into a running process is
-more than the current `read_only` probes even when the script only observes.
-The PoC framework already has an explicit approval flow
-(`requires_approval` + granted approval). Recommendation: instrumentation
-plans go through that approval flow rather than stretching `read_only`.
-This decision is surfaced, not taken, here.
+**Gating (resolved):** instrumentation probes use the existing
+`non_destructive` safety class - the approval gate (`requires_approval` +
+granted approval via the PoC approvals API) plus a mandatory
+`stop_emulator_instrumentation` cleanup step. `read_only` is not stretched:
+it remains free of any process attachment.
 
 ## Bounded traffic-capture route (mitmproxy-class)
 
