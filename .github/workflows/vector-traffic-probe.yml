@@ -1,0 +1,62 @@
+# VECTOR traffic-capture feasibility probe (D-061 reconciliation).
+#
+# Investigative only: boots the ephemeral CI emulator, locks down all guest
+# egress with iptables (loopback + host alias + host-resolver DNS only), then
+# launches the pinned Allsafe lab APK and records which remote endpoints it
+# attempts. No app traffic can reach any third-party endpoint; the probe
+# observes attempts, captures no content, and contacts nothing. Pull-request
+# and manual runs only - it does not run on pushes to main.
+#
+# Constraints honoured: lab target only, ephemeral emulator, no credentials,
+# no external target, free runner.
+
+name: VECTOR traffic probe
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/vector-traffic-probe.yml"
+      - "scripts/vector_traffic_probe.sh"
+
+concurrency:
+  group: vector-traffic-probe-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  vector-traffic-probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Enable KVM group perms
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Download pinned Allsafe lab APK
+        run: |
+          curl -sSfL -o allsafe.apk \
+            https://github.com/t0thkr1s/allsafe/releases/download/v.1.6/allsafe.apk
+          echo "d6792d6634a033f048f935f1269179d3c27b859c4c34b1e9e5b008a88375efd9  allsafe.apk" | sha256sum -c -
+
+      - name: Run VECTOR traffic probe on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 29
+          target: default
+          arch: x86_64
+          profile: Nexus 6
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          disable-animations: true
+          script: bash scripts/vector_traffic_probe.sh
+
+      - name: Upload probe outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: vector-traffic-probe
+          path: vector-traffic-probe/
+          if-no-files-found: ignore
