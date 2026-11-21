@@ -60,27 +60,32 @@ def open_private_destination(path):
         if cur is not None:os.close(cur)
 
 
-def _write_private(dirfd,name,data):
-    """RAW lower-level primitive, module-private: exclusive no-follow 0600 create relative to
-    a verified dir fd. Callers must use `publish_private`, which binds plan, directory and content."""
-    if (not isinstance(name,str) or not re.fullmatch(r'[A-Za-z0-9_.-]{1,80}',name) or name in ('.','..') or not isinstance(data,bytes) or len(data)>64*1024**2):
-        raise ValueError('closed output name and bounded bytes required')
+def _create_owned_temp(dirfd,data):
+    """Exclusive create of a UNIQUE per-attempt temp name; returns (name, fd, (dev,ino)). Ownership
+    exists only after the exclusive create succeeded, so cleanup can never delete another attempt's file."""
     st=os.fstat(dirfd)
     if not stat.S_ISDIR(st.st_mode) or st.st_uid!=os.geteuid() or st.st_mode&0o077:raise ValueError('retained destination fd no longer private')
+    if not isinstance(data,bytes) or len(data)>64*1024**2:raise ValueError('bounded bytes required')
+    name='.tmp-'+os.urandom(12).hex()
     fd=os.open(name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW|os.O_CLOEXEC,0o600,dir_fd=dirfd)
+    fst=os.fstat(fd)
+    return name,fd,(fst.st_dev,fst.st_ino)
+
+
+def _unlink_if_ours(dirfd,name,ident):
     try:
-        view=memoryview(data)
-        while view:view=view[os.write(fd,view):]
-        os.fsync(fd)
-    finally:os.close(fd)
-    return len(data)
+        cur=os.stat(name,dir_fd=dirfd,follow_symlinks=False)
+        if (cur.st_dev,cur.st_ino)==ident:os.unlink(name,dir_fd=dirfd)
+        return True
+    except FileNotFoundError:return True
+    except OSError:return False
 
 
 def publish_private(plan,name,obj,*,sha256=None,size=None):
     """The single write seam. Binds: plan -> destination directory (opened here from
     plan['destination']), content class -> typed object (validated here), and serializes
-    internally, so no caller bytes are written. Writes `<name>.part` then links it to `<name>` without clobbering, then unlinks the part;
-    on any failure the partial file is unlinked. Existence of a final file marks completion.
+    internally, so no caller bytes are written. Writes a unique per-attempt temp, links it to `<name>` without clobbering, then removes only its own temp inode (a leftover temp after commit is reported, not raised);
+    on failure only this attempt's own temp inode is removed. A pre-existing final name is never proof of this run or content: collisions raise and claim nothing.
     route_evidence_ref is a label only: real route authorization lives outside these values."""
     import json
     check_plan(plan)
@@ -89,16 +94,21 @@ def publish_private(plan,name,obj,*,sha256=None,size=None):
     data=json.dumps(obj,sort_keys=True,separators=(',',':')).encode()
     dirfd=open_private_destination(plan['destination'])
     try:
-        part=name+'.part'
+        tmp,fd,ident=_create_owned_temp(dirfd,data)
+        committed=False
         try:
-            _write_private(dirfd,part,data)
-            os.link(part,name,src_dir_fd=dirfd,dst_dir_fd=dirfd,follow_symlinks=False)  # no-clobber: FileExistsError if final exists
-            os.unlink(part,dir_fd=dirfd)
-        except BaseException:
-            try:os.unlink(part,dir_fd=dirfd)
-            except OSError:pass
-            raise
-        return {'written_relative_to_plan_destination':True,'bytes':len(data),'route_evidence_ref':plan['route_evidence_ref'],'retention_enforced':False}
+            view=memoryview(data)
+            while view:view=view[os.write(fd,view):]
+            os.fsync(fd)
+            try:os.link(tmp,name,src_dir_fd=dirfd,dst_dir_fd=dirfd,follow_symlinks=False)  # no-clobber
+            except FileExistsError:raise   # an existing final name is NOT proof of this run/content; never claimed
+            committed=True
+        finally:
+            os.close(fd)
+            unlinked=_unlink_if_ours(dirfd,tmp,ident)     # only this attempt's inode
+        os.fsync(dirfd)                                   # directory entry durability for the committed link
+        return {'written_relative_to_plan_destination':True,'committed':True,'temp_removed':unlinked,'bytes':len(data),
+            'route_evidence_ref':plan['route_evidence_ref'],'retention_enforced':False,'durable_dir_fsync':True}
     finally:os.close(dirfd)
 
 

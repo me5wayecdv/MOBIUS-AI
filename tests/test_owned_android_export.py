@@ -1400,12 +1400,18 @@ def test_audience_gate_is_plan_validation_only(monkeypatch,tmp_path):
     cap0={'euid':0,'kvm_present':True,'kvm_rw':False,'disk_free_bytes':1,'disk_total_bytes':2}
     res=g.publish_private(plan,'cap.json',cap0)
     assert res['written_relative_to_plan_destination'] and oct((d/'cap.json').stat().st_mode&0o777)=='0o600'
-    assert json.loads((d/'cap.json').read_text())==cap0 and not (d/'cap.json.part').exists()
+    assert res['committed'] and res['temp_removed'] and res['durable_dir_fsync']
+    assert json.loads((d/'cap.json').read_text())==cap0 and not [x for x in os.listdir(d) if x.startswith('.tmp-')]
+    # collision: an existing final name (even identical content) is never claimed as this run's output
     with pytest.raises(FileExistsError):g.publish_private(plan,'cap.json',cap0)
-    assert not (d/'cap.json.part').exists()
+    assert not [x for x in os.listdir(d) if x.startswith('.tmp-')]
+    # a pre-existing file named like a temp is never deleted by an unrelated attempt
+    (d/'.tmp-foreign').write_text('keep')
+    with pytest.raises(FileExistsError):g.publish_private(plan,'cap.json',cap0)
+    assert (d/'.tmp-foreign').read_text()=='keep';(d/'.tmp-foreign').unlink()
     with pytest.raises(ValueError):g.publish_private(plan,'bad.json',{**cap0,'host':'x'})
-    assert not (d/'bad.json').exists() and not (d/'bad.json.part').exists()
-    for bad_name in ('../x','a/b','',' x','y.part'):
+    assert not (d/'bad.json').exists() and not os.listdir(d)==['x']
+    for bad_name in ('../x','a/b','',' x','y.part','.tmp-x'):
         with pytest.raises(ValueError):g.publish_private(plan,bad_name,cap0)
     with pytest.raises(ValueError):g.publish_private({**plan,'route':'x'},'z.json',cap0)
     with pytest.raises(AttributeError):g.write_private
@@ -1413,7 +1419,18 @@ def test_audience_gate_is_plan_validation_only(monkeypatch,tmp_path):
     import unittest.mock as um
     with um.patch('os.link',side_effect=OSError(5,'x')):
         with pytest.raises(OSError):g.publish_private(plan,'r.json',cap0)
-    assert not (d/'r.json').exists() and not (d/'r.json.part').exists()
+    assert not (d/'r.json').exists() and not [x for x in os.listdir(d) if x.startswith('.tmp-')]
+    # after-link unlink failure: output stays committed, leftover is REPORTED not raised, and a retry reports the collision honestly
+    real_unlink=os.unlink
+    def flaky(path,*a,**k):
+        if str(path).startswith('.tmp-'):raise OSError(13,'x')
+        return real_unlink(path,*a,**k)
+    with um.patch('os.unlink',side_effect=flaky):
+        res2=g.publish_private(plan,'s.json',cap0)
+    assert res2['committed'] and res2['temp_removed'] is False and (d/'s.json').exists()
+    for x in os.listdir(d):
+        if x.startswith('.tmp-'):(d/x).unlink()
+    with pytest.raises(FileExistsError):g.publish_private(plan,'s.json',cap0)
     dfd=g.open_private_destination(str(d));os.close(dfd)
     os.chmod(d,0o750)
     with pytest.raises(ValueError):g.publish_private(plan,'m.json',cap0)
