@@ -35,7 +35,7 @@ public final class FixtureActivity extends Activity {
         view.setText("HELD owned network fixture");
         setContentView(view);
         final String nonce = getIntent().getStringExtra("fixture_nonce");
-        if (nonce == null || !nonce.matches("[0-9a-f]{32}") || started) {
+        if (state != null || nonce == null || !nonce.matches("[0-9a-f]{32}") || started) {
             Log.i(TAG, "REFUSED invalid nonce or repeated launch");
             return;
         }

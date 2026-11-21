@@ -48,6 +48,9 @@ owned-app trust, not bypassing another app's certificate pinning.
 - Client untrusted-proxy CA rejection must remain available as a control;
   hostname/untrusted-origin negatives and lifecycle failure paths remain gaps.
 
-This directory supplies app source and scope only. Build/harness/runtime remain
+This directory supplies app source, held offline build-driver source and scope.
+No toolchain was downloaded/installed or driver executed. The metadata candidates
+are unresolved, not a valid runtime lock. Namespace/emulator/product harness still
+requires implementation. Build/harness/runtime remain
 held pending exact review. No third-party egress, system-CA changes, pinning
 bypass, production activation, new model request or paid spend is implied.

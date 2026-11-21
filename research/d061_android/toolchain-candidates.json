@@ -1,0 +1,71 @@
+{
+  "status": "HELD_METADATA_ONLY_NOT_RESOLVED_LOCK",
+  "metadata_checked": "2026-11-21",
+  "packages": [
+    {
+      "package": "platforms;android-35",
+      "revision": "2",
+      "archive_url": "https://dl.google.com/android/repository/platform-35_r02.zip",
+      "archive_bytes": 64273788,
+      "official_checksum_algorithm": "sha1",
+      "official_checksum": "0bb560a90a7a2cbd0dd8348224d518b638fe7949",
+      "source_url": "https://dl.google.com/android/repository/repository2-3.xml",
+      "source_xml_sha256": "b97da160df8d80f0fe67739643cb53fbfcafd9c502ef57b78c038645062865ee",
+      "archive_sha256": null,
+      "archive_downloaded_or_executed": false
+    },
+    {
+      "package": "build-tools;35.0.0",
+      "revision": "35.0.0",
+      "archive_url": "https://dl.google.com/android/repository/build-tools_r35_linux.zip",
+      "archive_bytes": 61958799,
+      "official_checksum_algorithm": "sha1",
+      "official_checksum": "2cfaa0bbb2336e9ec18ed3ecea84fa2e2af607bc",
+      "source_url": "https://dl.google.com/android/repository/repository2-3.xml",
+      "source_xml_sha256": "b97da160df8d80f0fe67739643cb53fbfcafd9c502ef57b78c038645062865ee",
+      "archive_sha256": null,
+      "archive_downloaded_or_executed": false
+    },
+    {
+      "package": "platform-tools",
+      "revision": "37.0.3",
+      "archive_url": "https://dl.google.com/android/repository/platform-tools_r37.0.3-linux.zip",
+      "archive_bytes": 9571024,
+      "official_checksum_algorithm": "sha1",
+      "official_checksum": "e1579b288a7ae4e9bc28dedec6a154d78b3c04ed",
+      "source_url": "https://dl.google.com/android/repository/repository2-3.xml",
+      "source_xml_sha256": "b97da160df8d80f0fe67739643cb53fbfcafd9c502ef57b78c038645062865ee",
+      "archive_sha256": null,
+      "archive_downloaded_or_executed": false
+    },
+    {
+      "package": "emulator",
+      "revision": "37.3.10",
+      "archive_url": "https://dl.google.com/android/repository/emulator-linux_x64-16970787.zip",
+      "archive_bytes": 350068887,
+      "official_checksum_algorithm": "sha1",
+      "official_checksum": "5f7314368fc6c05c937f6991bb4106214dc389e7",
+      "source_url": "https://dl.google.com/android/repository/repository2-3.xml",
+      "source_xml_sha256": "b97da160df8d80f0fe67739643cb53fbfcafd9c502ef57b78c038645062865ee",
+      "archive_sha256": null,
+      "archive_downloaded_or_executed": false
+    },
+    {
+      "package": "system-images;android-29;default;x86_64",
+      "revision": "8",
+      "archive_url": "https://dl.google.com/android/repository/sys-img/android/x86_64-29_r08-linux.zip",
+      "archive_bytes": 689676765,
+      "official_checksum_algorithm": "sha1",
+      "official_checksum": "e4b798d6fcddff90d528d74ef22ce3dd4a2ca798",
+      "source_url": "https://dl.google.com/android/repository/sys-img/android/sys-img2-3.xml",
+      "source_xml_sha256": "7b119fdc282a65432aab52e8bbc64546f7fb6ec74e79e235633c60d06564b111",
+      "archive_sha256": null,
+      "archive_downloaded_or_executed": false
+    }
+  ],
+  "gaps": [
+    "Actual SHA256 archive hashes and staged file manifest require separately reviewed download/verification, no package installed here.",
+    "Exact JDK distribution/version/archive/hash and host image/runtime libraries remain to pin before build.",
+    "Actual emulator/kernel/system image identity and complete offline runtime closure remain to verify, metadata is not execution evidence."
+  ]
+}
