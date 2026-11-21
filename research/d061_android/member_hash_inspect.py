@@ -166,29 +166,73 @@ def _parse(fd,st,expected_sha256,expected_size,ident):
     finally:f.close()
 
 
-def run_child(path,sha256,size,*,wall=1300,python=sys.executable):
-    """Parent: spawn the held CLI, capture stdout through a bounded pipe with a
-    deadline. Anything but exit 0 plus complete JSON is NOT a completed inventory."""
-    p=subprocess.Popen([python,os.path.abspath(__file__),path,'--sha256',sha256,'--size',str(size)],stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,close_fds=True,env={},start_new_session=True)
-    buf=bytearray();end=time.monotonic()+wall
+class CaptureError(Exception):
+    def __init__(self,kind):super().__init__(kind);self.kind=kind
+
+
+KINDS={'deadline','output_bound','nonzero_exit','bad_json','bad_schema','spawn'}
+ROW_KEYS={'path','size','kind','mode','sha256','target'}
+
+
+def validate_inventory(out,sha256,size):
+    if not isinstance(out,dict) or set(out)!={'container_sha256','container_bytes','member_count','declared_expanded_bytes','members',
+        'inspection','member_written','package_code_executed','license_accepted','runtime_closure_resolved','provenance_note'}:raise CaptureError('bad_schema')
+    if (out['container_sha256']!=sha256 or out['container_bytes']!=size or out['inspection']!='data_only_streaming_hash'
+        or out['member_written'] is not False or out['package_code_executed'] is not False or out['license_accepted'] is not False
+        or out['runtime_closure_resolved'] is not False):raise CaptureError('bad_schema')
+    rows=out['members']
+    if not isinstance(rows,list) or out['member_count']!=len(rows) or len(rows)>MAX_FILES:raise CaptureError('bad_schema')
+    total=0;seen=set()
+    for r in rows:
+        if not isinstance(r,dict) or not {'path','size','kind','mode'}<=set(r)<=ROW_KEYS:raise CaptureError('bad_schema')
+        try:canon(r['path'])
+        except (ValueError,TypeError):raise CaptureError('bad_schema')
+        if (r['path'] in seen or r['kind'] not in ('regular','directory','symlink','hardlink') or type(r['size']) is not int
+            or type(r['mode']) is not int or not 0<=r['size']<=MAX_MEMBER or r['mode']&0o7000):raise CaptureError('bad_schema')
+        if r['kind']=='regular' and not re.fullmatch('[0-9a-f]{64}',r.get('sha256') or ''):raise CaptureError('bad_schema')
+        seen.add(r['path']);total+=r['size']
+    if total!=out['declared_expanded_bytes'] or total>MAX_TOTAL:raise CaptureError('bad_schema')
+    return out
+
+
+def run_child(path,sha256,size,*,wall=1300,cmd=None):
+    """Parent capture. One direct child, no group signalling. Termination goes only
+    through a pidfd opened before any reap, so a reaped/reused PID is never signalled.
+    Success needs exit 0 plus a closed schema that echoes the exact requested pins."""
+    argv=cmd or [sys.executable,os.path.abspath(__file__),path,'--sha256',sha256,'--size',str(size)]
     try:
-        while True:
+        p=subprocess.Popen(argv,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,close_fds=True,env={})
+    except OSError:raise CaptureError('spawn')
+    pidfd=os.pidfd_open(p.pid);buf=bytearray();end=time.monotonic()+wall;kind=None
+    def kill():
+        try:signal.pidfd_send_signal(pidfd,signal.SIGKILL)
+        except OSError:pass
+    try:
+        while kind is None:
             left=end-time.monotonic()
-            if left<=0:raise TimeoutError('deadline')
-            if not select.select([p.stdout],[],[],min(left,1))[0]:
-                if p.poll() is not None and not select.select([p.stdout],[],[],0)[0]:break
-                continue
+            if left<=0:kind='deadline';break
+            if not select.select([p.stdout],[],[],min(left,1))[0]:continue
             d=os.read(p.stdout.fileno(),65536)
             if not d:break
             buf+=d
-            if len(buf)>MAX_OUTPUT:raise ValueError('output bound')
-        if p.wait(timeout=max(1,end-time.monotonic()))!=0:raise ValueError('child failed')
-        return json.loads(bytes(buf))
+            if len(buf)>MAX_OUTPUT:kind='output_bound'
+        if kind:kill()
+        try:rc=p.wait(timeout=5 if kind else max(1,end-time.monotonic()))
+        except subprocess.TimeoutExpired:
+            kill();p.wait(timeout=5);kind=kind or 'deadline';rc=None
+        if kind:raise CaptureError(kind)
+        if rc!=0:raise CaptureError('nonzero_exit')
+        try:out=json.loads(bytes(buf))
+        except ValueError:raise CaptureError('bad_json')
+        return validate_inventory(out,sha256,size)
     except BaseException:
-        try:os.killpg(p.pid,signal.SIGKILL)
-        except OSError:pass
-        p.wait();raise
+        if p.poll() is None:
+            kill()
+            try:p.wait(timeout=5)
+            except subprocess.TimeoutExpired:pass
+        raise
+    finally:
+        p.stdout.close();os.close(pidfd)
 
 
 def main():

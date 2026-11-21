@@ -1,10 +1,9 @@
-"""HELD, unwired: READ-ONLY benign capability probe for a standard Linux runner.
+"""HELD, unwired: READ-ONLY metadata observation of a Linux host.
 
-Reports facts only: uid, sudo availability by `sudo -n true`-free inspection
-(effective uid is NOT root, so only /etc/sudoers.d presence is not read here),
-/dev/kvm stat, cgroup v2 controllers/delegation, free disk, unprivileged user
-namespace sysctl. Writes nothing, spawns nothing, no network, no downloads.
-Not evidence of containment, fault handling, KVM function or Android anything.
+Reads euid, /dev/kvm stat plus access(2), cgroup v2 text files, userns/AppArmor
+sysctls and disk usage. It does NOT test sudo, cgroup delegation or writability,
+KVM ioctls, namespace creation or containment; those need a separately reviewed
+benign probe. Writes nothing, spawns nothing, no network, no downloads.
 """
 import json,os,shutil,stat,sys
 
@@ -30,7 +29,7 @@ def probe(root='/'):
         'userns_max':read(p('proc/sys/user/max_user_namespaces')),
         'apparmor_userns_restrict':read(p('proc/sys/kernel/apparmor_restrict_unprivileged_userns')),
         'disk_free_bytes':du.free,'disk_total_bytes':du.total,
-        'claims':'facts about this one host only; no containment, fault, KVM-function or Android proof'}
+        'claims':'observed metadata of this host at read time only; no sudo, delegation, KVM-function, containment, fault or Android capability established'}
 
 
 def main():

@@ -1297,7 +1297,31 @@ def test_member_hash_inspect_anchored_open_and_outer_limits_in_child(tmp_path,mo
     hang=subprocess.run([sys.executable,'-c',"import sys;sys.path.insert(0,%r);import member_hash_inspect as m,time;m.apply_outer_limits({'as':512*1024**2,'cpu':5,'wall':1,'nofile':16});time.sleep(10)"%str(root)],timeout=30)
     assert hang.returncode==70
     # parent capture: held CLI exits nonzero, so no inventory is returned
-    with pytest.raises(ValueError):m.run_child(str(f),hashlib.sha256(b'z').hexdigest(),1,wall=20)
+    with pytest.raises(m.CaptureError):m.run_child(str(f),hashlib.sha256(b'z').hexdigest(),1,wall=20)
+    sha=hashlib.sha256(b'z').hexdigest()
+    good={'container_sha256':sha,'container_bytes':1,'member_count':1,'declared_expanded_bytes':1,
+        'members':[{'path':'a','size':1,'kind':'regular','mode':420,'sha256':sha}],'inspection':'data_only_streaming_hash',
+        'member_written':False,'package_code_executed':False,'license_accepted':False,'runtime_closure_resolved':False,'provenance_note':'x'}
+    import json as J
+    def child(code):return [sys.executable,'-c',code]
+    def run(code,**k):return m.run_child('x',sha,1,cmd=child(code),**k)
+    assert run('import json,sys;json.dump(%r,sys.stdout)'%good)==good
+    def kind(code,**k):
+        with pytest.raises(m.CaptureError) as e:run(code,**k)
+        return e.value.kind
+    assert kind('print("not json")')=='bad_json'
+    assert kind('import sys;sys.exit(3)')=='nonzero_exit'
+    assert kind('import sys;sys.stdout.write("x"*(70*1024*1024))')=='output_bound'
+    assert kind('import time;time.sleep(30)',wall=1)=='deadline'
+    assert kind('print(1)')=='bad_schema'
+    for mut in ({'container_bytes':2},{'container_sha256':'0'*64},{'license_accepted':True},{'member_written':True},{'extra':1},{'member_count':2}):
+        assert kind('import json,sys;json.dump(%r,sys.stdout)'%{**good,**mut})=='bad_schema'
+    bad_rows=[{'path':'../a','size':1,'kind':'regular','mode':420,'sha256':sha},{'path':'a','size':1,'kind':'regular','mode':0o4755,'sha256':sha},{'path':'a','size':1,'kind':'regular','mode':420}]
+    for r in bad_rows:
+        assert kind('import json,sys;json.dump(%r,sys.stdout)'%{**good,'members':[r]})=='bad_schema'
+    # no group signalling anywhere in the parent
+    import inspect as I
+    assert 'killpg' not in I.getsource(m)
     assert (tmp_path/'w').stat().st_size==0
 
 
@@ -1308,6 +1332,6 @@ def test_runner_capability_probe_is_readonly_and_held(tmp_path,monkeypatch):
     (tmp_path/'sys/fs/cgroup').mkdir(parents=True);(tmp_path/'sys/fs/cgroup/cgroup.controllers').write_text('cpu memory pids')
     before=sorted(str(x) for x in tmp_path.rglob('*'))
     out=r.probe(str(tmp_path))
-    assert out['kvm']['present'] is False and out['cgroup_v2']['controllers']=='cpu memory pids'
+    assert out['kvm']['present'] is False and out['cgroup_v2']['controllers']=='cpu memory pids' and 'no sudo' in out['claims']
     assert before==sorted(str(x) for x in tmp_path.rglob('*'))
     with pytest.raises(SystemExit):r.main()
