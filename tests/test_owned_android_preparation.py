@@ -9,7 +9,8 @@ ROOT=Path(__file__).parents[1]/'research/d061_android'
 
 
 def test_owned_source_and_build_are_held_without_workflow():
-    for name,flags in [('profile.py',['APPROVED_FOR_BUILD','APPROVED_FOR_EXECUTION']),('build_owned.py',['APPROVED_FOR_BUILD']),('namespace_supervisor.py',['APPROVED_FOR_EXECUTION']),('emulator_scope.py',['APPROVED_FOR_EXECUTION']),('owned_product_setup.py',['APPROVED_FOR_EXECUTION']),('owned_absence.py',['APPROVED_FOR_EXECUTION'])]:
+    for name,flags in [('profile.py',['APPROVED_FOR_BUILD','APPROVED_FOR_EXECUTION']),('build_owned.py',['APPROVED_FOR_BUILD']),('namespace_supervisor.py',['APPROVED_FOR_EXECUTION']),('emulator_scope.py',['APPROVED_FOR_EXECUTION']),('owned_product_setup.py',['APPROVED_FOR_EXECUTION']),('owned_absence.py',['APPROVED_FOR_EXECUTION']),('contained_driver.py',['APPROVED_FOR_EXECUTION']),
+        ('control_driver.py',['APPROVED_FOR_EXECUTION']),('sibling_supervisor.py',['APPROVED_FOR_EXECUTION']),('owned_collect.py',['APPROVED_FOR_EXECUTION'])]:
         tree=ast.parse((ROOT/name).read_text())
         values={target.id:node.value.value for node in tree.body if isinstance(node,ast.Assign) and isinstance(node.value,ast.Constant)
             for target in node.targets if isinstance(target,ast.Name)}
@@ -153,7 +154,7 @@ def test_handoff_closed_commit_cannot_change_actual_apk_or_add_instructions(monk
         authorization_id='ath_unit',approval_id='apr_unit',investigation_id='scn_unit',plan_id='poc_unit',nonce='d'*32)
     ready={'version':'owned-android-ready/1','profile':request.profile,'package':request.package,
         'apk_sha256':request.apk_sha256,'public_ca_sha256':request.public_ca_sha256,'build_json_sha256':'e'*64,
-        'source_manifest_sha256':'f'*64,'original_count':0,'origin_receipt_count':0,'apk_installed':False,'apk_launched':False}
+        'source_manifest_sha256':'f'*64,'run_id':'1'*32,'provisioning_id':'2'*32,'closure_sha256':'3'*64,'original_count':0,'origin_receipt_count':0,'apk_installed':False,'apk_launched':False}
     commit=make_commit(request,ready_metadata=ready,ready_metadata_sha256=digest(canonical(ready)))
     assert validate_commit(commit,ready_metadata=ready,expected_request=request)==request
     with pytest.raises(ValueError):validate_commit({**commit,'argv':['unrelated']},ready_metadata=ready,expected_request=request)
@@ -167,17 +168,18 @@ def test_handoff_stage_budgets_and_no_retry_after_failure(monkeypatch):
     import pytest
     monkeypatch.syspath_prepend(str(ROOT))
     from handoff_protocol import LifecycleState
-    state=LifecycleState()
-    with pytest.raises(ValueError):state.advance('committed',seconds=1)
-    with pytest.raises(ValueError):state.advance('provisioned',seconds=241)
-    with pytest.raises(ValueError):state.advance('provisioned',seconds=10,originals=1)
-    assert state.advance('provisioned',seconds=240)=='ready'
-    with pytest.raises(ValueError):state.advance('committed',seconds=31)
+    for event,seconds,kwargs in [('committed',1,{}),('provisioned',241,{}),('provisioned',10,{'originals':1})]:
+        state=LifecycleState()
+        with pytest.raises(ValueError):state.advance(event,seconds=seconds,**kwargs)
+        with pytest.raises(ValueError):state.advance('provisioned',seconds=1)
+    state=LifecycleState();assert state.advance('provisioned',seconds=240)=='ready'
     assert state.advance('committed',seconds=30)=='committed'
     with pytest.raises(ValueError):state.advance('operation_returned',seconds=61)
-    assert state.advance('operation_returned',seconds=60,originals=1,receipts=2)=='operation_returned'
-    assert state.advance('runtime_absent',seconds=60)=='runtime_absent'
-    assert state.advance('collected',seconds=10)=='collected'
+    with pytest.raises(ValueError):state.advance('operation_returned',seconds=60)
+    state=LifecycleState()
+    for event,seconds in [('provisioned',240),('committed',30),('operation_returned',60),('runtime_absent',60),('collected',10)]:
+        state.advance(event,seconds=seconds)
+    assert state.stage=='collected'
     failed=LifecycleState();failed.fail('TimeoutError')
     with pytest.raises(ValueError):failed.advance('provisioned',seconds=1)
 
@@ -188,7 +190,78 @@ def test_handoff_provisioning_refuses_preapproval_traffic_and_extra_fields(monke
     from handoff_protocol import validate_provisioned,READY_VERSION
     metadata={'version':READY_VERSION,'profile':'owned-android-fixed-loopback-v1','package':'org.mobius.ownedfixture',
         'apk_sha256':'a'*64,'public_ca_sha256':'b'*64,'build_json_sha256':'c'*64,'source_manifest_sha256':'d'*64,
-        'original_count':0,'origin_receipt_count':0,'apk_installed':False,'apk_launched':False}
+        'original_count':0,'origin_receipt_count':0,'apk_installed':False,'apk_launched':False,
+        'run_id':'1'*32,'provisioning_id':'2'*32,'closure_sha256':'3'*64}
     for key,value in [('original_count',1),('apk_installed',True),('origin_receipt_count',True),('extra','instructions')]:
         with pytest.raises(ValueError):validate_provisioned({**metadata,key:value},apk=b'unit-only',public_ca_der=b'unit-only',
             build_json=b'{}',expected_source_manifest_sha256='d'*64)
+
+
+def test_root_expected_context_rejects_cross_run_or_reused_ready(monkeypatch):
+    import pytest
+    monkeypatch.syspath_prepend(str(ROOT))
+    from handoff_protocol import ExpectedContext,make_commit,canonical,digest,LifecycleState
+    from profile import OwnedAppRequest
+    ready={'version':'owned-android-ready/1','profile':'owned-android-fixed-loopback-v1','package':'org.mobius.ownedfixture',
+        'apk_sha256':'a'*64,'public_ca_sha256':'b'*64,'build_json_sha256':'c'*64,'source_manifest_sha256':'d'*64,
+        'run_id':'1'*32,'provisioning_id':'2'*32,'closure_sha256':'e'*64,
+        'original_count':0,'origin_receipt_count':0,'apk_installed':False,'apk_launched':False}
+    def context():return ExpectedContext(run_id='1'*32,provisioning_id='2'*32,closure_sha256='e'*64,source_manifest_sha256='d'*64)
+    request=OwnedAppRequest(apk_sha256='a'*64,public_ca_sha256='b'*64,plan_sha256='f'*64,
+        authorization_id='ath_unit',approval_id='apr_unit',investigation_id='scn_unit',plan_id='poc_unit',nonce='3'*32)
+    root=context();root.accept_ready(ready)
+    commit=make_commit(request,ready_metadata=ready,ready_metadata_sha256=digest(canonical(ready)))
+    assert root.consume(commit)==request
+    with pytest.raises(ValueError):root.consume(commit)
+    for field,value in [('run_id','4'*32),('provisioning_id','5'*32),('closure_sha256','6'*64)]:
+        root=context()
+        with pytest.raises(ValueError):root.accept_ready({**ready,field:value})
+        with pytest.raises(ValueError):root.accept_ready(ready)
+    state=LifecycleState()
+    with pytest.raises(ValueError):state.advance('provisioned',seconds=1,originals=1)
+    with pytest.raises(ValueError):state.advance('provisioned',seconds=1,originals=0)
+
+
+def test_handoff_io_is_one_shot_regular_bounded_and_link_closed(tmp_path,monkeypatch):
+    import pytest
+    monkeypatch.syspath_prepend(str(ROOT))
+    import handoff_io as io
+    path=tmp_path/'snapshot';io.write(path,b'public-unit-bytes')
+    assert io.read(path)==b'public-unit-bytes'
+    with pytest.raises(FileExistsError):io.write(path,b'replacement')
+    with pytest.raises(ValueError):io.read(path,3)
+    link=tmp_path/'link';link.symlink_to(path)
+    with pytest.raises(OSError):io.read(link)
+    with pytest.raises(TimeoutError):io.wait(path,deadline=0)
+
+
+def test_sibling_entrypoints_cannot_execute_until_source_review(monkeypatch):
+    import pytest
+    monkeypatch.syspath_prepend(str(ROOT))
+    import contained_driver,control_driver,sibling_supervisor,owned_collect
+    for module in (contained_driver,control_driver,sibling_supervisor):
+        assert module.APPROVED_FOR_EXECUTION is False
+        with pytest.raises(SystemExit):module.main()
+    with pytest.raises(RuntimeError):owned_collect.collect(None,None,None,command_rc=0)
+
+
+def test_collector_missing_postlaunch_evidence_stays_failed_not_absence(tmp_path,monkeypatch):
+    from dataclasses import asdict
+    import pytest
+    monkeypatch.syspath_prepend(str(ROOT))
+    import owned_collect
+    from profile import OwnedAppRequest
+    request=OwnedAppRequest(apk_sha256='a'*64,public_ca_sha256='b'*64,plan_sha256='c'*64,
+        authorization_id='ath_unit',approval_id='apr_unit',investigation_id='scn_unit',plan_id='poc_unit',nonce='d'*32)
+    monkeypatch.setattr(owned_collect,'APPROVED_FOR_EXECUTION',True)
+    runtime=tmp_path/'runtime';evidence=runtime/'work/evidence';evidence.mkdir(parents=True)
+    (evidence/'binding.json').write_text(json.dumps(asdict(request),sort_keys=True,separators=(',',':')))
+    (runtime/'wrapper-cleanup.json').write_text(json.dumps({'complete':False,'errors':['UNIT missing stage records'],
+        'jail_absent':False,'jail':'/opt/d061-owned-android-jail-unit-not-created'}))
+    result=owned_collect.collect(runtime,request,tmp_path/'result',command_rc=1)
+    assert result['status']=='failed' and result['failure_code']=='host_collection_failed'
+    assert (tmp_path/'result/result.json').is_file()
+    assert not (tmp_path/'result/initial.native').exists()
+    # The retained independent inspector result is explicitly incomplete.
+    absence=json.loads((tmp_path/'result/independent-absence.json').read_text())
+    assert absence['complete'] is False and absence['missing_records']

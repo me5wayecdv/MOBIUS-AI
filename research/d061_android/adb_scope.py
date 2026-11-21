@@ -33,8 +33,9 @@ def validate_reverse_list(output, *, expected):
 class FixedPrivateADB:
     def __init__(self,adb,request,*,private_home,output,host_netns):
         if not APPROVED_FOR_EXECUTION:raise RuntimeError('owned ADB scope execution HELD')
-        if not isinstance(request,OwnedAppRequest):raise TypeError('typed owned APK request required')
-        request.validate()
+        if request is not None:
+            if not isinstance(request,OwnedAppRequest):raise TypeError('typed owned APK request required')
+            request.validate()
         if os.readlink('/proc/self/ns/net')==host_netns:raise RuntimeError('refuse adb on host network namespace')
         self.adb=Path(adb)
         if not self.adb.is_file() or self.adb.is_symlink():raise ValueError('verified fixed adb executable required')
@@ -73,12 +74,20 @@ class FixedPrivateADB:
         validate_reverse_list(before,expected=False)
         return {'state':state,'reverse_before':before}
 
+    def bind_request(self,request):
+        if self.request is not None:raise RuntimeError('ADB request already bound')
+        if not isinstance(request,OwnedAppRequest):raise TypeError('typed owned APK request required')
+        request.validate();self.request=request
+
     def launch_owned(self,apk):
+        if self.request is None:raise RuntimeError('no committed product request bound')
         path=Path(apk)
         if not path.is_file() or path.is_symlink() or path.stat().st_size>4*1024*1024:
             raise ValueError('bounded owned APK file required')
         if hashlib.sha256(path.read_bytes()).hexdigest()!=self.request.apk_sha256:raise ValueError('owned APK digest mismatch')
         self.verify_ready()
+        present=self.command(['shell','pm','path',PACKAGE],check=False)
+        if present.strip() or self.records[-1]['rc'] not in (0,1):raise ValueError('owned package must start absent')
         # Test-only source is explicit. -t installs this owned test APK only.
         result=self.command(['install','-t','--no-streaming',str(path)],timeout=15)
         if result.strip()!='Success':raise RuntimeError('owned APK install not successful')

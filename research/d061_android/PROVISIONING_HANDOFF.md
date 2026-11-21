@@ -63,9 +63,9 @@ Still missing before an activation review:
   gRPC is absent. Current listener guard rejects an extra listener. It does not
   invent a disable flag or assume localhost means permitted. Guest /proc and
   ADB reverse output behavior also require actual pinned verification.
-- A complete contained_driver.py performing the sequencing above. The wrapper
-  requires that exact path in the closure but it does not exist yet, so an honest
-  closure cannot be created. This is a deliberate fail-closed missing dependency.
+- A complete contained_driver.py performing the sequencing above. The driver
+  now exists as held source; complete executable closures and coherent sibling
+  review remain absent, so it cannot honestly be activated.
 - Typed product schema/action/adapter, disabled default injection, failure
   evidence persistence/readback and fixture-only fresh approval setup now exist
   as source. Real host/collector and actual successful report journey remain untested.

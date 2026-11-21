@@ -1,6 +1,6 @@
 # HELD lifecycle correction: separate control and runtime boundaries
 
-Status: proposed source design, not implemented or authorized execution.
+Status: held source implementation candidate, never executed or activation-ready.
 This corrects the earlier single-namespace product sequencing in
 PROVISIONING_HANDOFF.md. That earlier design cannot satisfy its own absence gate:
 an API process inside the runtime namespace keeps that namespace alive while
@@ -62,8 +62,8 @@ Pure/static and failure-only API tests exercise these mechanics, not runtime.
 The held namespace_supervisor.py is an INNER runtime candidate only. It does
 not implement the outer control supervisor, immutable handoff mounts, approval
 barrier or complete contained_driver. Do not dispatch it as a complete harness.
-A real reviewed closure still cannot be produced honestly because that driver
-and complete transitive runtime staging are missing. Emulator option/listener
+A reviewed closure still cannot be produced honestly because complete transitive
+runtime staging, source lock review and actual pinned compatibility checks are missing. Emulator option/listener
 compatibility, guest proc access, independent collector/recovery/fault tests,
 app TLS negatives and outer boundary closure also remain unresolved.
 
@@ -81,3 +81,44 @@ commit, distinct phase ceilings and failure-terminal state transitions. It has
 no launcher or file/network effects and cannot create an approval. Unit tests
 exercise substitutions, extra keys, premature traffic and illegal ordering;
 they do not supply the still-missing trusted root relay/control mounts.
+
+## Sibling implementation candidate, all runtime gates FALSE
+
+The reviewed direction is TWO SIBLING jails, not unprivileged nesting.
+`sibling_supervisor.py` is the fixed trusted root owner. It launches one runtime
+and one control wrapper, takes an immutable public APK/CA/build snapshot, binds
+run+provisioning+runtime-closure+source identities in its own ExpectedContext,
+consumes one typed commit, enforces its own monotonic phase deadlines, checks
+runtime namespace/member/handle absence, then publishes fixed collected originals
+read-only to control. Failure returns attributed failure diagnostics where the
+control process can still persist them, never reconstructed capture/cleanup.
+
+`namespace_supervisor.py` now has two closed roles and fixed closure roots:
+only runtime gets KVM; control rejects Android-toolchain closure destinations.
+Both inherit only stdio and see a root-owned read-only /control inbox plus their
+own mutable /work. Root lifecycle records are outside both writable work trees.
+After the PID namespace exits, the wrapper verifies members and namespace FDs
+before fixed-path private-material sanitation and jail deletion. No generic
+privileged request server, runtime-selected path/command or source activation is
+implemented. Staged source and complete runtime/control closure locks are still
+required inputs and do not exist as reviewed executable locks.
+
+`contained_driver.py` supplies offline provisioning, original zero-state readback,
+actual-source build/boot prerequisites, commit wait, observed app process/socket
+release, captured-request replay wait and scoped teardown. It makes no stdlib
+request to satisfy app capture. `control_driver.py` is an unprivileged product
+API journey with fixture-only setup, fresh execute/readback/report and a one-shot
+fixed relay host, no KVM/ADB/namespace privileges. `owned_collect.py` is the
+post-runtime bounded allowlist/hash/absence collector. `handoff_io.py` rejects
+links/oversize/overwrites and snapshots bytes, never shares runtime-writable
+approved inputs. The state machine terminal-fails deadline/traffic/order errors;
+61then60 and trafficthenzero cannot progress. Pure tests verify run reuse,
+substitution and failure retention. No Android/native positive is fabricated.
+
+Remaining before any activation review: exact transitive executable/loader/
+library closures and safe staging/license decision; reviewed source activation
+hashes; pinned binary option/listener/proc behavior; complete no-native fault
+simulation for each privileged setup/relay/cleanup phase; runtime signal/cancel/
+forced-timeout evidence; isolated app TLS negative controls; and independent
+review of this entire source candidate. Source syntax/pure tests do not prove
+any namespace, KVM, Java/APK build, TLS app action or runtime absence occurred.

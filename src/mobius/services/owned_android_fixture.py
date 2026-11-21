@@ -58,7 +58,7 @@ class OwnedAppRequest:
 
 TRAFFIC_SOURCE='owned-android-app-process-fixed-loopback'
 REQUIRED=frozenset({
-    'binding.json','build-result.json','owned-app-launch.json','owned-app-socket.json',
+    'payload-privileges.json','binding.json','build-result.json','owned-app-launch.json','owned-app-socket.json',
     'owned-app-completion.json','initial.native','capture-digest.json','native-proof.json',
     'native-events.json','backend-receipts.json','replay-enqueued.json','replay-started.json',
     'replay-completed.json','addon-final.json','adb-cleanup.json','emulator-cleanup.json',
@@ -114,6 +114,19 @@ class OwnedAppAdapter:
             return
         if output.status!='passed' or output.failure_code is not None or not REQUIRED<=files.keys():
             raise ValueError('owned APK required original evidence/status missing')
+        privileges=read('payload-privileges.json')
+        status=privileges.get('status','')
+        if ('NoNewPrivs:\t1' not in status
+            or not all(re.search(r'^'+key+r':\s+0+$',status,re.M) for key in ('CapEff','CapBnd'))):
+            raise ValueError('actual runtime postdrop privilege evidence missing')
+        if set(privileges.get('devices',[]))!={'null','random','urandom','kvm','shm'}:
+            raise ValueError('runtime exact delegated devices differ')
+        interfaces=privileges.get('interfaces','').splitlines()
+        if len(interfaces)<3 or [line.strip().split(':')[0] for line in interfaces[2:]]!=['lo']:
+            raise ValueError('runtime no-uplink interfaces unverified')
+        for target in privileges.get('fds',{}).values():
+            if target.startswith('socket:[') or target.startswith(('net:[','mnt:[','pid:[')):
+                raise ValueError('inherited broker or namespace descriptor')
         build=read('build-result.json')
         if (build.get('apk_sha256')!=request.apk_sha256 or build.get('public_ca_sha256')!=request.public_ca_sha256
             or build.get('package')!=PACKAGE or not re.fullmatch('[0-9a-f]{64}',build.get('signature_sha256',''))

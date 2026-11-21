@@ -55,14 +55,14 @@ The five Google archives and one official Adoptium JDK archive were retrieved
 and verified as bytes only. No archive was extracted, installed or executed.
 Archive hashes are not a valid runtime closure lock. A FALSE-gated namespace
 supervisor now supplies exact-copy closure/chroot/no-uplink/KVM/drop/timeout source,
-not a proven namespace or emulator result. Runtime dependency closure, fixed
-contained driver, complete emulator lifecycle and outer control/runtime handoff still require implementation. Build/harness/runtime remain
+not a proven namespace or emulator result. Runtime dependency closure and reviewed
+contained driver, complete runtime compatibility and outer control/runtime handoff still require review. Build/harness/runtime remain
 held pending exact review. No third-party egress, system-CA changes, pinning
 bypass, production activation, new model request or paid spend is implied.
 
 `LIFECYCLE_HANDOFF.md` corrects the original single-namespace product sequence:
 a separate no-uplink control boundary must outlive the Android runtime child
 long enough to verify that child's real absence before product persistence.
-The current supervisor is only a held inner-runtime candidate, not that full
-harness. Product source now has distinct owned-APK schema/adapter/readback and
+The role wrapper and fixed sibling relay/control/runtime/collector now exist
+as held source candidates. They are not a reviewed executable harness. Product source now has distinct owned-APK schema/adapter/readback and
 fixture-only setup preparation, never an enabled host or Android experiment.

@@ -69,7 +69,7 @@ def inspect(root,*,require_launched=True,proc=Path('/proc')):
             state['errors'].append({'stage':'jail','class':'unverified_path'})
         elif Path(jail).exists():state['errors'].append({'stage':'jail','class':'still_exists'})
         else:
-            sensitive=('work/build/private-build-home','work/evidence/origin.key','work/evidence/home','work/home')
+            sensitive=('work/build/private-build-home','work/evidence/origin.key','work/evidence/home','work/home','work/build/disposable-signing.p12')
             remaining=[name for name in sensitive if (root/name).exists() or (root/name).is_symlink()]
             state['private_material_absent']=not remaining
             if remaining:state['errors'].append({'stage':'private_material','remaining':remaining})

@@ -33,12 +33,15 @@ def validate_digest(value):
 def validate_ready_fields(metadata):
     if not isinstance(metadata,dict) or set(metadata)!={
         'version','profile','package','apk_sha256','public_ca_sha256','build_json_sha256',
-        'source_manifest_sha256','original_count','origin_receipt_count','apk_installed','apk_launched'}:
+        'source_manifest_sha256','run_id','provisioning_id','closure_sha256','original_count','origin_receipt_count','apk_installed','apk_launched'}:
         raise ValueError('closed provisioning metadata keys required')
     if (metadata['version'],metadata['profile'],metadata['package'])!=(READY_VERSION,PROFILE,PACKAGE):
         raise ValueError('fixed provisioning profile/package/version')
-    for name in ('apk_sha256','public_ca_sha256','build_json_sha256','source_manifest_sha256'):
+    for name in ('apk_sha256','public_ca_sha256','build_json_sha256','source_manifest_sha256','closure_sha256'):
         validate_digest(metadata[name])
+    for name in ('run_id','provisioning_id'):
+        if not isinstance(metadata[name],str) or re.fullmatch('[0-9a-f]{32}',metadata[name]) is None:
+            raise ValueError('unique fixed run/provisioning identifier required')
     if (type(metadata['original_count']) is not int or metadata['original_count']!=0
         or type(metadata['origin_receipt_count']) is not int or metadata['origin_receipt_count']!=0
         or metadata['apk_installed'] is not False or metadata['apk_launched'] is not False):
@@ -103,6 +106,14 @@ class LifecycleState:
 
     def advance(self,event,*,seconds,originals=0,receipts=0):
         if self.failure is not None:raise ValueError('failed lifecycle cannot retry into success')
+        try:return self._advance(event,seconds=seconds,originals=originals,receipts=receipts)
+        except BaseException as error:
+            self.failure={'stage':self.stage,'class':type(error).__name__}
+            raise
+
+    def _advance(self,event,*,seconds,originals,receipts):
+        # Runtime supervisor supplies elapsed values from its own monotonic clock,
+        # never from child data. Any invalid transition terminal-fails this object.
         if type(seconds) not in (int,float) or not 0<=seconds<100000:raise ValueError('elapsed seconds required')
         if type(originals) is not int or type(receipts) is not int or originals<0 or receipts<0:
             raise ValueError('actual nonnegative evidence counts required')
@@ -122,3 +133,32 @@ class LifecycleState:
         if not isinstance(error_class,str) or re.fullmatch('[A-Za-z][A-Za-z0-9_]{0,79}',error_class) is None:
             raise ValueError('bounded failure class required')
         self.failure={'stage':self.stage,'class':error_class};return self.failure
+
+
+class ExpectedContext:
+    """Root-owned relay object, never reconstructed from a client record."""
+    def __init__(self,*,run_id,provisioning_id,closure_sha256,source_manifest_sha256):
+        self.run_id=run_id;self.provisioning_id=provisioning_id
+        self.closure_sha256=validate_digest(closure_sha256)
+        self.source_manifest_sha256=validate_digest(source_manifest_sha256)
+        for value in (run_id,provisioning_id):
+            if re.fullmatch('[0-9a-f]{32}',value) is None:raise ValueError('unique root context required')
+        self.ready=None;self.used=False;self.failed=False
+
+    def accept_ready(self,metadata):
+        try:
+            if self.ready is not None or self.used or self.failed:raise ValueError('ready already consumed or failed')
+            validate_ready_fields(metadata)
+            for key in ('run_id','provisioning_id','closure_sha256','source_manifest_sha256'):
+                if metadata[key]!=getattr(self,key):raise ValueError('cross-run provisioning context differs')
+            self.ready=json.loads(canonical(metadata));return self.ready
+        except BaseException:self.failed=True;raise
+
+    def consume(self,record):
+        try:
+            if self.failed or self.used or self.ready is None:raise ValueError('one-shot relay context unavailable')
+            self.used=True
+            request=OwnedAppRequest(**record['request']);request.validate()
+            validate_commit(record,ready_metadata=self.ready,expected_request=request)
+            return request
+        except BaseException:self.failed=True;raise

@@ -116,7 +116,7 @@ bounded allowlisted recovery must retain actual failures and partial originals.
 
 ## Remaining implementation blockers
 
-Staged runtime/library closure, complete fixed contained driver and reviewed
+Staged runtime/library closure, reviewed fixed contained driver and reviewed
 KVM+chroot+emulator/adb lifecycle (namespace supervisor is FALSE-gated source,
 not runtime proof); offline build-driver certificate parsing/signature validation;
 product host/collector/outer handoff wiring (typed schema/adapter/readback are
