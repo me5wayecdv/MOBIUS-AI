@@ -139,7 +139,7 @@ def _parse(fd,st,expected_sha256,expected_size,ident):
                         if row['kind']=='symlink':
                             data=s.read(MAX_LINK+1)
                             if len(data)!=row['size']:raise ValueError('link size')
-                            row['target']=data.decode('utf-8');row['sha256']=hashlib.sha256(data).hexdigest()
+                            row['target']=data.decode('utf-8')
                         else:row['sha256']=digest(s,row['size'])
             size=st.st_size
         elif head[:2]==b'\x1f\x8b':
@@ -167,7 +167,8 @@ def _parse(fd,st,expected_sha256,expected_size,ident):
 
 
 class CaptureError(Exception):
-    def __init__(self,kind):super().__init__(kind);self.kind=kind
+    def __init__(self,kind,cleanup_verified=True):
+        super().__init__(kind);self.kind=kind;self.cleanup_verified=cleanup_verified  # False: child may still exist
 
 
 KINDS={'deadline','output_bound','nonzero_exit','bad_json','bad_schema','spawn','pidfd','read_error','reap_timeout'}
@@ -193,7 +194,7 @@ def validate_inventory(out,sha256,size):
         or not is_int(out['declared_expanded_bytes'])):raise bad()
     total=0;seen=set()
     for r in rows:
-        if not isinstance(r,dict) or r.get('kind') not in ROW_KEYS or set(r)!=ROW_KEYS[r['kind']]:raise bad()
+        if not isinstance(r,dict) or not isinstance(r.get('kind'),str) or r['kind'] not in ROW_KEYS or set(r)!=ROW_KEYS[r['kind']]:raise bad()
         path=r['path']
         if not isinstance(path,str):raise bad()
         try:
@@ -248,19 +249,22 @@ def run_child(path,sha256,size,*,wall=1300,cmd=None,_pidfd_open=None):
             if len(buf)>MAX_OUTPUT:kind='output_bound'
         if kind:
             kill()
-            if not reap():kill();reap();kind='reap_timeout' if kind not in ('pidfd',) else kind
+            if not reap():
+                kill()
+                raise CaptureError('reap_timeout',reap())
             raise CaptureError(kind)
         try:rc=p.wait(timeout=max(1,end-time.monotonic()))
         except subprocess.TimeoutExpired:
             kill()
-            if not reap():raise CaptureError('reap_timeout')
+            if not reap():raise CaptureError('reap_timeout',False)
             raise CaptureError('deadline')
         if rc!=0:raise CaptureError('nonzero_exit')
         try:out=json.loads(bytes(buf))
         except ValueError:raise CaptureError('bad_json')
         return validate_inventory(out,sha256,size)
     except BaseException:
-        kill();reap()
+        kill()
+        if not reap() and not isinstance(sys.exc_info()[1],CaptureError):raise CaptureError('reap_timeout',False)
         raise
     finally:
         try:p.stdout.close()

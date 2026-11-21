@@ -1346,6 +1346,23 @@ def test_member_hash_inspect_anchored_open_and_outer_limits_in_child(tmp_path,mo
         assert kind(sch(members=rows,**extra))=='bad_schema',rows
     assert kind(sch(container_bytes=1.0))=='bad_schema' and kind(sch(container_bytes=True))=='bad_schema'
     assert kind(sch(member_count=True))=='bad_schema' and kind(sch(declared_expanded_bytes=1.0))=='bad_schema'
+    assert kind(sch(members=[{**reg,'kind':[1]}]))=='bad_schema' and kind(sch(members=[{**reg,'kind':{}}]))=='bad_schema'
+    assert kind(sch(members=[5]))=='bad_schema'
+    # ZIP symlink full roundtrip: inspector output must pass the parent validator
+    import zipfile,io,os as O
+    zp=tmp_path/'l.zip'
+    with zipfile.ZipFile(zp,'w') as w:
+        w.writestr('r/f',b'abc')
+        zi=zipfile.ZipInfo('r/s');zi.create_system=3;zi.external_attr=(0o120777<<16);w.writestr(zi,b'f')
+    data=zp.read_bytes();zsha=hashlib.sha256(data).hexdigest()
+    zfd=O.open(zp,O.O_RDONLY)
+    try:inv=m.inspect_fd(zfd,zsha,len(data))
+    finally:O.close(zfd)
+    assert m.validate_inventory(J.loads(J.dumps(inv)),zsha,len(data))['member_count']==2
+    assert [r['kind'] for r in inv['members']]==['regular','symlink'] and 'sha256' not in inv['members'][1] and inv['members'][1]['target']=='f'
+    # cleanup_verified is part of the closed diagnostic
+    with pytest.raises(m.CaptureError) as ce:m.run_child('x',sha,1,cmd=child('print(1)'),_pidfd_open=nopidfd)
+    assert ce.value.cleanup_verified in (True,False)
     # no group signalling anywhere in the parent
     import inspect as I
     assert 'killpg' not in I.getsource(m)
