@@ -143,8 +143,12 @@ class PoCTestPlan(_Model):
                 or self.cleanup_steps[0].action != "stop_native_local_fixture"
                 or self.cleanup_steps[0].target_ref != "trusted-local-positive-v1"):
                 raise ValueError("native local fixture requires its fixed approved profile/action/cleanup")
-            if self.steps[0].timeout_seconds+self.cleanup_steps[0].timeout_seconds>self.max_duration_seconds:
-                raise ValueError("native operation plus teardown budgets exceed approved duration")
+            if self.max_output_bytes < 16384:
+                raise ValueError("native output requires a 16384-byte failed-attempt reserve")
+            if self.cleanup_steps[0].timeout_seconds < 15:
+                raise ValueError("native teardown requires at least 15 seconds")
+            if self.steps[0].timeout_seconds+self.cleanup_steps[0].timeout_seconds+10>self.max_duration_seconds:
+                raise ValueError("native operation plus teardown and collection reserve exceed approved duration")
         elif any(s.action == "capture_native_local_fixture_v1" for s in self.steps) or any(
             c.action == "stop_native_local_fixture" for c in self.cleanup_steps
         ):

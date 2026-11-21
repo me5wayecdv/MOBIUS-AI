@@ -167,3 +167,38 @@ Remaining activation gaps: actual granted case/plan provisioning without seeded
 model hypotheses, focused review of the new operation/failure lifecycle and
 product binding/collector, fully isolated executable origin-side TLS-negative
 profiles and exact integration workflow. Current host/journey/TLS gates FALSE.
+
+## Reviewer correction checkpoint, Nov21 10:29 EET, still HELD
+
+Fresh committed authority now runs before host effects as well as after them.
+A cached-session regression commits revocation independently and proves the host
+is never called. Final evidence IDs are reserved without blob writes, then exact
+original+plan+final-ID-manifest/result+log bytes are measured before any
+ArtifactStore write. Native plans require a16KiB failed-attempt floor and
+prelaunch plan-size reserve. An over-budget actual attempt becomes a bounded
+FAILED record with hashes/count of omitted originals, never truncated originals
+or a success. Original invalid binding bytes are separately named; the expected
+request binding is explicitly service-authored, not host proof.
+
+Host exceptions, invalid output and posthost authority refusal become FAILED
+run attempts with a distinct product-rejection.json, available allowlisted
+original bytes, bounded original inventory hash and exact fresh-session readback.
+These records cannot satisfy a positive capture or cleanup claim. Unit tests
+exercise collection exception, malformed positive output, posthost revocation,
+prelaunch stale authority, insufficient output and over-budget retention. None
+execute a capture or a model.
+
+Host artifact reads reject symlinks/nonregular files and oversize stat lengths
+before bounded reads, with per-request aggregate allowance. Teardown minimum15s
+plus10s collection reserve is enforced by plan validation. Host root is now an
+exact workflow-owned fresh /opt/d061-product-* root instead of a private random
+root that the workflow cannot independently clean. New absence.py is an
+independent read-only checker of recorded process identities, private namespace
+members, exact recorded jail/mount absence and sensitive key/home absence. It is
+preparation, not proof it has run on an actual product attempt.
+
+Unfinished: exact integration workflow must own an always-run independent
+sanitizer followed by this final absence checker even when product host cleanup
+is terminated; disposable API test actors/auth/approval plus genuine historical
+hypothesis provenance wiring; local TLS rejection execution. Product host,
+journey and TLS execution gates remain FALSE. PR118 is not runtime approval.

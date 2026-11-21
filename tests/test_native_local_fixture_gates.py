@@ -8,14 +8,14 @@ from mobius.core.schemas import PoCTestPlan
 from mobius.services.native_local_fixture import NativeFixtureRequest, NativeLocalFixtureAdapter
 from mobius.services.poc_approval import PoCApprovalService
 from mobius.services.poc_execution import PoCExecutionService
-from mobius.services.poc_runner import PoCAdapterUnavailable, PoCApprovalRequired, PoCScopeRejected
+from mobius.services.poc_runner import PoCAdapterUnavailable, PoCApprovalRequired, PoCScopeRejected, PoCExecutionError
 from test_poc_execution import _context
 
 
 def native_plan(session,store,future_iso):
     _,old=_context(session,store,future_iso)
     data=old.model_dump()
-    data.update(target_kind='native_local_fixture',safety_class='non_destructive',requires_approval=True,
+    data.update(target_kind='native_local_fixture',safety_class='non_destructive',requires_approval=True,max_output_bytes=65536,
         steps=[{'action':'capture_native_local_fixture_v1','target_ref':'trusted-local-positive-v1','timeout_seconds':60}],
         cleanup_steps=[{'action':'stop_native_local_fixture','target_ref':'trusted-local-positive-v1'}])
     return PoCTestPlan.model_validate(data)
@@ -80,8 +80,10 @@ def test_second_session_revocation_seen_after_pending_host(session,store,future_
                 row.revoked_at='2026-01-01T00:00:00Z'
                 other.commit()
             return None  # Deliberately no fabricated native evidence/result.
-    with pytest.raises(PoCScopeRejected):
-        PoCExecutionService(session,store,native_adapter=PendingHost()).execute_and_persist(plan)
+    result=PoCExecutionService(session,store,native_adapter=PendingHost()).execute_and_persist(plan)
+    assert result.status=='failed'
+    session.commit()
+    assert PoCExecutionService(session,store).readback(result.run_id,investigation_id=plan.investigation_id)['status']=='failed'
 
 
 def test_missing_or_substituted_plan_result_links_fail_readback(session,store,future_iso):
@@ -120,3 +122,76 @@ def test_native_failed_host_is_persisted_not_promoted_and_manifest_links_require
     session.flush()
     with pytest.raises(ValueError,match='links incomplete'):
         service.readback(run.run_id,investigation_id=plan.investigation_id)
+
+
+def test_committed_revocation_seen_before_host_despite_cached_authority(session,store,future_iso):
+    from sqlalchemy.orm import Session
+    from mobius.adapters.models import AuthorizationRow
+    plan=grant(session,native_plan(session,store,future_iso),future_iso)
+    session.commit()
+    cached=session.get(AuthorizationRow,plan.authorization_id)
+    assert cached.revoked_at is None
+    with Session(bind=session.get_bind()) as other:
+        other.get(AuthorizationRow,plan.authorization_id).revoked_at='2026-01-01T00:00:00Z'
+        other.commit()
+    class Host:
+        VERSION='must-not-run'
+        def execute(self,*args,**kwargs):pytest.fail('stale authority launched host')
+    with pytest.raises(PoCScopeRejected):
+        PoCExecutionService(session,store,native_adapter=Host()).execute_and_persist(plan)
+
+
+def test_native_rejects_total_output_before_any_store_write(session,store,future_iso,monkeypatch):
+    import json
+    from dataclasses import asdict
+    from mobius.services.native_local_fixture import NativeFixtureOutput
+    plan=native_plan(session,store,future_iso).model_copy(update={'max_output_bytes':2000})
+    plan=grant(session,plan,future_iso)
+    session.commit()
+    def host(request,**kwargs):
+        return NativeFixtureOutput(request,{'binding.json':json.dumps(asdict(request)).encode(),
+            'host-failure.json':b'{"code":"host_timeout"}'},('unit-failure',),'failed','host_timeout')
+    writes=[]
+    monkeypatch.setattr(store,'put',lambda *a,**kw:writes.append(a) or pytest.fail('store write before full budget check'))
+    with pytest.raises(PoCExecutionError,match='reserve'):
+        PoCExecutionService(session,store,native_adapter=NativeLocalFixtureAdapter(host)).execute_and_persist(plan)
+    assert writes==[]
+
+
+def test_teardown_minimum_and_collection_reserve(session,store,future_iso):
+    data=native_plan(session,store,future_iso).model_dump()
+    data['cleanup_steps'][0]['timeout_seconds']=1
+    with pytest.raises(ValidationError,match='15 seconds'):PoCTestPlan.model_validate(data)
+    data['cleanup_steps'][0]['timeout_seconds']=15
+    data['max_duration_seconds']=75
+    with pytest.raises(ValidationError,match='reserve'):PoCTestPlan.model_validate(data)
+
+
+@pytest.mark.parametrize('mode',['exception','invalid','budget'])
+def test_actual_host_rejections_persist_failed_attempts_without_fake_proof(session,store,future_iso,mode):
+    import json
+    from dataclasses import asdict
+    from mobius.services.native_local_fixture import NativeFixtureOutput
+    plan=native_plan(session,store,future_iso).model_copy(update={'max_output_bytes':16384})
+    plan=grant(session,plan,future_iso)
+    session.commit()
+    def host(request,**kwargs):
+        if mode=='exception':raise OSError('unit collection failure')
+        files={'binding.json':json.dumps(asdict(request)).encode(),
+            'host-failure.json':b'{"code":"host_failed","original":"UNIT_FAILURE_ONLY"}'}
+        if mode=='budget':files['proxy.log']=b'x'*17000
+        return NativeFixtureOutput(request,files,('unit-failure-only',),
+            'passed' if mode=='invalid' else 'failed',None if mode=='invalid' else 'host_failed')
+    service=PoCExecutionService(session,store,native_adapter=NativeLocalFixtureAdapter(host))
+    run=service.execute_and_persist(plan)
+    assert run.status=='failed'
+    session.commit()
+    data=service.readback(run.run_id,investigation_id=plan.investigation_id)
+    assert data['status']=='failed'
+    payload=data['output']['output_json']
+    assert payload['host_failure_code']=='product_rejected'
+    names={x['name'] for x in payload['native_artifacts']}
+    assert 'product-rejection.json' in names
+    if mode=='invalid':assert 'host-failure.json' in names
+    if mode=='budget':assert 'proxy.log' not in names
+    assert sum(x['bytes'] for x in data['evidence'])<=plan.max_output_bytes

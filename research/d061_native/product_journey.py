@@ -19,6 +19,7 @@ def main():
     p.add_argument('--artifact-root',required=True)
     p.add_argument('--approved-plan',required=True)
     p.add_argument('--output',required=True)
+    p.add_argument('--host-root',required=True)
     a=p.parse_args()
     from mobius.adapters.db import make_engine,make_session_factory
     from mobius.adapters.models import EvidenceRow
@@ -34,7 +35,7 @@ def main():
     factory=make_session_factory(make_engine(a.db_url))
     # Never create schema/case/auth/hypothesis/approval or elevate a process.
     with factory() as s:
-        adapter=NativeLocalFixtureAdapter(PreparedCIHost())
+        adapter=NativeLocalFixtureAdapter(PreparedCIHost(a.host_root))
         result=PoCExecutionService(s,store,native_adapter=adapter).execute_and_persist(plan)
         s.commit()
         run_id=result.run_id

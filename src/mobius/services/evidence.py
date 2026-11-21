@@ -30,6 +30,7 @@ class EvidenceService:
         summary: str,
         produced_by: str,
         truncated: bool = False,
+        evidence_id: str | None = None,
     ) -> Evidence:
         """Store bytes and return evidence metadata. Idempotent on identical content.
 
@@ -49,6 +50,7 @@ class EvidenceService:
 
         key, size = self._store.put(content, sha)
         domain = Evidence(
+            **({"id": evidence_id} if evidence_id is not None else {}),
             investigation_id=investigation_id,
             kind=kind,
             sha256=sha,

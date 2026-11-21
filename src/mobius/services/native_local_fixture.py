@@ -39,6 +39,7 @@ class NativeFixtureRequest:
     budget_seconds: int = 60
     teardown_seconds: int = 15
     total_seconds: int = 120
+    max_output_bytes: int = 65536
 
     @classmethod
     def from_plan(cls, plan: PoCTestPlan):
@@ -47,7 +48,7 @@ class NativeFixtureRequest:
         return cls(plan.investigation_id,plan.id,plan.authorization_id,plan.approval_id or '',
                    plan.target_sha256,plan.target_package,hashlib.sha256(encoded).hexdigest(),
                    secrets.token_hex(16),budget_seconds=plan.steps[0].timeout_seconds,
-                   teardown_seconds=plan.cleanup_steps[0].timeout_seconds,total_seconds=plan.max_duration_seconds)
+                   teardown_seconds=plan.cleanup_steps[0].timeout_seconds,total_seconds=plan.max_duration_seconds,max_output_bytes=plan.max_output_bytes)
 
 @dataclass(frozen=True)
 class NativeFixtureOutput:
@@ -68,7 +69,6 @@ class NativeLocalFixtureAdapter:
         if self._host_execute is None:
             raise PoCAdapterUnavailable('native local host executor is not configured')
         output=self._host_execute(request,cancel_check=cancel_check)
-        self.validate(request,output)
         return output
 
     @staticmethod
@@ -76,18 +76,22 @@ class NativeLocalFixtureAdapter:
         if output.binding!=request or request.profile!=PROFILE or request.traffic_source!=TRAFFIC_SOURCE:
             raise PoCExecutionError('native host identity/profile mismatch')
         files=output.artifacts
-        allowed=REQUIRED|{'policy.json','proxy.log','origin.log','host-failure.json','workflow-command.json'}
+        allowed=REQUIRED|{'policy.json','proxy.log','origin.log','host-failure.json','workflow-command.json','product-rejection.json','rejected-host-binding.json'}
         if (len(files)>40 or any(name not in allowed for name in files)
             or any(not isinstance(v,bytes) or len(v)>4*1024*1024 for v in files.values())
             or sum(map(len,files.values()))>32*1024*1024):
             raise PoCExecutionError('native evidence name/size bound')
         if output.status == 'failed':
-            if output.failure_code not in {'host_failed','host_timeout','host_cancelled','host_cleanup_failed'}:
+            if output.failure_code not in {'host_failed','host_timeout','host_cancelled','host_cleanup_failed','host_collection_failed','product_rejected'}:
                 raise PoCExecutionError('unknown native host failure')
             from dataclasses import asdict
             if 'binding.json' not in files or json.loads(files['binding.json'])!=asdict(request):
                 raise PoCExecutionError('failed native host binding missing')
-            if 'host-failure.json' not in files:raise PoCExecutionError('original host failure diagnostics missing')
+            if output.failure_code=='product_rejected':
+                diagnostic=json.loads(files.get('product-rejection.json',b'{}'))
+                if diagnostic.get('code')!='product_rejected' or diagnostic.get('not_a_capture_or_cleanup_proof') is not True:
+                    raise PoCExecutionError('product rejection diagnostics missing')
+            elif 'host-failure.json' not in files:raise PoCExecutionError('original host failure diagnostics missing')
             return
         if output.status!='passed' or output.failure_code is not None or not REQUIRED<=files.keys():
             raise PoCExecutionError('native required original evidence/status missing')

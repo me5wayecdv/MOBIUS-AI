@@ -73,7 +73,48 @@ class PoCExecutionService:
         input_json = plan.model_dump(mode="json")
         evidence = EvidenceService(self.session, self.artifact_store)
         native_evidence = []
-        native_mapping = []
+        # Reserve final IDs and serialize all output before any blob write.
+        for preparation in range(2):
+            native_mapping = []
+            reserved = {}
+            by_digest = {}
+            if native_output is not None:
+                from ..adapters.models import EvidenceRow
+                for name, content in sorted(native_output.artifacts.items()):
+                    digest = hashlib.sha256(content).hexdigest()
+                    if digest not in by_digest:
+                        existing = self.session.execute(select(EvidenceRow).where(
+                            EvidenceRow.investigation_id == plan.investigation_id,
+                            EvidenceRow.sha256 == digest,
+                        )).scalar_one_or_none()
+                        by_digest[digest] = existing.id if existing else new_id(IdPrefix.EVIDENCE)
+                    reserved[name] = by_digest[digest]
+                    native_mapping.append({"name":name,"evidence_id":reserved[name],"sha256":digest,"bytes":len(content)})
+                result=replace(result, output_json={**result.output_json,"native_artifacts":native_mapping})
+            output_json = asdict(result)
+            input_bytes = json.dumps(input_json, sort_keys=True, separators=(",", ":")).encode()
+            output_bytes = json.dumps(output_json, sort_keys=True, separators=(",", ":"), default=str).encode()
+            log_text = "\n".join(
+                f"[{step.index}] {step.action} {step.target_ref}: {step.status} "
+                f"tool={step.tool_name}/{step.tool_version} duration_ms={step.duration_ms}"
+                for step in result.steps
+            ).encode("utf-8") or b"No step output"
+            if native_output is None or (
+                sum(len(v) for v in native_output.artifacts.values())+len(input_bytes)+len(output_bytes)+len(log_text)
+                <=plan.max_output_bytes
+            ):
+                break
+            if preparation:
+                raise ValueError("bounded failed-attempt record exceeds approved total output budget")
+            from .native_local_fixture import NativeFixtureRequest
+            request=NativeFixtureRequest(**result.output_json['binding'])
+            native_output=self._rejected_output(request,native_output,'total_output_budget',retain=False)
+            result=self._native_result(plan,request,native_output,result.started_at,result.duration_ms)
+        input_sha = hashlib.sha256(input_bytes).hexdigest()
+        output_sha = hashlib.sha256(output_bytes).hexdigest()
+
+        # No ArtifactStore write may precede the exact plan/result/log/original
+        # total check above. The mapping bytes and selected IDs are final here.
         if native_output is not None:
             for name, content in sorted(native_output.artifacts.items()):
                 item = evidence.record(
@@ -82,31 +123,11 @@ class PoCExecutionService:
                     content=content,
                     summary=(f"Native local fixture {name}; plan {plan.id}; anchor {plan.target_sha256}; "
                              "stdlib-loopback traffic, NOT APK traffic"),
-                    produced_by="NATIVE_LOCAL",
+                    produced_by="NATIVE_LOCAL", evidence_id=reserved[name],
                 )
+                if item.id != reserved[name]:
+                    raise ValueError("native evidence reservation changed before write")
                 native_evidence.append(item)
-                native_mapping.append({"name":name,"evidence_id":item.id,"sha256":item.sha256,"bytes":item.byte_size})
-            result=replace(result, output_json={**result.output_json,"native_artifacts":native_mapping})
-            approved_total=sum(len(value) for value in native_output.artifacts.values())
-            metadata_size=len(json.dumps(asdict(result),sort_keys=True,separators=(",",":"),default=str).encode())
-            if approved_total+metadata_size>plan.max_output_bytes:
-                raise ValueError("total native artifacts plus result metadata exceed approved output budget")
-        output_json = asdict(result)
-        input_bytes = json.dumps(input_json, sort_keys=True, separators=(",", ":")).encode()
-        output_bytes = json.dumps(output_json, sort_keys=True, separators=(",", ":"), default=str).encode()
-        log_text = "\n".join(
-            f"[{step.index}] {step.action} {step.target_ref}: {step.status} "
-            f"tool={step.tool_name}/{step.tool_version} duration_ms={step.duration_ms}"
-            for step in result.steps
-        ).encode("utf-8")
-        if native_output is not None and (
-            sum(len(v) for v in native_output.artifacts.values())+len(input_bytes)+len(output_bytes)+len(log_text)
-            >plan.max_output_bytes
-        ):
-            raise ValueError("total native artifacts/plan/result/log bytes exceed approved output budget")
-        input_sha = hashlib.sha256(input_bytes).hexdigest()
-        output_sha = hashlib.sha256(output_bytes).hexdigest()
-
         evidence = EvidenceService(self.session, self.artifact_store)
         plan_evidence = evidence.record(
             investigation_id=plan.investigation_id,
@@ -204,23 +225,63 @@ class PoCExecutionService:
         from .poc_runner import PoCAdapterUnavailable, PoCExecutionError, PoCStepResult
         import time
         SafePoCRunner(self.session).validate_authority(plan)
+        # Never launch from a stale caller identity map or uncommitted grant.
+        with Session(bind=self.session.get_bind()) as fresh_authority:
+            SafePoCRunner(fresh_authority).validate_authority(plan)
         if self.native_adapter is None:
             raise PoCAdapterUnavailable("native local host adapter is disabled by default")
         if cancel_event.is_set():raise PoCExecutionError("cancelled before native host launch")
+        plan_bytes=json.dumps(plan.model_dump(mode="json"),sort_keys=True,separators=(",",":")).encode()
+        if len(plan_bytes)+12288>plan.max_output_bytes:
+            raise PoCExecutionError("native plan leaves no bounded failed-attempt output reserve")
         request = NativeFixtureRequest.from_plan(plan)
         started, clock = utcnow(), time.monotonic()
-        output = self.native_adapter.execute(request,cancel_check=cancel_event.is_set)
-        # Revalidate authority after the bounded external leg before accepting
-        # evidence. Expired/revoked/rebound cases cannot be promoted into pass.
-        # Independent session/transaction avoids stale identity-map objects and
-        # long-lived read snapshots. Caller must have committed authority before
-        # execution; this seam never creates/auto-grants it.
-        with Session(bind=self.session.get_bind()) as fresh_authority:
-            SafePoCRunner(fresh_authority).validate_authority(plan)
-        NativeLocalFixtureAdapter.validate(request, output)
+        output = None
+        phase='host_exception'
+        try:
+            output = self.native_adapter.execute(request,cancel_check=cancel_event.is_set)
+            phase='post_host_authority_rejected'
+            with Session(bind=self.session.get_bind()) as fresh_authority:
+                SafePoCRunner(fresh_authority).validate_authority(plan)
+            phase='host_output_validation_rejected'
+            NativeLocalFixtureAdapter.validate(request, output)
+            phase='total_duration_or_cancel_rejected'
+            if output.status == "passed" and (cancel_event.is_set() or time.monotonic()-clock > request.total_seconds):
+                raise PoCExecutionError("native host cancelled or exceeded approved total duration")
+        except Exception as exc:
+            output=self._rejected_output(request,output,phase,error_class=type(exc).__name__)
         duration = max(0,int((time.monotonic()-clock)*1000))
-        if output.status == "passed" and (cancel_event.is_set() or duration > request.total_seconds*1000):
-            raise PoCExecutionError("native host cancelled or exceeded approved total duration")
+        return self._native_result(plan,request,output,started,duration),output
+
+    @staticmethod
+    def _rejected_output(request, output, phase, *, error_class=None, retain=True):
+        from .native_local_fixture import NativeFixtureOutput, REQUIRED
+        files={}
+        inventory=[]
+        originals=getattr(output,'artifacts',{})
+        if isinstance(originals,dict):
+            allowed=REQUIRED|{'policy.json','proxy.log','origin.log','host-failure.json','workflow-command.json'}
+            for name,content in list(originals.items())[:40]:
+                if not isinstance(name,str) or not isinstance(content,bytes):continue
+                inventory.append({'name':name[:80],'bytes':len(content),'sha256':hashlib.sha256(content).hexdigest()})
+                if retain and name in allowed and len(content)<=4*1024*1024:files[name]=content
+        if 'binding.json' in files:
+            files['rejected-host-binding.json']=files['binding.json']
+        inventory_bytes=json.dumps(inventory,sort_keys=True,separators=(',',':')).encode()
+        retained_inventory=inventory[:8]
+        files['binding.json']=json.dumps(asdict(request),sort_keys=True,separators=(',',':')).encode()
+        files['product-rejection.json']=json.dumps({'code':'product_rejected','phase':phase,
+            'error_class':error_class,'original_inventory':retained_inventory,
+            'original_inventory_count':len(inventory),'original_inventory_sha256':hashlib.sha256(inventory_bytes).hexdigest(),
+            'binding_json_source':'service_expected_request_not_host_proof',
+            'originals_retained':retain,'not_a_capture_or_cleanup_proof':True},
+            sort_keys=True,separators=(',',':')).encode()
+        return NativeFixtureOutput(request,files,tuple(str(v)[:120] for v in getattr(output,'tool_versions',())[:8]),
+            'failed','product_rejected')
+
+    def _native_result(self,plan,request,output,started,duration):
+        from .native_local_fixture import TRAFFIC_SOURCE
+        from .poc_runner import PoCStepResult
         manifest = [{"name":name,"sha256":hashlib.sha256(content).hexdigest(),"bytes":len(content)}
                     for name,content in sorted(output.artifacts.items())]
         binding = asdict(request)
@@ -229,13 +290,10 @@ class PoCExecutionService:
                    "tls_negative_controls":"UNTESTED","simulation_only":False,
                    "apk_execution":False,"profile":request.profile,"host_status":output.status,
                    "host_failure_code":output.failure_code}
-        if sum(len(value) for value in output.artifacts.values())>plan.max_output_bytes:
-            raise PoCExecutionError("native original artifacts exceed approved total output budget")
-        encoded=json.dumps(payload,sort_keys=True).encode()
-        if len(encoded)>plan.max_output_bytes:raise PoCExecutionError("native result metadata exceeds budget")
         step=PoCStepResult(0,"capture_native_local_fixture_v1",request.profile,
             output.status,output.status=="passed",output.status=="passed",None,duration,"native-local",self.native_adapter.VERSION,
-            "Actual controlled loopback capture/request replay, not APK traffic")
+            "Actual controlled loopback capture/request replay, not APK traffic" if output.status=="passed"
+            else "Actual failed/rejected host attempt; no capture or cleanup proof inferred")
         result=PoCExecutionResult(plan.id,plan.investigation_id,plan.target_sha256,
             output.status,started,utcnow(),duration,(step,),payload,output.tool_versions,
             ("Controlled stdlib local traffic only; no APK runtime or Android claim",
@@ -243,7 +301,7 @@ class PoCExecutionService:
              "Host lifecycle timeout/cancellation paths require separate evidence"),
             ({"action":"stop_native_local_fixture","status":"completed" if output.status=="passed" else "inspect_failure_evidence",
               "detail":("validated original driver/wrapper/emergency cleanup evidence" if output.status=="passed" else "failed host diagnostics retained, no cleanup success inferred")},))
-        return result,output
+        return result
 
     def get(self, run_id: str) -> PoCRunRow:
         row = self.session.get(PoCRunRow, run_id)

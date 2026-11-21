@@ -7,6 +7,7 @@ Do not run until exact source plus integration workflow are reviewed.
 import json
 import hashlib
 import os
+import stat
 from pathlib import Path
 import signal
 import subprocess
@@ -21,14 +22,35 @@ from mobius.services.native_local_fixture import NativeFixtureOutput
 
 APPROVED_FOR_EXECUTION = False
 
+def bounded_read(path, *, limit=4*1024*1024):
+    # Reject links/non-regular files and oversize lengths before reading any data.
+    path=lexical(path)
+    fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
+    try:
+        meta=os.fstat(fd)
+        if not stat.S_ISREG(meta.st_mode) or meta.st_size>limit:
+            raise RuntimeError('product artifact type/size bound')
+        with os.fdopen(fd,'rb',closefd=False) as stream:
+            data=stream.read(limit+1)
+        if len(data)>limit:raise RuntimeError('product artifact grew beyond bound')
+        return data
+    finally:os.close(fd)
+
 class PreparedCIHost:
     VERSION='mobius-native-ci-host/0.1.0-preparation'
+
+    def __init__(self, run_root):
+        # Exact workflow-owned root, never request-selected or name-discovered.
+        self.run_root=Path(run_root)
 
     def __call__(self, request, *, cancel_check=None):
         if not APPROVED_FOR_EXECUTION:raise RuntimeError('product host execution HELD')
         if os.geteuid()!=0:raise RuntimeError('ephemeral CI host only, no API elevation')
         from dataclasses import asdict
-        root=Path(tempfile.mkdtemp(prefix='d061-product-',dir='/opt'))
+        root=lexical(self.run_root)
+        if root.parent!=Path('/opt') or not root.name.startswith('d061-product-'):
+            raise RuntimeError('exact disposable workflow run root required')
+        if any(root.iterdir()):raise RuntimeError('product workflow root must start empty')
         raw=root/'raw'
         raw.mkdir(mode=0o700)
         binding=root/'binding.json'
@@ -89,19 +111,36 @@ class PreparedCIHost:
         names=('native-proof.json','initial.native','capture-digest.json','backend-receipts.json','native-events.json',
                'replay-enqueued.json','replay-started.json','replay-completed.json','addon-final.json',
                'driver-cleanup.json','binding.json','policy.json','proxy.log','origin.log')
-        artifacts={'binding.json':binding.read_bytes(),'workflow-command.json':(raw/'workflow-command.json').read_bytes()}
+        artifacts={}
+        collection_errors=[]
+        collected_bytes=0
+        def collect(name,path):
+            nonlocal collected_bytes
+            try:
+                remaining_budget=min(32*1024*1024,request.max_output_bytes)-collected_bytes
+                if remaining_budget<=0:raise RuntimeError('approved original artifact budget exhausted')
+                content=bounded_read(path,limit=min(4*1024*1024,remaining_budget))
+                collected_bytes+=len(content)
+                artifacts[name]=content
+            except Exception as exc:
+                collection_errors.append({'name':name,'class':type(exc).__name__})
+        collect('binding.json',binding)
+        collect('workflow-command.json',raw/'workflow-command.json')
         for name in names:
             path=raw/'fixture/evidence'/name
-            if path.exists():artifacts[name]=lexical(path).read_bytes()
+            if path.exists():collect(name,path)
         for name,path in (('wrapper-cleanup.json',raw/'fixture/wrapper-cleanup.json'),
                           ('emergency-cleanup.json',raw/'emergency-cleanup.json')):
-            if path.exists():artifacts[name]=lexical(path).read_bytes()
+            if path.exists():collect(name,path)
+        if collection_errors:failure_code='host_collection_failed'
         if failure_code:
             atomic_json(raw/'host-failure.json',{'code':failure_code,
-                'original':None if original is None else {'class':type(original).__name__,'detail':str(original)[:512]},
-                'command':command,'elapsed_seconds':time.monotonic()-started,
+                'original':None if original is None else {'class':type(original).__name__},
+                'collection_errors':collection_errors,'command':command,'elapsed_seconds':time.monotonic()-started,
                 'approved_operation_seconds':request.budget_seconds,'approved_teardown_seconds':request.teardown_seconds})
-            artifacts['host-failure.json']=(raw/'host-failure.json').read_bytes()
+            # Diagnostic uses the preapproved failed-attempt reserve, not the
+            # original artifact allowance. Full product total is checked before storage.
+            artifacts['host-failure.json']=bounded_read(raw/'host-failure.json')
         safe=root/'safe'
         safe.mkdir(mode=0o700)
         copied=[]
@@ -115,7 +154,7 @@ class PreparedCIHost:
                 f.write(content)
                 f.flush()
                 os.fsync(f.fileno())
-            actual=path.read_bytes()
+            actual=bounded_read(path)
             digest=hashlib.sha256(actual).hexdigest()
             if actual!=content:raise RuntimeError('copied artifact mismatch')
             copied.append({'path':name,'sha256':digest,'bytes':len(actual)})
@@ -123,6 +162,6 @@ class PreparedCIHost:
                  'mode':'product_positive_fixture','copied':copied,
                  'binding':asdict(request)}
         atomic_json(safe/'collector-summary.json',summary)
-        artifacts['collector-summary.json']=(safe/'collector-summary.json').read_bytes()
+        artifacts['collector-summary.json']=bounded_read(safe/'collector-summary.json')
         return NativeFixtureOutput(request,artifacts,(self.VERSION,'mitmproxy/12.3.1'),
             'failed' if failure_code else 'passed',failure_code)
