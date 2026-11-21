@@ -17,8 +17,10 @@ import zipfile
 
 from handoff_io import read,json_write,mkdir,digest,public_directory,parent_fd
 from namespace_supervisor import validate_manifest,ROLES
+from zip_preflight import preflight as zip_preflight
 
 APPROVED_FOR_EXECUTION = False
+HARD_WATCHDOG_AND_RESOURCE_LIMITS_REVIEWED = False
 MAX_FILES=100000
 MAX_BYTES=24*1024**3
 MAX_SECONDS=900
@@ -34,11 +36,12 @@ def relative(value):
 
 class Budget:
     def __init__(self,clock=time.monotonic):
-        self.clock=clock;self.deadline=clock()+MAX_SECONDS;self.files=0;self.bytes=0
-    def check(self,*,files=0,bytes=0):
-        self.files+=files;self.bytes+=bytes
+        self.clock=clock;self.deadline=clock()+MAX_SECONDS;self.files=0;self.bytes=0;self.index_files=0;self.index_bytes=0
+    def check(self,*,files=0,bytes=0,index_files=0,index_bytes=0):
+        self.files+=files;self.bytes+=bytes;self.index_files+=index_files;self.index_bytes+=index_bytes
         if self.clock()>self.deadline:raise TimeoutError('whole bounded staging session deadline')
         if self.files>MAX_FILES or self.bytes>MAX_BYTES:raise ValueError('aggregate staged file/byte ceiling')
+        if self.index_files>100000 or self.index_bytes>64*1024**2:raise ValueError('aggregate archive metadata ceiling')
 
 
 def archive_rows(lock):
@@ -78,6 +81,7 @@ class Container:
         if h.hexdigest()!=expected['sha256']:raise ValueError('reviewed archive digest differs')
         self.check();self.source.seek(0);self.members={}
         if zipfile.is_zipfile(self.source):
+            zip_preflight(self.source,check=budget.check)
             self.source.seek(0);self.kind='zip';self.reader=stack.enter_context(zipfile.ZipFile(self.source))
             members=self.reader.infolist()
         else:
@@ -87,6 +91,7 @@ class Container:
             budget.check()
             if index>=MAX_ARCHIVE_FILES:raise ValueError('bounded archive member index required')
             name=item.filename if self.kind=='zip' else item.name
+            if self.kind=='tar':budget.check(index_files=1,index_bytes=len(name.encode())+512)
             # Directory entries can carry a trailing slash. Regular lookup below
             # still requires the exact canonical reviewed member spelling.
             if name in self.members:raise ValueError('duplicate archive member')
@@ -140,6 +145,7 @@ def member_stream(archive,name,size,*,expected=None):
     with os.fdopen(fd,'rb') as source:
         if not stat.S_ISREG(os.fstat(fd).st_mode):raise ValueError('regular archive descriptor required')
         if zipfile.is_zipfile(source):
+            zip_preflight(source)
             source.seek(0)
             with zipfile.ZipFile(source) as reader:
                 items=[item for item in reader.infolist() if item.filename==relative(name)]
@@ -222,7 +228,8 @@ def stage_role(role,lock,archives,budget):
 
 
 def main():
-    if not APPROVED_FOR_EXECUTION:raise SystemExit('HELD complete archive/library/source closure and license review required')
+    if not APPROVED_FOR_EXECUTION or not HARD_WATCHDOG_AND_RESOURCE_LIMITS_REVIEWED:
+        raise SystemExit('HELD complete closure/license plus trusted outer watchdog/resource-limit review required')
     if os.geteuid()!=0:raise RuntimeError('disposable root staging only')
     parser=argparse.ArgumentParser();parser.add_argument('--archives',type=Path,required=True)
     parser.add_argument('--lock',type=Path,required=True);parser.add_argument('--output',type=Path,required=True)
@@ -232,7 +239,7 @@ def main():
         results=[stage_role(role,lock,archives,budget) for role in ('runtime','control')]
         budget.check()
         json_write(args.output,{'results':results,'no_code_executed':True,'runtime_still_requires_exact_activation':True,
-            'materialized_files':budget.files,'materialized_bytes':budget.bytes,'whole_session_seconds_limit':MAX_SECONDS})
+            'materialized_files':budget.files,'materialized_bytes':budget.bytes,'cooperative_session_seconds_budget':MAX_SECONDS,'trusted_outer_watchdog_required':True})
 
 
 if __name__=='__main__':main()

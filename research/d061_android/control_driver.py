@@ -103,6 +103,9 @@ def main():
             if run['run_id'] not in text.text or plan.id not in text.text:raise ValueError('report misses actual run/plan')
             if any(item['evidence_id'] not in text.text for item in readback['evidence']):raise ValueError('report misses immutable evidence refs')
             write(work/'report.md',text.content)
+            import product_export_manifest
+            manifest=product_export_manifest.prepare(app_context,ready=ready,plan=plan,run=run,report_sha256=report.json()['sha256'])
+            json_write(work/'export-manifest.json',manifest)
             json_write(work/'control-result.json',{'status':run['status'],'run_id':run['run_id'],'plan_id':plan.id,
                 'fixture_only':True,'model_generated':False,'owner_approval':False,
                 'report_sha256':report.json()['sha256'],'runtime_absence_checked_before_result':True if run['status']=='passed' else None})

@@ -256,3 +256,23 @@ d8/apksigner require/bin/bash and invoke shell utilities; emulator ELF requires
 X11 and Qt/pulse-related libraries even though the launch intends no-window and
 no-audio. Flags do not remove DT_NEEDED dependencies. These leads do not resolve
 the transitive host/library/Python/JDK/plugin closure or binary compatibility.
+
+## Remaining staging-limit qualification, held before use
+
+ZIP metadata now has a classic-EOCD/central-directory preflight BEFORE ZipFile
+allocation: at most50000 entries/32MiB directory per archive, fixed bounded name/
+extra/comment lengths, exact counts/extents, no ZIP64/multidisk/encryption or
+non-deflate variants. Aggregate session metadata caps100000 entries/64MiB are
+reserved before constructor allocation. Synthetic oversized declarations refuse
+before the ZipFile constructor is called. Read-only metadata preflight passed
+for the five downloaded Google ZIPs; this does not extract/install SDK content.
+
+The900s checks remain COOPERATIVE, not a hard timeout while Python indexing,
+decompression, filesystem reads/writes or fsync is blocked. Metadata byte caps
+are not a Python allocator/RSS guarantee; TAR/PAX reader allocation also needs
+outer constraints. Actual staging still requires a trusted outer watchdog and
+hard process/memory/CPU/file limits with independently attributable partial-stage
+cleanup. HARD_WATCHDOG_AND_RESOURCE_LIMITS_REVIEWED remains FALSE and is a
+separate main/workflow source gate. Those mechanisms are not implemented here;
+no staging readiness or hard-ceiling claim is made. Retained session readers fix
+repeated per-member hashing, not all sources of stalled/unbounded runtime.

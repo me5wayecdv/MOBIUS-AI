@@ -10,7 +10,7 @@ ROOT=Path(__file__).parents[1]/'research/d061_android'
 
 def test_owned_source_and_build_are_held_without_workflow():
     for name,flags in [('profile.py',['APPROVED_FOR_BUILD','APPROVED_FOR_EXECUTION']),('build_owned.py',['APPROVED_FOR_BUILD']),('namespace_supervisor.py',['APPROVED_FOR_EXECUTION']),('emulator_scope.py',['APPROVED_FOR_EXECUTION']),('owned_product_setup.py',['APPROVED_FOR_EXECUTION']),('owned_absence.py',['APPROVED_FOR_EXECUTION']),('contained_driver.py',['APPROVED_FOR_EXECUTION']),
-        ('control_driver.py',['APPROVED_FOR_EXECUTION']),('sibling_supervisor.py',['APPROVED_FOR_EXECUTION']),('owned_collect.py',['APPROVED_FOR_EXECUTION']),('outer_owner.py',['APPROVED_FOR_EXECUTION']),('stage_archives.py',['APPROVED_FOR_EXECUTION'])]:
+        ('control_driver.py',['APPROVED_FOR_EXECUTION']),('sibling_supervisor.py',['APPROVED_FOR_EXECUTION']),('owned_collect.py',['APPROVED_FOR_EXECUTION']),('outer_owner.py',['APPROVED_FOR_EXECUTION']),('stage_archives.py',['APPROVED_FOR_EXECUTION','HARD_WATCHDOG_AND_RESOURCE_LIMITS_REVIEWED'])]:
         tree=ast.parse((ROOT/name).read_text())
         values={target.id:node.value.value for node in tree.body if isinstance(node,ast.Assign) and isinstance(node.value,ast.Constant)
             for target in node.targets if isinstance(target,ast.Name)}
@@ -700,3 +700,28 @@ def test_recover_only_main_stale_workflow_locator_has_no_signal_or_cleanup(tmp_p
     monkeypatch.setattr(outer_owner,'json_write',lambda *args,**kwargs:effects.append('write'))
     with pytest.raises(ValueError,match='different workflow'):outer_owner.main()
     assert not effects
+
+
+def test_zip_metadata_preflight_refuses_declarations_before_zipfile_allocation(tmp_path,monkeypatch):
+    import io,zipfile,struct,pytest
+    monkeypatch.syspath_prepend(str(ROOT))
+    import stage_archives
+    from zip_preflight import preflight
+    buffer=io.BytesIO()
+    with zipfile.ZipFile(buffer,'w') as out:out.writestr('unit',b'unit source only')
+    data=buffer.getvalue();end=data.rfind(b'PK\x05\x06')
+    valid=preflight(io.BytesIO(data));assert valid['entries']==1 and not valid['hard_resource_or_elapsed_bound']
+    bad=bytearray(data);struct.pack_into('<HH',bad,end+8,50001,50001)
+    with pytest.raises(ValueError):preflight(io.BytesIO(bytes(bad)))
+    archive=tmp_path/'oversized-directory.zip';archive.write_bytes(bad)
+    constructors=[]
+    def no_allocation(*args,**kwargs):constructors.append(True);raise AssertionError('ZipFile allocated before preflight')
+    monkeypatch.setattr(stage_archives.zipfile,'ZipFile',no_allocation)
+    with pytest.raises(ValueError):
+        with stage_archives.member_stream(archive,'unit',16):pass
+    assert not constructors
+    for field,value in [(12,32*1024**2+1),(16,0xffffffff)]:
+        invalid=bytearray(data);struct.pack_into('<I',invalid,end+field,value)
+        with pytest.raises(ValueError):preflight(io.BytesIO(bytes(invalid)))
+    invalid=bytearray(data);struct.pack_into('<HH',invalid,end+8,65535,65535)
+    with pytest.raises(ValueError):preflight(io.BytesIO(bytes(invalid)))
