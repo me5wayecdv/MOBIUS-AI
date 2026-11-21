@@ -14,7 +14,7 @@ import os,re,stat
 
 APPROVED_FOR_EXECUTION=False
 ROUTES={'local_private_file'}  # only route with a defined schema; no other route is supported
-CONTENT_CLASSES={'package_hash_inventory','capability_metadata','fault_result'}
+CONTENT_CLASSES={'package_hash_inventory','capability_metadata','fault_result','host_primitive_result'}
 FAULT_STEPS={'F1','F2','F3','F4','F5','F6'}
 PLAN_KEYS={'route','destination','content_class','declared_retention_days','route_evidence_ref'}
 CAPABILITY_KEYS={'euid':int,'kvm_present':bool,'kvm_rw':bool,'disk_free_bytes':int,'disk_total_bytes':int}
@@ -60,10 +60,9 @@ def open_private_destination(path):
         if cur is not None:os.close(cur)
 
 
-def write_private(dirfd,name,data,plan):
-    """Use seam, step 2: exclusive no-follow 0600 create relative to the verified dir fd.
-    The plan must be a checked plan; the output name carries the plan's route evidence ref."""
-    check_plan(plan)
+def _write_private(dirfd,name,data):
+    """RAW lower-level primitive, module-private: exclusive no-follow 0600 create relative to
+    a verified dir fd. Callers must use `publish_private`, which binds plan, directory and content."""
     if (not isinstance(name,str) or not re.fullmatch(r'[A-Za-z0-9_.-]{1,80}',name) or name in ('.','..') or not isinstance(data,bytes) or len(data)>64*1024**2):
         raise ValueError('closed output name and bounded bytes required')
     st=os.fstat(dirfd)
@@ -74,11 +73,38 @@ def write_private(dirfd,name,data,plan):
         while view:view=view[os.write(fd,view):]
         os.fsync(fd)
     finally:os.close(fd)
-    return {'written_relative_to_verified_fd':True,'bytes':len(data),'route_evidence_ref':plan['route_evidence_ref'],'retention_enforced':False}
+    return len(data)
+
+
+def publish_private(plan,name,obj,*,sha256=None,size=None):
+    """The single write seam. Binds: plan -> destination directory (opened here from
+    plan['destination']), content class -> typed object (validated here), and serializes
+    internally, so no caller bytes are written. Writes `<name>.part` then links it to `<name>` without clobbering, then unlinks the part;
+    on any failure the partial file is unlinked. Existence of a final file marks completion.
+    route_evidence_ref is a label only: real route authorization lives outside these values."""
+    import json
+    check_plan(plan)
+    if not isinstance(name,str) or not re.fullmatch(r'[A-Za-z0-9_-][A-Za-z0-9_.-]{0,60}',name) or name.endswith('.part'):raise ValueError('closed output name required')
+    validate_content(plan['content_class'],obj,sha256=sha256,size=size)
+    data=json.dumps(obj,sort_keys=True,separators=(',',':')).encode()
+    dirfd=open_private_destination(plan['destination'])
+    try:
+        part=name+'.part'
+        try:
+            _write_private(dirfd,part,data)
+            os.link(part,name,src_dir_fd=dirfd,dst_dir_fd=dirfd,follow_symlinks=False)  # no-clobber: FileExistsError if final exists
+            os.unlink(part,dir_fd=dirfd)
+        except BaseException:
+            try:os.unlink(part,dir_fd=dirfd)
+            except OSError:pass
+            raise
+        return {'written_relative_to_plan_destination':True,'bytes':len(data),'route_evidence_ref':plan['route_evidence_ref'],'retention_enforced':False}
+    finally:os.close(dirfd)
 
 
 def validate_content(content_class,obj,*,sha256=None,size=None):
-    """Fixed-schema validation independent of any caller label. No free text passes."""
+    """Fixed-schema SHAPE validation independent of any caller label. Inventories still hold
+    package-internal member paths and link targets; this is not redaction or disclosure approval."""
     if content_class=='package_hash_inventory':
         from member_hash_inspect import validate_inventory,CaptureError
         try:return validate_inventory(obj,sha256,size)
@@ -87,6 +113,19 @@ def validate_content(content_class,obj,*,sha256=None,size=None):
         if not isinstance(obj,dict) or set(obj)!=set(CAPABILITY_KEYS):raise ValueError('closed capability keys required')
         for k,t in CAPABILITY_KEYS.items():
             if type(obj[k]) is not t or (t is int and obj[k]<0):raise ValueError('typed capability value required')
+        return obj
+    if content_class=='host_primitive_result':
+        checks=('limit_readback','pidns_create','child_exit','cleanup_absence')
+        if not isinstance(obj,dict) or set(obj)!={'envelope','results'}:raise ValueError('closed host result keys required')
+        e=obj['envelope']
+        if (not isinstance(e,dict) or set(e)!={'run_id','source_sha','sleep_sha256','probe'} or e['probe']!='host_primitive_v1'
+            or not isinstance(e['run_id'],str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,31}',e['run_id'])
+            or any(not isinstance(e[k],str) or not re.fullmatch('[0-9a-f]{40}|[0-9a-f]{64}',e[k]) for k in ('source_sha','sleep_sha256'))):raise ValueError('closed envelope required')
+        r=obj['results']
+        if not isinstance(r,list) or len(r)!=4:raise ValueError('four results required')
+        for c,row in zip(checks,r):
+            if (not isinstance(row,dict) or set(row)!={'check','ok','errno'} or row['check']!=c or type(row['ok']) is not bool
+                or type(row['errno']) is not int or not -1<=row['errno']<=4095):raise ValueError('typed host result required')
         return obj
     if content_class=='fault_result':
         keys={'step','ok','errno','start_epoch_ms','end_epoch_ms'}

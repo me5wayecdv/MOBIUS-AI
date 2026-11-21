@@ -1383,7 +1383,7 @@ def test_runner_capability_probe_is_readonly_and_held(tmp_path,monkeypatch):
 
 
 def test_audience_gate_is_plan_validation_only(monkeypatch,tmp_path):
-    import os
+    import os,json
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1]/'research'/'d061_android'))
     import audience_gate as g
     assert g.APPROVED_FOR_EXECUTION is False
@@ -1396,20 +1396,27 @@ def test_audience_gate_is_plan_validation_only(monkeypatch,tmp_path):
     with pytest.raises(ValueError):g.check_plan('x')
     # use-time verification of the real filesystem destination
     d=tmp_path/'priv';d.mkdir(mode=0o700);os.chmod(tmp_path,0o700)
-    dfd=g.open_private_destination(str(d))
-    res=g.write_private(dfd,'inv.json',b'{}',ok)
-    assert res['written_relative_to_verified_fd'] and oct((d/'inv.json').stat().st_mode&0o777)=='0o600'
-    with pytest.raises(FileExistsError):g.write_private(dfd,'inv.json',b'{}',ok)
-    (d/'t').symlink_to('/tmp/x_target')
-    with pytest.raises(OSError):g.write_private(dfd,'t',b'{}',ok)
-    for bad_name in ('../x','a/b','',' x'):
-        with pytest.raises(ValueError):g.write_private(dfd,bad_name,b'{}',ok)
-    with pytest.raises(ValueError):g.write_private(dfd,'o2','str',ok)
-    with pytest.raises(ValueError):g.write_private(dfd,'o3',b'{}',{**ok,'route':'x'})
+    plan={**ok,'destination':str(d),'content_class':'capability_metadata'}
+    cap0={'euid':0,'kvm_present':True,'kvm_rw':False,'disk_free_bytes':1,'disk_total_bytes':2}
+    res=g.publish_private(plan,'cap.json',cap0)
+    assert res['written_relative_to_plan_destination'] and oct((d/'cap.json').stat().st_mode&0o777)=='0o600'
+    assert json.loads((d/'cap.json').read_text())==cap0 and not (d/'cap.json.part').exists()
+    with pytest.raises(FileExistsError):g.publish_private(plan,'cap.json',cap0)
+    assert not (d/'cap.json.part').exists()
+    with pytest.raises(ValueError):g.publish_private(plan,'bad.json',{**cap0,'host':'x'})
+    assert not (d/'bad.json').exists() and not (d/'bad.json.part').exists()
+    for bad_name in ('../x','a/b','',' x','y.part'):
+        with pytest.raises(ValueError):g.publish_private(plan,bad_name,cap0)
+    with pytest.raises(ValueError):g.publish_private({**plan,'route':'x'},'z.json',cap0)
+    with pytest.raises(AttributeError):g.write_private
+    # a partial from a failed publish is cleaned: force link failure
+    import unittest.mock as um
+    with um.patch('os.link',side_effect=OSError(5,'x')):
+        with pytest.raises(OSError):g.publish_private(plan,'r.json',cap0)
+    assert not (d/'r.json').exists() and not (d/'r.json.part').exists()
+    dfd=g.open_private_destination(str(d));os.close(dfd)
     os.chmod(d,0o750)
-    with pytest.raises(ValueError):g.write_private(dfd,'o4',b'{}',ok)
-    os.chmod(d,0o700);os.close(dfd)
-    os.chmod(d,0o750)
+    with pytest.raises(ValueError):g.publish_private(plan,'m.json',cap0)
     with pytest.raises(ValueError):g.open_private_destination(str(d))
     os.chmod(d,0o700);(tmp_path/'ln').symlink_to(d)
     with pytest.raises(OSError):g.open_private_destination(str(tmp_path/'ln'))
@@ -1427,3 +1434,50 @@ def test_audience_gate_is_plan_validation_only(monkeypatch,tmp_path):
         with pytest.raises(ValueError):g.validate_content('fault_result',bad)
     with pytest.raises(ValueError):g.validate_content('device_logs',{})
     with pytest.raises(ValueError):g.validate_content('package_hash_inventory',{'members':[]},sha256='0'*64,size=1)
+
+
+def test_host_primitive_probe_sequence_with_fake_ops_and_closed_result(monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1]/'research'/'d061_android'))
+    import host_primitive_probe as hp
+    import audience_gate as g
+    assert hp.APPROVED_FOR_EXECUTION is False
+    with pytest.raises(SystemExit):hp.main()
+    env=hp.envelope('run-1','a'*40,'b'*64)
+    for bad in (('x y','a'*40,'b'*64),(5,'a'*40,'b'*64),('r','zz','b'*64),('r','a'*40,'B'*64)):
+        with pytest.raises(ValueError):hp.envelope(*bad)
+    class Fake:
+        def __init__(s,**kw):s.calls=[];s.kw=kw;s.vals={}
+        def _c(s,n,*a):
+            s.calls.append(n)
+            if s.kw.get('fail')==n:raise OSError(s.kw.get('errno',13),'x')
+        def require_controllers(s,n):s._c('controllers')
+        def make_leaf(s,r):s._c('mkdir');return '/leaf'
+        def write(s,l,k,v):s._c('write');s.vals[k]=v
+        def read(s,l,k):s.calls.append('read');return 'tampered' if s.kw.get('bad_readback') else s.vals[k]
+        def spawn_gated(s):s._c('spawn');return 7
+        def join(s,l,c):s._c('join')
+        def verify_member(s,l,c):s._c('verify')
+        def release_gate(s,c):s._c('release')
+        def unshare_result(s,c,d):s.calls.append('unshare');return s.kw.get('unshare',0)
+        def wait_exit(s,c,d):s.calls.append('wait');return s.kw.get('exit',0)
+        def cleanup(s,l,c):s.calls.append('cleanup');return s.kw.get('clean',True)
+    f=Fake();out=hp.run(f,env)
+    assert [r['ok'] for r in out['results']]==[True]*4
+    # order: limits written and read back BEFORE spawn; join+verify BEFORE release; cleanup last
+    c=f.calls;assert c.index('read')<c.index('spawn')<c.index('join')<c.index('verify')<c.index('release')<c.index('unshare')<c.index('wait')<c.index('cleanup')
+    assert g.validate_content('host_primitive_result',out)==out
+    for kw,idx in (({'fail':'controllers','errno':95},0),({'fail':'mkdir','errno':17},0),({'bad_readback':True},0),({'fail':'spawn','errno':11},1),
+        ({'fail':'join','errno':1},1),({'unshare':1},1),({'exit':3},2),({'exit':None},2),({'clean':False},3)):
+        f=Fake(**kw);o=hp.run(f,env)
+        assert not o['results'][idx]['ok'],kw          # denial is a failure, never a pass
+        assert 'cleanup' in f.calls                    # live parent always attempts bounded cleanup
+        if idx<3 and kw!={'clean':False}:assert not any(r['ok'] for r in o['results'][idx:3]) 
+        g.validate_content('host_primitive_result',o)
+    f=Fake(fail='controllers');hp.run(f,env);assert 'spawn' not in f.calls and 'release' not in f.calls
+    f=Fake(bad_readback=True);hp.run(f,env);assert 'spawn' not in f.calls   # no member joins before readback passes
+    for bad in ({'envelope':env,'results':out['results'][:3]},{'envelope':{**env,'extra':1},'results':out['results']},
+        {'envelope':env,'results':[{**r,'msg':'x'} for r in out['results']]},{'envelope':env,'results':out['results'][::-1]}):
+        with pytest.raises(ValueError):g.validate_content('host_primitive_result',bad)
+    with pytest.raises(ValueError):hp.RealOps('/sys/fs/cgroup/../x','/bin/sleep','0'*64)
+    with pytest.raises(ValueError):hp.RealOps('/tmp/x','/bin/sleep','0'*64)
+    with pytest.raises(ValueError):hp.RealOps('/sys/fs/cgroup','/bin/sleep','0'*64)   # pinned identity mismatch refuses

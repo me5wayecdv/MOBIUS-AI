@@ -6,6 +6,9 @@ must hand over; today no such producer exists as reviewed source.
 
 ## A. TLS-negative evidence: producer handoff into `negative_verdict.evaluate`
 
+Authority note: the bullets below SUMMARISE the evaluator. `negative_verdict.py` is authoritative for every constraint (exact non-negative int types, not bool;
+same run/scenario/nonce binding; zero request ledger counts; certificate profile, peer name and reason sets; teardown exactly True).
+
 Clock domains. Evaluator timestamps (`app_window`, ledger windows, `proxy_refusal.observed_at`, and the
 certificate validity check) are HOST UNIX EPOCH MILLISECONDS. Logcat calendar fields are converted to that
 domain by `capture`. Monotonic time is used only for supervision deadlines, never in evaluator records.
@@ -63,8 +66,8 @@ No free text. Diagnostics beyond this need a new reviewed closed schema. Written
 ## D. Artifact audience and retention (interface)
 
 Repository is PUBLIC. Logs, job summaries, artifacts, PR text and commits are public audiences.
-`audience_gate.py` validates a supplied plan only (`validated_plan_only`), retains a verified private
-directory fd and creates output exclusively relative to it, and validates content SHAPE by fixed schema.
+`audience_gate.py` validates a supplied plan only (`validated_plan_only`), through the single seam `publish_private` binds plan to destination directory and typed content to the write, serializes internally, writes `<name>.part`
+then renames, and unlinks a partial on failure (existence of the final name marks completion; route_evidence_ref stays a label); and validates content SHAPE by fixed schema.
 Shape is not redaction: inventories keep package member paths and link targets, so they are valid only for exact
 pinned official containers and private reporting. `provenance_note` is a fixed constant. Retention is declared,
 not enforced. A creator must also own expiry and deletion follow-through. Internal handoff to main
@@ -88,3 +91,28 @@ No acceptance marker or agreement action exists or was created.
   https://raw.githubusercontent.com/adoptium/temurin-build/8d9fd6fa96e5066571a13823b07c2934e5958d8b/sbin/NOTICE.template.
   LIMIT: this is build-source notice, NOT the notices packaged inside the exact binary, which remain unread.
 - None of this is a legal determination. Scope for eventual use: the SDK on a CI runner, to build and test the user's own fixture, private outputs.
+
+## F. Smallest benign host-primitive run (proposal; never run; source `host_primitive_probe.py`, held)
+
+One shot on a disposable root-capable Linux host: F1 plus one natural F2 only. No SDK/JDK, APK, archive member reads, model, network, KVM VM,
+pressure, cancel injection or owner SIGKILL.
+
+Source contract (unit-tested only through an injected fake; the real primitives are untested because no root cgroup host exists in the sandbox):
+- Controllers `pids memory cpu` must ALREADY be enabled in the parent `cgroup.subtree_control`. The probe never edits the parent; absence is an errno result.
+- It creates one unique exclusive leaf `mobius-probe-<run_id>`, writes `pids.max=16`, `memory.max=64 MiB`, `cpu.max=20000 100000`, and reads each back. No member
+  joins before every readback matches.
+- A gated child (stdin pipe) is spawned outside the leaf, joined into the exact leaf via `cgroup.procs`, verified through `/proc/<pid>/cgroup`, and only then released.
+  It then calls `unshare(CLONE_NEWPID)` and reports 0 or its own errno. A grandchild executes `sleep 1` through a pinned, sha256-checked executable fd. Parent waits under a 10 s
+  monotonic deadline.
+- Cleanup (live parent only): `cgroup.kill` on the held leaf (else pidfd kill of the held direct child), bounded reap, `cgroup.procs` empty, `cgroup.events populated 0`, `rmdir` of its
+  own empty leaf. No broad process discovery or numeric-PID signals.
+- Result is the closed `host_primitive_result` record: fixed envelope `{run_id, source_sha, sleep_sha256, probe}` plus four separate results
+  `limit_readback, pidns_create, child_exit, cleanup_absence` each `{check, ok, errno}`. A denial or later-skipped check is `ok False`. A pass
+  means only those observed primitives plus bounded normal-exit cleanup. It is never full containment, KVM function, SDK closure, app traffic or owner-death safety.
+- Output goes only through `audience_gate.publish_private` to a verified private destination. Nothing is printed, uploaded or logged.
+
+Preconditions NOT satisfied and not designed here (each is main's decision, not mine):
+1. A named independent disposable-host teardown/evidence owner for parent death. One candidate for main to consider is destruction of the GitHub-hosted runner VM at
+   job end, with the cgroup leaf and processes dying with it. I have NOT verified that this teardown is observable or sufficient as evidence, so it is a proposal, not a design.
+2. An authorized no-spend route and a workflow to run it (workflow registration/dispatch are held; the repository is public so logs are public).
+3. Retention and deletion ownership for the private output.
