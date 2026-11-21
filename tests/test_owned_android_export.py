@@ -1700,3 +1700,73 @@ def test_publish_close_failures_preserve_committed_state_and_primary_error(tmp_p
     monkeypatch.setattr(os,'close',real_close)
     assert 'ident' in str(e.value) and not [x for x in os.listdir(d) if x.startswith('.tmp-')] and not (d/'c.json').exists()
     assert calls['n']==1                          # closed exactly once, not retried
+
+
+def test_host_primitive_entry_binding_and_failure_paths(tmp_path,monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1]/'research'/'d061_android'))
+    import host_primitive_entry as he
+    import host_primitive_probe as hp
+    import audience_gate as g
+    from types import SimpleNamespace as N
+    C='c'*40
+    tmp=tmp_path/'rt';tmp.mkdir()
+    out=tmp/'o';out.mkdir(mode=0o700)
+    envr={'RUNNER_TEMP':str(tmp),'ImageOS':'ubuntu24','ImageVersion':'20261101.1.0'}
+    argv=['--repo','/x','--expected-commit',C,'--sleep-path','/s','--sleep-sha256','d'*64,'--parent','/sys/fs/cgroup/x','--dest',str(out),'--run-id','hp-1','--route-evidence-ref','route-ref-0001']
+    calls=[]
+    class Ops:
+        def __init__(s,*a):calls.append('ctor')
+        def close(s):calls.append('close')
+    def mods(ok=True,pub=None,run=None,approved=True):
+        h=N(APPROVED_FOR_EXECUTION=approved,envelope=hp.envelope,RealOps=Ops,
+            run=run or (lambda ops,env:{'envelope':env,'results':[{'check':c,'ok':ok,'errno':0} for c in hp.CHECKS]}))
+        a=N(APPROVED_FOR_EXECUTION=approved,canonical_path=g.canonical_path,check_plan=g.check_plan,publish_private=pub or (lambda *a,**k:calls.append('pub') or {}))
+        return {'hp':h,'ag':a}
+    # held: nothing runs or is measured while any constant is False (entry constant False in source)
+    assert he.APPROVED_FOR_EXECUTION is False
+    assert he.main(argv,environ=envr,modules=mods(),measure=lambda r:C)==he.RC_REFUSED and calls==[]
+    monkeypatch.setattr(he,'APPROVED_FOR_EXECUTION',True)
+    assert he.main(argv,environ=envr,modules=mods(approved=False),measure=lambda r:C)==he.RC_REFUSED and calls==[]
+    # measured commit differs from the cross-check: refused before RealOps
+    assert he.main(argv,environ=envr,modules=mods(),measure=lambda r:'e'*40)==he.RC_REFUSED and calls==[]
+    # missing runner image labels, output outside RUNNER_TEMP, bad expected commit: refused
+    assert he.main(argv,environ={'RUNNER_TEMP':str(tmp)},modules=mods(),measure=lambda r:C)==he.RC_REFUSED
+    bad=list(argv);bad[bad.index('--dest')+1]=str(tmp_path/'elsewhere')
+    assert he.main(bad,environ=envr,modules=mods(),measure=lambda r:C)==he.RC_REFUSED
+    bad=list(argv);bad[bad.index('--expected-commit')+1]='PLACEHOLDER_REVIEWED_PROBE_COMMIT_40HEX'
+    assert he.main(bad,environ=envr,modules=mods(),measure=lambda r:C)==he.RC_REFUSED and calls==[]
+    assert he.main(argv+['--extra','1'],environ=envr,modules=mods(),measure=lambda r:C)==he.RC_REFUSED
+    # happy path: measured values (not arguments) are in the envelope; ops closed; one publish
+    seen={}
+    def pub(plan,name,obj,**k):seen.update(plan=plan,name=name,obj=obj);calls.append('pub');return {}
+    assert he.main(argv,environ=envr,modules=mods(pub=pub),measure=lambda r:C)==he.RC_OK
+    assert calls==['ctor','close','pub'] and seen['obj']['envelope']['source_commit']==C and seen['obj']['envelope']['runner_image']=='ubuntu24/20261101.1.0'
+    assert seen['plan']['route']=='local_private_file' and seen['plan']['content_class']=='host_primitive_result'
+    g.validate_content('host_primitive_result',seen['obj'])
+    # a failed check is reported as a check failure; publish failure drops the result with no fallback
+    calls.clear()
+    assert he.main(argv,environ=envr,modules=mods(ok=False,pub=pub),measure=lambda r:C)==he.RC_CHECK_FAILED
+    def boom(*a,**k):raise OSError(5,'x')
+    calls.clear()
+    assert he.main(argv,environ=envr,modules=mods(pub=boom),measure=lambda r:C)==he.RC_PUBLISH_FAILED and calls==['ctor','close']
+    # run() raising still closes ops, publishes nothing
+    calls.clear()
+    def rb(ops,env):raise RuntimeError('x')
+    assert he.main(argv,environ=envr,modules=mods(pub=pub,run=rb),measure=lambda r:C)==he.RC_CHECK_FAILED and calls==['ctor','close']
+    # git measurement: dirty tree and failure refuse; fixed binary and empty env
+    cap=[]
+    def runner(cmd,**k):
+        cap.append((cmd,k.get('env')))
+        return N(returncode=0,stdout=(C+'\n' if cmd[3]=='rev-parse' else ' M x\n').encode())
+    with pytest.raises(he.Refused):he.measure_commit('/x',runner=runner)
+    assert all(c[0]=='/usr/bin/git' and e=={} for c,e in cap)
+    assert he.measure_commit('/x',runner=lambda cmd,**k:N(returncode=0,stdout=(C if cmd[3]=='rev-parse' else '').encode()))==C
+    with pytest.raises(he.Refused):he.measure_commit('/x',runner=lambda cmd,**k:N(returncode=1,stdout=b''))
+    # envelope runner_image is optional in the schema but typed when present
+    e=hp.envelope('r1',C,'d'*64,'ubuntu24/1.0');g.validate_content('host_primitive_result',{'envelope':e,'results':[{'check':c,'ok':True,'errno':0} for c in hp.CHECKS]})
+    with pytest.raises(ValueError):hp.envelope('r1',C,'d'*64,'bad image')
+    with pytest.raises(ValueError):g.validate_content('host_primitive_result',{'envelope':{**e,'runner_image':'bad image'},'results':[{'check':c,'ok':True,'errno':0} for c in hp.CHECKS]})
+    # workflow template stays outside .github/workflows, has no upload step, no inputs, pinned checkout, creds off
+    t=(Path(__file__).resolve().parents[1]/'research'/'d061_android'/'held'/'host-primitive-probe.workflow.yml.txt').read_text()
+    assert 'upload-artifact' not in t and 'inputs:' not in t and 'persist-credentials: false' in t and 'actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683' in t and 'permissions: {}' in t
+    assert not (Path(__file__).resolve().parents[1]/'.github'/'workflows'/'host-primitive-probe.yml').exists()

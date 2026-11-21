@@ -145,7 +145,7 @@ def validate_content(content_class,obj,*,sha256=None,size=None):
         checks=('limit_readback','pidns_create','child_exit','cleanup_absence')
         if not isinstance(obj,dict) or set(obj)!={'envelope','results'}:raise ValueError('closed host result keys required')
         e=obj['envelope']
-        if (not isinstance(e,dict) or set(e)!={'run_id','source_commit','sleep_sha256','probe','pidns_claim'} or e['probe']!='host_primitive_v1' or e['pidns_claim']!='child_unshare_ok_and_parent_saw_distinct_pid_for_children_id'
+        if (not isinstance(e,dict) or set(e)-{'runner_image'}!={'run_id','source_commit','sleep_sha256','probe','pidns_claim'} or len(e)<5 or ('runner_image' in e and not (isinstance(e['runner_image'],str) and re.fullmatch(r'[A-Za-z0-9._-]{1,40}/[A-Za-z0-9._-]{1,40}',e['runner_image']))) or e['probe']!='host_primitive_v1' or e['pidns_claim']!='child_unshare_ok_and_parent_saw_distinct_pid_for_children_id'
             or not isinstance(e['run_id'],str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,31}',e['run_id'])
             or not isinstance(e['source_commit'],str) or not re.fullmatch('[0-9a-f]{40}',e['source_commit'])
             or not isinstance(e['sleep_sha256'],str) or not re.fullmatch('[0-9a-f]{64}',e['sleep_sha256'])):raise ValueError('closed envelope required')

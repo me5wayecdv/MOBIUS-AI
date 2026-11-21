@@ -22,12 +22,16 @@ CLEANUP_S=5.0
 MAX_SLEEP_BYTES=16*1024**2
 
 
-def envelope(run_id,source_commit,sleep_sha256):
+def envelope(run_id,source_commit,sleep_sha256,runner_image=None):
     """source_commit is a 40-hex git commit; sleep_sha256 is a 64-hex file digest. Separate types."""
     if not (isinstance(run_id,str) and RUN_ID.fullmatch(run_id)):raise ValueError('canonical run id required')
     if not (isinstance(source_commit,str) and re.fullmatch('[0-9a-f]{40}',source_commit)):raise ValueError('40-hex git commit required')
     if not (isinstance(sleep_sha256,str) and re.fullmatch('[0-9a-f]{64}',sleep_sha256)):raise ValueError('64-hex sha256 required')
-    return {'run_id':run_id,'source_commit':source_commit,'sleep_sha256':sleep_sha256,'probe':'host_primitive_v1','pidns_claim':PIDNS_CLAIM}
+    e={'run_id':run_id,'source_commit':source_commit,'sleep_sha256':sleep_sha256,'probe':'host_primitive_v1','pidns_claim':PIDNS_CLAIM}
+    if runner_image is not None:
+        if not (isinstance(runner_image,str) and re.fullmatch(r'[A-Za-z0-9._-]{1,40}/[A-Za-z0-9._-]{1,40}',runner_image)):raise ValueError('runner image label ImageOS/ImageVersion required')
+        e['runner_image']=runner_image   # observed label of the dated runner image, not an attestation
+    return e
 
 
 def run(ops,env,*,clock=time.monotonic):
