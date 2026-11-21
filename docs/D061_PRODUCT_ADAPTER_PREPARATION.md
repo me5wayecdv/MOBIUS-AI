@@ -141,3 +141,29 @@ and requires post-quiescence receipt delta0 before any passed rejection result.
 Other negative cases remain specified, not implemented/executed. Operational vs
 teardown time budgeting and failed-host persistent records remain held design
 work, no runtime activation allowed by these draft corrections.
+
+## Operation/teardown and failed-host preparation
+
+Native fixed plans must reserve both the operation step budget and the existing
+cleanup-step budget inside max_duration_seconds. The typed request carries all
+three approved values. Product host polls the same cancellation event while its
+owned wrapper runs, enforces operation deadline, then separately bounded cleanup
+using the reserved teardown deadline. It does not allow a420-second operation
+merely because safety-supervisor internals have that outer ceiling. Final pass
+also requires actual service elapsed duration within approved total. Safety
+cleanup is still attempted on overrun; an overrun can never be relabelled pass.
+No signal/timeout behavior has been exercised live by this preparation.
+
+A typed failed host output preserves original failure class/code, command rc,
+cleanup errors and bounded partial original artifacts with immutable binding.
+The product persists that result as FAILED with run/evidence links, not a passed
+record or lost exception. Complete positive native evidence is required only
+for a passed result; failed readback still demands its exact original partial
+manifest+samecase binding. A unit failure-path test exercises FAILED persistence
+and removed-link refusal, not simulated positive capture or TLS. Revoked/expired
+post-host authority still refuses acceptance rather than manufacturing approval.
+
+Remaining activation gaps: actual granted case/plan provisioning without seeded
+model hypotheses, focused review of the new operation/failure lifecycle and
+product binding/collector, fully isolated executable origin-side TLS-negative
+profiles and exact integration workflow. Current host/journey/TLS gates FALSE.

@@ -12,6 +12,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 
 from cleanup import attempt, ordinary_signals_ignored
 from lifecycle import identity, lexical, parent_death
@@ -23,7 +24,7 @@ APPROVED_FOR_EXECUTION = False
 class PreparedCIHost:
     VERSION='mobius-native-ci-host/0.1.0-preparation'
 
-    def __call__(self, request):
+    def __call__(self, request, *, cancel_check=None):
         if not APPROVED_FOR_EXECUTION:raise RuntimeError('product host execution HELD')
         if os.geteuid()!=0:raise RuntimeError('ephemeral CI host only, no API elevation')
         from dataclasses import asdict
@@ -38,6 +39,8 @@ class PreparedCIHost:
               '--binding',str(binding)]
         env={'PATH':'/usr/sbin:/usr/bin:/sbin:/bin','LANG':'C.UTF-8','HOME':'/nonexistent'}
         child=None
+        failure_code=None
+        started=time.monotonic()
         original=None
         command={'argv':argv,'rc':None,'errors':[]}
         def interrupted(signum,frame):raise SystemExit(128+signum)
@@ -48,35 +51,57 @@ class PreparedCIHost:
                     stderr=subprocess.STDOUT,close_fds=True,start_new_session=True,
                     preexec_fn=parent_death(os.getpid(),signal.SIGTERM))
                 atomic_json(raw/'outer-child.json',dict(identity(child.pid),stage='product_fixture'))
-                command['rc']=child.wait(timeout=420)
+                while child.poll() is None:
+                    if cancel_check is not None and cancel_check():
+                        failure_code='host_cancelled'
+                        raise RuntimeError('product host cancellation requested')
+                    if time.monotonic()-started>=request.budget_seconds:
+                        failure_code='host_timeout'
+                        raise TimeoutError('approved operation budget exceeded')
+                    time.sleep(0.1)
+                command['rc']=child.returncode
             if command['rc']:raise RuntimeError('product fixture failed')
-        except BaseException as e:original=e
+        except BaseException as e:
+            original=e
+            failure_code=failure_code or 'host_failed'
         finally:
             with ordinary_signals_ignored():
+                teardown_deadline=time.monotonic()+request.teardown_seconds
+                remaining=lambda:max(0.1,teardown_deadline-time.monotonic())
                 if child is not None and child.poll() is None:
                     attempt(command['errors'],'TERM',lambda:child.terminate())
-                    attempt(command['errors'],'grace_wait',lambda:child.wait(timeout=30))
+                    attempt(command['errors'],'grace_wait',lambda:child.wait(timeout=min(5,remaining())))
                     if child.poll() is None:
                         attempt(command['errors'],'KILL',lambda:child.kill())
-                        attempt(command['errors'],'reap',lambda:child.wait(timeout=8))
+                        attempt(command['errors'],'reap',lambda:child.wait(timeout=min(3,remaining())))
                 command['rc']=None if child is None else child.poll()
                 if original is not None:command['original_error']=type(original).__name__
                 def emergency_cleanup():
                     emergency=subprocess.run([sys.executable,'/opt/d061-reviewed-source/emergency.py',str(raw)],
-                        env=env,stdin=subprocess.DEVNULL,close_fds=True,timeout=30)
+                        env=env,stdin=subprocess.DEVNULL,close_fds=True,timeout=remaining())
                     if emergency.returncode:raise RuntimeError('emergency_failed')
                 attempt(command['errors'],'emergency',emergency_cleanup)
                 attempt(command['errors'],'command_summary',lambda:atomic_json(raw/'workflow-command.json',command))
             for sig,handler in old_handlers.items():signal.signal(sig,handler)
-        if original is not None:raise original
-        if command['errors']:raise RuntimeError('product host cleanup failed')
-        # Only reviewed named original blobs cross the typed host seam.
+        if command['errors']:failure_code='host_cleanup_failed'
+        # Retain partial original allowlisted failure evidence rather than
+        # losing a failed host leg or manufacturing a passed PoCRun.
         names=('native-proof.json','initial.native','capture-digest.json','backend-receipts.json','native-events.json',
                'replay-enqueued.json','replay-started.json','replay-completed.json','addon-final.json',
                'driver-cleanup.json','binding.json','policy.json','proxy.log','origin.log')
-        artifacts={name:lexical(raw/'fixture/evidence'/name).read_bytes() for name in names}
-        for name in ('wrapper-cleanup.json',):artifacts[name]=lexical(raw/'fixture'/name).read_bytes()
-        artifacts['emergency-cleanup.json']=lexical(raw/'emergency-cleanup.json').read_bytes()
+        artifacts={'binding.json':binding.read_bytes(),'workflow-command.json':(raw/'workflow-command.json').read_bytes()}
+        for name in names:
+            path=raw/'fixture/evidence'/name
+            if path.exists():artifacts[name]=lexical(path).read_bytes()
+        for name,path in (('wrapper-cleanup.json',raw/'fixture/wrapper-cleanup.json'),
+                          ('emergency-cleanup.json',raw/'emergency-cleanup.json')):
+            if path.exists():artifacts[name]=lexical(path).read_bytes()
+        if failure_code:
+            atomic_json(raw/'host-failure.json',{'code':failure_code,
+                'original':None if original is None else {'class':type(original).__name__,'detail':str(original)[:512]},
+                'command':command,'elapsed_seconds':time.monotonic()-started,
+                'approved_operation_seconds':request.budget_seconds,'approved_teardown_seconds':request.teardown_seconds})
+            artifacts['host-failure.json']=(raw/'host-failure.json').read_bytes()
         safe=root/'safe'
         safe.mkdir(mode=0o700)
         copied=[]
@@ -94,9 +119,10 @@ class PreparedCIHost:
             digest=hashlib.sha256(actual).hexdigest()
             if actual!=content:raise RuntimeError('copied artifact mismatch')
             copied.append({'path':name,'sha256':digest,'bytes':len(actual)})
-        summary={'command_rc':command['rc'],'success':True,'errors':[],
+        summary={'command_rc':command['rc'],'success':not bool(failure_code),'errors':command['errors'],
                  'mode':'product_positive_fixture','copied':copied,
                  'binding':asdict(request)}
         atomic_json(safe/'collector-summary.json',summary)
         artifacts['collector-summary.json']=(safe/'collector-summary.json').read_bytes()
-        return NativeFixtureOutput(request,artifacts,(self.VERSION,'mitmproxy/12.3.1'))
+        return NativeFixtureOutput(request,artifacts,(self.VERSION,'mitmproxy/12.3.1'),
+            'failed' if failure_code else 'passed',failure_code)

@@ -99,6 +99,11 @@ class PoCExecutionService:
             f"tool={step.tool_name}/{step.tool_version} duration_ms={step.duration_ms}"
             for step in result.steps
         ).encode("utf-8")
+        if native_output is not None and (
+            sum(len(v) for v in native_output.artifacts.values())+len(input_bytes)+len(output_bytes)+len(log_text)
+            >plan.max_output_bytes
+        ):
+            raise ValueError("total native artifacts/plan/result/log bytes exceed approved output budget")
         input_sha = hashlib.sha256(input_bytes).hexdigest()
         output_sha = hashlib.sha256(output_bytes).hexdigest()
 
@@ -204,7 +209,7 @@ class PoCExecutionService:
         if cancel_event.is_set():raise PoCExecutionError("cancelled before native host launch")
         request = NativeFixtureRequest.from_plan(plan)
         started, clock = utcnow(), time.monotonic()
-        output = self.native_adapter.execute(request)
+        output = self.native_adapter.execute(request,cancel_check=cancel_event.is_set)
         # Revalidate authority after the bounded external leg before accepting
         # evidence. Expired/revoked/rebound cases cannot be promoted into pass.
         # Independent session/transaction avoids stale identity-map objects and
@@ -214,29 +219,30 @@ class PoCExecutionService:
             SafePoCRunner(fresh_authority).validate_authority(plan)
         NativeLocalFixtureAdapter.validate(request, output)
         duration = max(0,int((time.monotonic()-clock)*1000))
-        if cancel_event.is_set() or duration > request.budget_seconds*1000:
-            raise PoCExecutionError("native host cancelled or exceeded approved duration")
+        if output.status == "passed" and (cancel_event.is_set() or duration > request.total_seconds*1000):
+            raise PoCExecutionError("native host cancelled or exceeded approved total duration")
         manifest = [{"name":name,"sha256":hashlib.sha256(content).hexdigest(),"bytes":len(content)}
                     for name,content in sorted(output.artifacts.items())]
         binding = asdict(request)
         payload = {"binding":binding,"traffic_source":TRAFFIC_SOURCE,
                    "anchor_is_not_traffic_source":True,"native_artifacts":manifest,
                    "tls_negative_controls":"UNTESTED","simulation_only":False,
-                   "apk_execution":False,"profile":request.profile}
+                   "apk_execution":False,"profile":request.profile,"host_status":output.status,
+                   "host_failure_code":output.failure_code}
         if sum(len(value) for value in output.artifacts.values())>plan.max_output_bytes:
             raise PoCExecutionError("native original artifacts exceed approved total output budget")
         encoded=json.dumps(payload,sort_keys=True).encode()
         if len(encoded)>plan.max_output_bytes:raise PoCExecutionError("native result metadata exceeds budget")
         step=PoCStepResult(0,"capture_native_local_fixture_v1",request.profile,
-            "passed",True,True,None,duration,"native-local",self.native_adapter.VERSION,
+            output.status,output.status=="passed",output.status=="passed",None,duration,"native-local",self.native_adapter.VERSION,
             "Actual controlled loopback capture/request replay, not APK traffic")
         result=PoCExecutionResult(plan.id,plan.investigation_id,plan.target_sha256,
-            "passed",started,utcnow(),duration,(step,),payload,output.tool_versions,
+            output.status,started,utcnow(),duration,(step,),payload,output.tool_versions,
             ("Controlled stdlib local traffic only; no APK runtime or Android claim",
              "TLS rejection controls untested in positive profile",
              "Host lifecycle timeout/cancellation paths require separate evidence"),
-            ({"action":"stop_native_local_fixture","status":"completed",
-              "detail":"validated original driver/wrapper/emergency cleanup evidence"},))
+            ({"action":"stop_native_local_fixture","status":"completed" if output.status=="passed" else "inspect_failure_evidence",
+              "detail":("validated original driver/wrapper/emergency cleanup evidence" if output.status=="passed" else "failed host diagnostics retained, no cleanup success inferred")},))
         return result,output
 
     def get(self, run_id: str) -> PoCRunRow:
@@ -284,7 +290,7 @@ class PoCExecutionService:
             manifest=payload["native_artifacts"]
             if len({x["name"] for x in manifest})!=len(manifest):raise ValueError("duplicate native artifact name")
             mapping={x["name"]:x for x in manifest}
-            if not REQUIRED<=mapping.keys():raise ValueError("required native artifact mapping missing")
+            if row.status=="passed" and not REQUIRED<=mapping.keys():raise ValueError("required native artifact mapping missing")
             native_refs={x["evidence_id"]:x for x in references if x["kind"]=="native-local"}
             if {x["evidence_id"] for x in manifest}!=set(native_refs):raise ValueError("native links incomplete/substituted")
             files={}
@@ -301,7 +307,8 @@ class PoCExecutionService:
                 raise ValueError("native host binding differs from persisted plan/run")
             expected_plan=hashlib.sha256(encoded({k:v for k,v in row.input_json.items() if k!="approval_id"})).hexdigest()
             if request.plan_sha256!=expected_plan:raise ValueError("native approved plan digest mismatch")
-            NativeLocalFixtureAdapter.validate(request,NativeFixtureOutput(request,files,tuple(row.tool_versions)))
+            NativeLocalFixtureAdapter.validate(request,NativeFixtureOutput(request,files,tuple(row.tool_versions),
+                payload.get("host_status","passed"),payload.get("host_failure_code")))
         return {"run_id":row.id,"plan_id":row.plan_id,"investigation_id":investigation_id,
                 "authorization_id":row.authorization_id,"approval_id":row.approval_id,
                 "anchor_apk_sha256":row.target_sha256,"status":row.status,

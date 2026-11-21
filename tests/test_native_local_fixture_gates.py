@@ -74,7 +74,7 @@ def test_second_session_revocation_seen_after_pending_host(session,store,future_
     assert cached.revoked_at is None
     class PendingHost:
         VERSION='unit-refusal-only'
-        def execute(self,request):
+        def execute(self,request,**kwargs):
             with Session(bind=session.get_bind()) as other:
                 row=other.get(AuthorizationRow,plan.authorization_id)
                 row.revoked_at='2026-01-01T00:00:00Z'
@@ -94,3 +94,29 @@ def test_missing_or_substituted_plan_result_links_fail_readback(session,store,fu
     session.flush()
     with pytest.raises(ValueError,match='plan/result/log'):
         service.readback(run.run_id,investigation_id=scan.id)
+
+
+def test_native_failed_host_is_persisted_not_promoted_and_manifest_links_required(session,store,future_iso):
+    import json
+    from dataclasses import asdict
+    from mobius.adapters.models import PoCRunEvidenceRow
+    from mobius.services.native_local_fixture import NativeFixtureOutput
+    plan=grant(session,native_plan(session,store,future_iso),future_iso)
+    session.commit()
+    def host_failure(request,**kwargs):
+        artifacts={'binding.json':json.dumps(asdict(request),sort_keys=True).encode(),
+                   'host-failure.json':b'{"code":"host_timeout","source":"UNIT FAILURE PATH ONLY"}'}
+        return NativeFixtureOutput(request,artifacts,('unit-failure-only',),'failed','host_timeout')
+    service=PoCExecutionService(session,store,native_adapter=NativeLocalFixtureAdapter(host_failure))
+    run=service.execute_and_persist(plan)
+    assert run.status=='failed'
+    session.commit()
+    result=service.readback(run.run_id,investigation_id=plan.investigation_id)
+    assert result['status']=='failed'
+    manifest=result['output']['output_json']['native_artifacts']
+    assert {x['name'] for x in manifest}=={'binding.json','host-failure.json'}
+    link=session.query(PoCRunEvidenceRow).filter_by(run_id=run.run_id,kind='native-local').first()
+    session.delete(link)
+    session.flush()
+    with pytest.raises(ValueError,match='links incomplete'):
+        service.readback(run.run_id,investigation_id=plan.investigation_id)
