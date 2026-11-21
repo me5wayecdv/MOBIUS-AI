@@ -1,0 +1,727 @@
+"""Pure source/metadata guards, no SDK/APK/emulator/build/network execution."""
+from pathlib import Path
+import ast
+import importlib.util
+import json
+import xml.etree.ElementTree as E
+
+ROOT=Path(__file__).parents[1]/'research/d061_android'
+
+
+def test_owned_source_and_build_are_held_without_workflow():
+    for name,flags in [('profile.py',['APPROVED_FOR_BUILD','APPROVED_FOR_EXECUTION']),('build_owned.py',['APPROVED_FOR_BUILD']),('namespace_supervisor.py',['APPROVED_FOR_EXECUTION']),('emulator_scope.py',['APPROVED_FOR_EXECUTION']),('owned_product_setup.py',['APPROVED_FOR_EXECUTION']),('owned_absence.py',['APPROVED_FOR_EXECUTION']),('contained_driver.py',['APPROVED_FOR_EXECUTION']),
+        ('control_driver.py',['APPROVED_FOR_EXECUTION']),('sibling_supervisor.py',['APPROVED_FOR_EXECUTION']),('owned_collect.py',['APPROVED_FOR_EXECUTION']),('outer_owner.py',['APPROVED_FOR_EXECUTION']),('stage_archives.py',['APPROVED_FOR_EXECUTION','HARD_WATCHDOG_AND_RESOURCE_LIMITS_REVIEWED'])]:
+        tree=ast.parse((ROOT/name).read_text())
+        values={target.id:node.value.value for node in tree.body if isinstance(node,ast.Assign) and isinstance(node.value,ast.Constant)
+            for target in node.targets if isinstance(target,ast.Name)}
+        assert all(values[x] is False for x in flags)
+    assert not list((ROOT.parents[1]/'.github/workflows').glob('*owned*android*'))
+
+
+def test_app_trust_and_action_source_has_fixed_local_scope():
+    manifest=E.parse(ROOT/'app/AndroidManifest.xml').getroot()
+    assert manifest.attrib['package']=='org.mobius.ownedfixture'
+    config=E.parse(ROOT/'app/res/xml/network_security_config.xml').getroot()
+    assert config.find('base-config').attrib['cleartextTrafficPermitted']=='false'
+    assert [x.attrib['src'] for x in config.findall('.//certificates')]==['@raw/fixture_proxy_ca']
+    source=(ROOT/'app/src/org/mobius/ownedfixture/FixtureActivity.java').read_text()
+    assert 'setEndpointIdentificationAlgorithm("HTTPS")' in source
+    assert 'this-run-public-proxy-ca-only' in source
+    assert 'new InetSocketAddress("127.0.0.1", PROXY_PORT)' in source
+    assert 'setDefaultSSLSocketFactory' not in source
+    assert not (ROOT/'app/res/raw').exists()
+
+
+def test_toolchain_archive_bytes_do_not_claim_runtime_closure():
+    data=json.loads((ROOT/'toolchain-candidates.json').read_text())
+    assert data['status']=='HELD_ARCHIVE_BYTES_VERIFIED_NOT_RUNTIME_CLOSURE'
+    assert all(len(x['archive_sha256'])==64 and x['archive_downloaded'] and not x['archive_executed'] for x in data['packages'])
+    assert data['jdk']['archive_sha256']==data['jdk']['official_sha256']
+    assert data['jdk']['archive_executed'] is False
+
+
+def test_fixed_adb_source_is_held_and_reverse_validator_closed(monkeypatch):
+    import sys
+    import pytest
+    monkeypatch.syspath_prepend(str(ROOT))
+    import adb_scope
+    assert adb_scope.APPROVED_FOR_EXECUTION is False
+    assert adb_scope.validate_reverse_list('',expected=False)==[]
+    assert adb_scope.validate_reverse_list('(reverse) tcp:18080 tcp:18080\n',expected=True)
+    for text in ['emulator-5554 tcp:18080 tcp:18080','(reverse) tcp:18080 tcp:18081','emulator-5554 tcp:0 tcp:18080',
+                 'emulator-5554 tcp:18080 tcp:18080\nemulator-5554 tcp:22 tcp:22']:
+        with pytest.raises(ValueError):adb_scope.validate_reverse_list(text,expected=True)
+
+
+def test_namespace_closure_is_exact_and_cannot_bind_host_tree(monkeypatch):
+    import pytest
+    monkeypatch.syspath_prepend(str(ROOT))
+    import namespace_supervisor as ns
+    assert ns.APPROVED_FOR_EXECUTION is False
+    rows=[{'source':name.lstrip('/'),'destination':name,'sha256':'a'*64,'size':1,'mode':0o555}
+        for name in (ns.ENTRYPOINT,'/runtime/bin/python','/usr/bin/setpriv')]
+    lock={'status':'EXACT_REVIEWED_ANDROID_CLOSURE','files':rows}
+    assert ns.validate_manifest(lock)==rows
+    for bad in ['/home/fixture/key','/run/docker.sock','/dev/kvm','/usr/../home/key','/usr//bin/x']:
+        with pytest.raises(ValueError):ns.validate_manifest(dict(lock,files=rows+[dict(rows[0],destination=bad)]))
+    with pytest.raises(ValueError):ns.validate_manifest(dict(lock,files=rows+[rows[0]]))
+    with pytest.raises(ValueError):ns.validate_manifest(dict(lock,status='METADATA_ONLY'))
+    with pytest.raises(ValueError):ns.validate_manifest(dict(lock,files=rows[:2]))
+
+
+def test_app_prepare_does_not_send_before_observed_process_commit():
+    source=(ROOT/'app/src/org/mobius/ownedfixture/FixtureActivity.java').read_text()
+    prepare=source[source.index('@Override public void onCreate'):source.index('@Override protected void onNewIntent')]
+    assert 'exchange(' not in prepare and 'new Socket(' not in prepare
+    assert '"prepare".equals(phase)' in prepare
+    assert 'preparedNonce.equals(nonce) || started' in source
+    assert 'OWNED_FIXTURE_SOCKET nonce=' in source
+    manifest=E.parse(ROOT/'app/AndroidManifest.xml').getroot()
+    activity=manifest.find('application/activity')
+    assert activity.attrib['{http://schemas.android.com/apk/res/android}launchMode']=='singleTask'
+
+
+def test_archive_inventory_rejects_path_types_and_retains_no_execution(tmp_path,monkeypatch):
+    import zipfile
+    import pytest
+    monkeypatch.syspath_prepend(str(ROOT))
+    import archive_inventory as ai
+    good=tmp_path/'good.zip'
+    with zipfile.ZipFile(good,'w') as archive:archive.writestr('fixture/source.txt',b'owned source')
+    result=ai.inventory(good)
+    assert result['member_count']==1
+    assert result['archive_extracted'] is result['package_code_executed'] is result['runtime_closure_resolved'] is False
+    for index,name in enumerate(('../escape','/absolute','a/../b','a//b','a\\b')):
+        bad=tmp_path/(str(index)+'.zip')
+        with zipfile.ZipFile(bad,'w') as archive:archive.writestr(name,b'x')
+        with pytest.raises(ValueError):ai.inventory(bad)
+
+
+def test_emulator_listeners_refuse_wildcard_or_implicit_grpc(monkeypatch):
+    import pytest
+    monkeypatch.syspath_prepend(str(ROOT))
+    import emulator_scope as es
+    assert es.APPROVED_FOR_EXECUTION is False
+    rows=[{'state':'0A','family':'tcp','address':'0100007F','port':p} for p in (5037,5554,5555)]
+    assert es.validate_listeners(rows)
+    for bad in (dict(rows[0],port=8554),dict(rows[0],address='00000000')):
+        with pytest.raises(ValueError):es.validate_listeners(rows+[bad])
+    with pytest.raises(ValueError):es.validate_listeners(rows[1:])
+
+
+def test_unregistered_product_contract_is_disabled_and_rejects_missing_originals(monkeypatch):
+    from dataclasses import asdict,replace
+    import pytest
+    monkeypatch.syspath_prepend(str(ROOT))
+    from profile import OwnedAppRequest
+    from product_contract import OwnedAppAdapter,OwnedAppOutput
+    request=OwnedAppRequest(apk_sha256='a'*64,public_ca_sha256='b'*64,plan_sha256='c'*64,
+        authorization_id='ath_unit',approval_id='apr_unit',investigation_id='scn_unit',plan_id='poc_unit',nonce='d'*32)
+    request.validate()
+    with pytest.raises(RuntimeError):OwnedAppAdapter().execute(request)
+    binding=json.dumps(asdict(request)).encode()
+    failure=OwnedAppOutput(request,{'binding.json':binding,'host-failure.json':b'{"code":"host_timeout"}'},
+        ('unit-refusal-only',),'failed','host_timeout')
+    OwnedAppAdapter.validate(request,failure)
+    with pytest.raises(ValueError):OwnedAppAdapter.validate(request,replace(failure,status='passed',failure_code=None))
+    with pytest.raises(ValueError):OwnedAppAdapter.validate(request,replace(failure,artifacts={'binding.json':binding}))
+    with pytest.raises(ValueError):OwnedAppAdapter.validate(request,replace(failure,failure_code='host_not_executed'))
+    with pytest.raises(ValueError):OwnedAppAdapter.validate(request,replace(failure,artifacts={**failure.artifacts,'arbitrary.txt':b'x'}))
+    with pytest.raises(ValueError):OwnedAppAdapter.validate(request,replace(failure,binding=replace(request,nonce='e'*32)))
+
+
+def test_owned_absence_refuses_missing_postlaunch_evidence(tmp_path,monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT))
+    import owned_absence
+    root=tmp_path/'not-created'
+    assert owned_absence.inspect(root,require_launched=False)['complete']
+    result=owned_absence.inspect(root,require_launched=True)
+    assert not result['complete'] and result['missing_records']==['workflow-root']
+    root.mkdir()
+    result=owned_absence.inspect(root,require_launched=True,proc=tmp_path/'empty-proc')
+    assert not result['complete'] and not result['stage_required_records_complete']
+    assert 'namespace-setup.json' in result['missing_records']
+    assert 'work/evidence/owned-app-launch.json' in result['missing_records']
+
+
+def test_handoff_closed_commit_cannot_change_actual_apk_or_add_instructions(monkeypatch):
+    from dataclasses import asdict,replace
+    import pytest
+    monkeypatch.syspath_prepend(str(ROOT))
+    from handoff_protocol import make_commit,validate_commit,canonical,digest
+    from profile import OwnedAppRequest
+    request=OwnedAppRequest(apk_sha256='a'*64,public_ca_sha256='b'*64,plan_sha256='c'*64,
+        authorization_id='ath_unit',approval_id='apr_unit',investigation_id='scn_unit',plan_id='poc_unit',nonce='d'*32)
+    ready={'version':'owned-android-ready/1','profile':request.profile,'package':request.package,
+        'apk_sha256':request.apk_sha256,'public_ca_sha256':request.public_ca_sha256,'build_json_sha256':'e'*64,
+        'source_manifest_sha256':'f'*64,'run_id':'1'*32,'provisioning_id':'2'*32,'closure_sha256':'3'*64,'original_count':0,'origin_receipt_count':0,'apk_installed':False,'apk_launched':False}
+    commit=make_commit(request,ready_metadata=ready,ready_metadata_sha256=digest(canonical(ready)))
+    assert validate_commit(commit,ready_metadata=ready,expected_request=request)==request
+    with pytest.raises(ValueError):validate_commit({**commit,'argv':['unrelated']},ready_metadata=ready,expected_request=request)
+    with pytest.raises(ValueError):validate_commit(commit,ready_metadata=ready,expected_request=replace(request,nonce='e'*32))
+    with pytest.raises(ValueError):make_commit(replace(request,apk_sha256='e'*64),ready_metadata=ready,
+        ready_metadata_sha256=digest(canonical(ready)))
+    with pytest.raises(ValueError):make_commit(request,ready_metadata=ready,ready_metadata_sha256='f'*64)
+
+
+def test_handoff_stage_budgets_and_no_retry_after_failure(monkeypatch):
+    import pytest
+    monkeypatch.syspath_prepend(str(ROOT))
+    from handoff_protocol import LifecycleState
+    for event,seconds,kwargs in [('committed',1,{}),('provisioned',241,{}),('provisioned',10,{'originals':1})]:
+        state=LifecycleState()
+        with pytest.raises(ValueError):state.advance(event,seconds=seconds,**kwargs)
+        with pytest.raises(ValueError):state.advance('provisioned',seconds=1)
+    state=LifecycleState();assert state.advance('provisioned',seconds=240)=='ready'
+    assert state.advance('committed',seconds=30)=='committed'
+    with pytest.raises(ValueError):state.advance('operation_returned',seconds=61)
+    with pytest.raises(ValueError):state.advance('operation_returned',seconds=60)
+    state=LifecycleState()
+    for event,seconds in [('provisioned',240),('committed',30),('operation_returned',60),('runtime_absent',60),('collected',10)]:
+        state.advance(event,seconds=seconds)
+    assert state.stage=='collected'
+    failed=LifecycleState();failed.fail('TimeoutError')
+    with pytest.raises(ValueError):failed.advance('provisioned',seconds=1)
+
+
+def test_handoff_provisioning_refuses_preapproval_traffic_and_extra_fields(monkeypatch):
+    import pytest
+    monkeypatch.syspath_prepend(str(ROOT))
+    from handoff_protocol import validate_provisioned,READY_VERSION
+    metadata={'version':READY_VERSION,'profile':'owned-android-fixed-loopback-v1','package':'org.mobius.ownedfixture',
+        'apk_sha256':'a'*64,'public_ca_sha256':'b'*64,'build_json_sha256':'c'*64,'source_manifest_sha256':'d'*64,
+        'original_count':0,'origin_receipt_count':0,'apk_installed':False,'apk_launched':False,
+        'run_id':'1'*32,'provisioning_id':'2'*32,'closure_sha256':'3'*64}
+    for key,value in [('original_count',1),('apk_installed',True),('origin_receipt_count',True),('extra','instructions')]:
+        with pytest.raises(ValueError):validate_provisioned({**metadata,key:value},apk=b'unit-only',public_ca_der=b'unit-only',
+            build_json=b'{}',expected_source_manifest_sha256='d'*64)
+
+
+def test_root_expected_context_rejects_cross_run_or_reused_ready(monkeypatch):
+    import pytest
+    monkeypatch.syspath_prepend(str(ROOT))
+    from handoff_protocol import ExpectedContext,make_commit,canonical,digest,LifecycleState
+    from profile import OwnedAppRequest
+    ready={'version':'owned-android-ready/1','profile':'owned-android-fixed-loopback-v1','package':'org.mobius.ownedfixture',
+        'apk_sha256':'a'*64,'public_ca_sha256':'b'*64,'build_json_sha256':'c'*64,'source_manifest_sha256':'d'*64,
+        'run_id':'1'*32,'provisioning_id':'2'*32,'closure_sha256':'e'*64,
+        'original_count':0,'origin_receipt_count':0,'apk_installed':False,'apk_launched':False}
+    def context():return ExpectedContext(run_id='1'*32,provisioning_id='2'*32,closure_sha256='e'*64,source_manifest_sha256='d'*64)
+    request=OwnedAppRequest(apk_sha256='a'*64,public_ca_sha256='b'*64,plan_sha256='f'*64,
+        authorization_id='ath_unit',approval_id='apr_unit',investigation_id='scn_unit',plan_id='poc_unit',nonce='3'*32)
+    root=context();root.accept_ready(ready)
+    commit=make_commit(request,ready_metadata=ready,ready_metadata_sha256=digest(canonical(ready)))
+    assert root.consume(commit)==request
+    with pytest.raises(ValueError):root.consume(commit)
+    for field,value in [('run_id','4'*32),('provisioning_id','5'*32),('closure_sha256','6'*64)]:
+        root=context()
+        with pytest.raises(ValueError):root.accept_ready({**ready,field:value})
+        with pytest.raises(ValueError):root.accept_ready(ready)
+    state=LifecycleState()
+    with pytest.raises(ValueError):state.advance('provisioned',seconds=1,originals=1)
+    with pytest.raises(ValueError):state.advance('provisioned',seconds=1,originals=0)
+
+
+def test_handoff_io_is_one_shot_regular_bounded_and_link_closed(tmp_path,monkeypatch):
+    import pytest
+    monkeypatch.syspath_prepend(str(ROOT))
+    import handoff_io as io
+    path=tmp_path/'snapshot';io.write(path,b'public-unit-bytes')
+    assert io.read(path)==b'public-unit-bytes'
+    with pytest.raises(FileExistsError):io.write(path,b'replacement')
+    with pytest.raises(ValueError):io.read(path,3)
+    link=tmp_path/'link';link.symlink_to(path)
+    with pytest.raises(OSError):io.read(link)
+    with pytest.raises(TimeoutError):io.wait(path,deadline=0)
+
+
+def test_sibling_entrypoints_cannot_execute_until_source_review(monkeypatch):
+    import pytest
+    monkeypatch.syspath_prepend(str(ROOT))
+    import contained_driver,control_driver,sibling_supervisor,owned_collect
+    for module in (contained_driver,control_driver,sibling_supervisor):
+        assert module.APPROVED_FOR_EXECUTION is False
+        with pytest.raises(SystemExit):module.main()
+    with pytest.raises(RuntimeError):owned_collect.collect(None,None,None,command_rc=0)
+
+
+def test_collector_missing_postlaunch_evidence_stays_failed_not_absence(tmp_path,monkeypatch):
+    from dataclasses import asdict
+    import pytest
+    monkeypatch.syspath_prepend(str(ROOT))
+    import owned_collect
+    from profile import OwnedAppRequest
+    request=OwnedAppRequest(apk_sha256='a'*64,public_ca_sha256='b'*64,plan_sha256='c'*64,
+        authorization_id='ath_unit',approval_id='apr_unit',investigation_id='scn_unit',plan_id='poc_unit',nonce='d'*32)
+    monkeypatch.setattr(owned_collect,'APPROVED_FOR_EXECUTION',True)
+    runtime=tmp_path/'runtime';evidence=runtime/'work/evidence';evidence.mkdir(parents=True)
+    (evidence/'binding.json').write_text(json.dumps(asdict(request),sort_keys=True,separators=(',',':')))
+    (runtime/'wrapper-cleanup.json').write_text(json.dumps({'complete':False,'errors':['UNIT missing stage records'],
+        'jail_absent':False,'jail':'/opt/d061-owned-android-jail-unit-not-created'}))
+    result=owned_collect.collect(runtime,request,tmp_path/'result',command_rc=1)
+    assert result['status']=='failed' and result['failure_code']=='host_collection_failed'
+    assert (tmp_path/'result/result.json').is_file()
+    assert not (tmp_path/'result/initial.native').exists()
+    # The retained independent inspector result is explicitly incomplete.
+    absence=json.loads((tmp_path/'result/independent-absence.json').read_text())
+    assert absence['complete'] is False and absence['missing_records']
+
+
+def test_root_source_read_stays_anchored_when_live_ancestor_is_swapped(tmp_path,monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT))
+    import os
+    import handoff_io as io
+    work=tmp_path/'work';(work/'provision').mkdir(parents=True)
+    (work/'provision/file').write_bytes(b'actual original bytes')
+    outside=tmp_path/'outside';(outside/'provision').mkdir(parents=True)
+    (outside/'provision/file').write_bytes(b'unrelated secret must not be read')
+    original_open=os.open;swapped=[]
+    def race(path,flags,*args,**kwargs):
+        if path=='provision' and kwargs.get('dir_fd') is not None and not swapped:
+            work.rename(tmp_path/'old-work');work.symlink_to(outside,target_is_directory=True);swapped.append(True)
+        return original_open(path,flags,*args,**kwargs)
+    monkeypatch.setattr(io.os,'open',race)
+    assert io.read(work/'provision/file')==b'actual original bytes'
+    assert swapped
+
+
+def test_private_collector_result_cannot_publish_after_ten_seconds(tmp_path,monkeypatch):
+    import pytest
+    monkeypatch.syspath_prepend(str(ROOT))
+    from sibling_supervisor import publish_accepted
+    from handoff_protocol import LifecycleState
+    from handoff_io import json_write
+    state=LifecycleState()
+    for event in ('provisioned','committed','operation_returned','runtime_absent'):state.advance(event,seconds=1)
+    stage=tmp_path/'private';stage.mkdir();json_write(stage/'result.json',{'status':'passed','UNIT_NOT_RUNTIME':True})
+    destination=tmp_path/'visible'
+    with pytest.raises(TimeoutError):publish_accepted(stage,destination,state=state,collection_started=100,deadline=110,clock=lambda:111)
+    assert not destination.exists() and (stage/'result.json').exists() and state.failure
+    with pytest.raises(ValueError):state.advance('collected',seconds=1)
+
+
+def test_first_root_to_wrapper_edge_arms_parent_death_before_exec(tmp_path,monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT))
+    import contained_driver as driver
+    calls=[]
+    class Pipe:
+        def fileno(self):return 999
+    class Child:
+        stdout=Pipe()
+    def popen(*args,**kwargs):calls.append(kwargs);return Child()
+    monkeypatch.setattr(driver.subprocess,'Popen',popen)
+    monkeypatch.setattr(driver.os,'set_blocking',lambda *a:None)
+    producers=driver.Producers({});producers.start(['fixed-not-executed'],'runtime',tmp_path,bind_parent=True)
+    assert calls[0]['close_fds'] and calls[0]['start_new_session']
+    assert callable(calls[0]['preexec_fn'])
+    class Lib:
+        def prctl(self,*args):calls.append(args);return 0
+    monkeypatch.setattr(driver.ctypes,'CDLL',lambda *a,**k:Lib())
+    parent=driver.os.getpid();monkeypatch.setattr(driver.os,'getppid',lambda:parent)
+    calls[0]['preexec_fn']()
+    assert calls[-1][0]==1
+    for row in producers.rows:row['log'].close()
+
+
+def test_absence_obligations_follow_root_stages_not_fake_app_records(tmp_path,monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT))
+    import owned_absence
+    root=tmp_path/'runtime';out=root/'work/evidence';out.mkdir(parents=True)
+    (root/'namespace-setup.json').write_text(json.dumps({'namespaces':{'net':'net:[111]','mnt':'mnt:[222]','pid':'pid:[333]'}}))
+    (root/'wrapper-cleanup.json').write_text(json.dumps({'complete':False,'errors':[],'jail_absent':True,
+        'jail':'/opt/d061-owned-android-jail-unit-not-created'}))
+    (out/'driver-cleanup.json').write_text(json.dumps({'complete':True,'errors':[]}))
+    stage={'runtime_launched':True,'emulator_expected':False,'app_expected':False}
+    result=owned_absence.inspect(root,root_stage=stage,proc=tmp_path/'no-proc')
+    assert result['complete'] and result['obligations']['app']=='not_reached'
+    assert not (out/'owned-app-launch.json').exists() and not (out/'adb-cleanup.json').exists()
+    stage['emulator_expected']=True;stage['app_expected']=True
+    result=owned_absence.inspect(root,root_stage=stage,proc=tmp_path/'no-proc')
+    assert not result['complete'] and 'work/evidence/adb-cleanup.json' in result['missing_records']
+    assert 'work/evidence/owned-app-launch.json' in result['missing_records']
+
+
+def test_readonly_public_inbox_modes_survive_real_umask077(tmp_path,monkeypatch):
+    import os,stat
+    monkeypatch.syspath_prepend(str(ROOT))
+    from handoff_io import public_directory,json_write,read
+    old=os.umask(0o077)
+    try:
+        outer=tmp_path/'outer';outer.mkdir(mode=0o700)
+        private=outer/'private';private.mkdir(mode=0o700)
+        inbox=outer/'control-in';public_directory(inbox)
+        snapshot=inbox/'snapshot';public_directory(snapshot)
+        failure=inbox/'failure-result';public_directory(failure)
+        json_write(snapshot/'context.json',{'public_test_only':True})
+        assert stat.S_IMODE(outer.stat().st_mode)==0o700
+        assert stat.S_IMODE(private.stat().st_mode)==0o700
+        # Check real resulting filesystem access bits, not requested mkdir mode.
+        # World RX is the UID65534 traversal contract for this mounted subtree;
+        # outer0700 is not traversed inside the jail's /control mount.
+        for directory in (inbox,snapshot,failure):
+            actual=stat.S_IMODE(directory.stat().st_mode)
+            assert actual==0o755 and actual&stat.S_IXOTH and actual&stat.S_IROTH
+            assert not actual&stat.S_IWOTH and not actual&stat.S_IWGRP
+            assert os.access(directory,os.R_OK|os.X_OK)
+        public_file=snapshot/'context.json'
+        assert stat.S_IMODE(public_file.stat().st_mode)==0o444
+        assert read(public_file)==b'{"public_test_only":true}'
+    finally:os.umask(old)
+
+
+def test_repeated_outer_recovery_has_unique_records_preserves_originals(tmp_path,monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT))
+    import outer_owner,sibling_supervisor
+    root=tmp_path/'exact-run';root.mkdir()
+    runtime=root/'runtime';runtime.mkdir()
+    (root/'runtime-launch-intent.json').write_text('{}')
+    (root/'runtime-launch.json').write_text(json.dumps({'identity':{'pid':123,'starttime':'unit','boot_id':'unit'}}))
+    original=runtime/'wrapper-cleanup.json';original.write_bytes(b'UNIT ORIGINAL PRESERVE')
+    monkeypatch.setattr(outer_owner,'terminate',lambda record:{'state':'already_absent'})
+    calls=[]
+    def inspect(output,root_stage=None,**kwargs):
+        calls.append(kwargs['record_name'])
+        from handoff_io import json_write
+        json_write(output/kwargs['record_name'],{'complete':True,'scope':'unit-no-native'})
+        return {'complete':True}
+    monkeypatch.setattr(sibling_supervisor,'check_absent',inspect)
+    first=outer_owner.recover(root,attempt_id='a'*32)
+    second=outer_owner.recover(root,attempt_id='b'*32)
+    assert first['complete'] and second['complete']
+    assert (root/('outer-recovery-'+'a'*32+'.json')).is_file()
+    assert (root/('outer-recovery-'+'b'*32+'.json')).is_file()
+    assert len(set(calls))==2 and original.read_bytes()==b'UNIT ORIGINAL PRESERVE'
+    import pytest
+    with pytest.raises(FileExistsError):outer_owner.recover(root,attempt_id='a'*32)
+
+
+def test_archive_stager_only_opens_reviewed_regular_members(tmp_path,monkeypatch):
+    import io,tarfile,zipfile,pytest
+    monkeypatch.syspath_prepend(str(ROOT))
+    import stage_archives
+    with pytest.raises(SystemExit):stage_archives.main()
+    archive=tmp_path/'fixture.zip'
+    with zipfile.ZipFile(archive,'w') as out:out.writestr('regular',b'unit only')
+    with stage_archives.member_stream(archive,'regular',9) as source:assert source.read()==b'unit only'
+    with pytest.raises(ValueError):
+        with stage_archives.member_stream(archive,'../regular',9):pass
+    with pytest.raises(ValueError):
+        with stage_archives.member_stream(archive,'regular',8):pass
+    links=tmp_path/'links.tar'
+    with tarfile.open(links,'w') as out:
+        item=tarfile.TarInfo('linked');item.type=tarfile.SYMTYPE;item.linkname='/unrelated';out.addfile(item)
+    with pytest.raises(ValueError):
+        with stage_archives.member_stream(links,'linked',0):pass
+
+
+def test_held_workflow_is_manual_unregistered_and_recovery_always_runs():
+    import yaml
+    candidate=ROOT/'owned-siblings.yml'
+    data=yaml.safe_load(candidate.read_text())
+    assert set(data.get('on',data.get(True)))=={'workflow_dispatch'}
+    steps=data['jobs']['held-owned-android']['steps']
+    recovery=[step for step in steps if '--recover-only' in step.get('run','')]
+    assert len(recovery)==1 and recovery[0]['if']=="always() && steps.recovery_context.outcome == 'success'"
+    assert 'HELD source/build/runtime review missing' in steps[1]['run']
+    assert not (ROOT.parents[1]/'.github/workflows/owned-siblings.yml').exists()
+    assert not (ROOT/'reviewed-stage-lock.json').exists()
+    assert not (ROOT/'reviewed-source-lock.json').exists()
+
+
+def test_archive_stream_rejects_changed_identity_before_member_yield(tmp_path,monkeypatch):
+    import hashlib,zipfile,pytest
+    monkeypatch.syspath_prepend(str(ROOT))
+    import stage_archives
+    archive=tmp_path/'unit.zip'
+    with zipfile.ZipFile(archive,'w') as out:out.writestr('member',b'unit payload')
+    expected={'bytes':archive.stat().st_size,'sha256':hashlib.sha256(archive.read_bytes()).hexdigest()}
+    archive.chmod(0o444)
+    # Production requires root ownership, even where the digest matches.
+    if archive.stat().st_uid!=0:
+        with pytest.raises(ValueError):
+            with stage_archives.member_stream(archive,'member',12,expected=expected):pass
+    else:
+        with stage_archives.member_stream(archive,'member',12,expected=expected) as stream:assert stream.read()==b'unit payload'
+    wrong=dict(expected,sha256='0'*64)
+    with pytest.raises(ValueError):
+        with stage_archives.member_stream(archive,'member',12,expected=wrong):pass
+    archive.chmod(0o644)
+    with pytest.raises(ValueError):
+        with stage_archives.member_stream(archive,'member',12,expected=expected):pass
+
+
+def test_recovery_missing_identity_fails_but_continues_other_role(tmp_path,monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT))
+    import outer_owner,sibling_supervisor
+    root=tmp_path/'synthetic-recovery';root.mkdir()
+    (root/'runtime-launch-intent.json').write_text('{}')
+    (root/'control-launch-intent.json').write_text('{}')
+    (root/'control-launch.json').write_text(json.dumps({'identity':{'synthetic':True}}))
+    checked=[]
+    monkeypatch.setattr(outer_owner,'terminate',lambda identity:checked.append(identity) or {'state':'unit_absent'})
+    monkeypatch.setattr(sibling_supervisor,'check_absent',lambda *args,**kwargs:{'complete':True})
+    result=outer_owner.recover(root,attempt_id='c'*32)
+    assert not result['complete'] and result['errors']==[{'role':'runtime','class':'RuntimeError'}]
+    assert result['roles'][0]['state']=='expected_but_unverified'
+    assert result['roles'][1]['state']=='verified_absent' and checked==[{'synthetic':True}]
+
+
+def test_recovery_attempt_intent_precedes_relay_effect_and_reuse_cannot_signal(tmp_path,monkeypatch):
+    import pytest
+    monkeypatch.syspath_prepend(str(ROOT))
+    import outer_owner
+    root=tmp_path/'synthetic-recovery';root.mkdir();effects=[]
+    def terminate(identity):
+        assert (root/('outer-recovery-intent-'+'d'*32+'.json')).is_file()
+        effects.append(identity);raise ProcessLookupError('unit fault, no real signal')
+    monkeypatch.setattr(outer_owner,'terminate',terminate)
+    result=outer_owner.recover(root,attempt_id='d'*32,relay_identity={'synthetic':True})
+    assert not result['complete'] and result['errors']==[{'role':'relay','class':'ProcessLookupError'}]
+    with pytest.raises(FileExistsError):outer_owner.recover(root,attempt_id='d'*32,relay_identity={'synthetic':True})
+    assert len(effects)==1
+
+
+def test_negative_app_source_preparation_is_closed_and_keeps_tcp_scope(monkeypatch):
+    import pytest
+    monkeypatch.syspath_prepend(str(ROOT))
+    from app_negative_preparation import prepare
+    source=(ROOT/'app/src/org/mobius/ownedfixture/FixtureActivity.java').read_text()
+    positive,ca,record=prepare(source,b'unit positive, not used as certificate')
+    assert positive==source and record['tls_scenario']=='positive'
+    wrong,ca,record=prepare(source,b'unit positive',scenario='wrong-hostname')
+    assert 'createSocket(tunnel, "owned-name-mismatch.invalid", ORIGIN_PORT, true)' in wrong
+    assert 'new InetSocketAddress("127.0.0.1", PROXY_PORT)' in wrong
+    assert 'setEndpointIdentificationAlgorithm("HTTPS")' in wrong
+    assert 'parameters.setServerNames(java.util.Collections.emptyList());' in wrong
+    assert 'OWNED_FIXTURE_TLS_BEGIN' in wrong and 'OWNED_FIXTURE_TLS_ESTABLISHED' in wrong
+    assert record['negative_runtime_not_executed'] and record['tcp_and_connect_destination_unchanged']
+    for case in ['arbitrary-host','trust-all','disabled-verifier']:
+        with pytest.raises(ValueError):prepare(source,b'unit',scenario=case)
+    with pytest.raises(ValueError):prepare(source,b'unit',scenario='untrusted-ca')
+    with pytest.raises(ValueError):prepare(source,b'unit',scenario='untrusted-ca',negative_public_ca_der=b'unit')
+    with pytest.raises(ValueError):prepare(source,b'unit',scenario='positive',negative_public_ca_der=b'other')
+
+
+def test_negative_app_anchor_requires_distinct_public_key_not_only_certificate(monkeypatch):
+    import pytest
+    from datetime import datetime,timedelta,timezone
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.serialization import Encoding
+    from cryptography.x509.oid import NameOID
+    monkeypatch.syspath_prepend(str(ROOT))
+    from app_negative_preparation import prepare
+    source=(ROOT/'app/src/org/mobius/ownedfixture/FixtureActivity.java').read_text()
+    # Ephemeral unit-test keys only, never written and never used for app traffic.
+    key=ec.generate_private_key(ec.SECP256R1());other=ec.generate_private_key(ec.SECP256R1())
+    def certificate(key,serial):
+        name=x509.Name([x509.NameAttribute(NameOID.COMMON_NAME,'synthetic unit CA')]);now=datetime.now(timezone.utc)
+        return (x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key())
+            .serial_number(serial).not_valid_before(now-timedelta(minutes=1)).not_valid_after(now+timedelta(minutes=1))
+            .add_extension(x509.BasicConstraints(ca=True,path_length=None),critical=True)
+            .sign(key,hashes.SHA256()).public_bytes(Encoding.DER))
+    positive=certificate(key,1);same_key=certificate(key,2);negative=certificate(other,3)
+    with pytest.raises(ValueError,match='different public key'):
+        prepare(source,positive,scenario='untrusted-ca',negative_public_ca_der=same_key)
+    prepared,embedded,record=prepare(source,positive,scenario='untrusted-ca',negative_public_ca_der=negative)
+    assert prepared==source and embedded==negative and record['tls_scenario']=='untrusted-ca'
+
+
+def test_static_elf_metadata_is_bounded_data_not_executed(tmp_path,monkeypatch):
+    import struct,pytest
+    monkeypatch.syspath_prepend(str(ROOT))
+    from elf_metadata import inspect
+    assert inspect(b'not an executable')['kind']=='non-ELF'
+    script=inspect(b'#!/bin/sh\nnever executed')
+    assert script['kind']=='script' and not script['object_executed'] and not script['dependency_closure_resolved']
+    data=bytearray(512)
+    identity=b'\x7fELF'+bytes([2,1,1])+bytes(9)
+    struct.pack_into('<16sHHIQQQIHHHHHH',data,0,identity,3,62,1,0,64,0,0,64,56,2,0,0,0)
+    struct.pack_into('<IIQQQQQQ',data,64,1,4,0,0x400000,0,512,512,4096)
+    struct.pack_into('<IIQQQQQQ',data,120,2,4,192,0x4000c0,0,64,64,8)
+    table=b'\x00libunit.so\x00$ORIGIN/unit\x00'
+    struct.pack_into('<qQqQqQqQ',data,192,5,0x400100,10,len(table),1,1,0,0)
+    data[256:256+len(table)]=table
+    result=inspect(bytes(data))
+    assert result['needed']==['libunit.so'] and result['interpreter'] is None
+    assert not result['object_executed'] and not result['dependency_closure_resolved']
+    with pytest.raises(ValueError):inspect(bytes(data[:220]))
+    data[5]=2
+    with pytest.raises(ValueError):inspect(bytes(data))
+
+
+def test_recovery_refuses_other_workflow_attempt_source_or_context_before_effects(monkeypatch):
+    import pytest
+    monkeypatch.syspath_prepend(str(ROOT))
+    import outer_owner
+    env={'GITHUB_RUN_ID':'123','GITHUB_RUN_ATTEMPT':'2','GITHUB_SHA':'a'*40,'REVIEWED_SHA':'a'*40}
+    fields=outer_owner.workflow_fields(env)
+    context={**fields,'context_id':'b'*32,'owner_launch_expected':True}
+    owner={'root':'/opt/d061-owned-android-run-'+'c'*32,'run_id':'c'*32,'workflow_context':context}
+    assert outer_owner.validate_workflow_owner(fields,context,owner)==Path(owner['root'])
+    for key,value in [('workflow_run_id','124'),('workflow_attempt','3'),('reviewed_sha','d'*40),('context_id','e'*32)]:
+        changed={**context,key:value}
+        with pytest.raises(ValueError):outer_owner.validate_workflow_owner(fields,context,{**owner,'workflow_context':changed})
+    with pytest.raises(ValueError):outer_owner.workflow_fields({**env,'GITHUB_SHA':'d'*40})
+    with pytest.raises(ValueError):outer_owner.workflow_fields({**env,'GITHUB_RUN_ID':'../other'})
+    # The recovered root comes only from exact identity equality, not ambient
+    # existence. Missing original identity remains unverified in recovery tests.
+    assert '123-2' in str(outer_owner.workflow_context_path(fields))
+
+
+def test_archive_fifo_rejected_nonblocking_by_both_inspection_and_session(tmp_path,monkeypatch):
+    import os,stat,pytest,time
+    monkeypatch.syspath_prepend(str(ROOT))
+    import stage_archives
+    fifo=tmp_path/'archive-fifo';os.mkfifo(fifo)
+    original_stat=os.fstat;original_open=os.open;opened=[]
+    class RootPolicyOnly:
+        def __init__(self,meta):self.meta=meta
+        @property
+        def st_uid(self):return 0
+        def __getattr__(self,key):return getattr(self.meta,key)
+    # Synthetic ownership shim permits reaching the actual FIFO type/open test;
+    # it does not simulate a root session or make the FIFO a regular file.
+    monkeypatch.setattr(stage_archives.os,'fstat',lambda fd:RootPolicyOnly(original_stat(fd)))
+    def checked_open(path,flags,*args,**kwargs):
+        if path=='archive-fifo':
+            assert flags&os.O_NONBLOCK
+            opened.append(path)
+        return original_open(path,flags,*args,**kwargs)
+    monkeypatch.setattr(stage_archives.os,'open',checked_open)
+    started=time.monotonic()
+    with pytest.raises(ValueError):
+        with stage_archives.member_stream(fifo,'member',1):pass
+    lock={'archives':[{'name':fifo.name,'bytes':1,'sha256':'0'*64}]}
+    with pytest.raises(ValueError):
+        with stage_archives.verify_archives(tmp_path,lock):pass
+    assert len(opened)==2 and time.monotonic()-started<1
+
+
+def test_archive_session_retains_one_verified_fd_hash_and_reader(tmp_path,monkeypatch):
+    import os,zipfile,hashlib
+    monkeypatch.syspath_prepend(str(ROOT))
+    import stage_archives
+    archive=tmp_path/'synthetic.zip'
+    with zipfile.ZipFile(archive,'w') as out:
+        out.writestr('first',b'first unit');out.writestr('second',b'second unit')
+    archive.chmod(0o444)
+    lock={'archives':[{'name':archive.name,'bytes':archive.stat().st_size,'sha256':hashlib.sha256(archive.read_bytes()).hexdigest()}]}
+    original_stat=os.fstat;original_hash=hashlib.sha256;hashes=[]
+    class RootPolicyOnly:
+        def __init__(self,meta):self.meta=meta
+        @property
+        def st_uid(self):return 0
+        def __getattr__(self,key):return getattr(self.meta,key)
+    monkeypatch.setattr(stage_archives.os,'fstat',lambda fd:RootPolicyOnly(original_stat(fd)))
+    def counted_hash(*args,**kwargs):hashes.append(True);return original_hash(*args,**kwargs)
+    monkeypatch.setattr(stage_archives.hashlib,'sha256',counted_hash)
+    with stage_archives.verify_archives(tmp_path,lock) as (archives,budget):
+        container=archives[archive.name];fd=container.source.fileno();reader=container.reader
+        for member,expected in [('first',b'first unit'),('second',b'second unit')]:
+            with container.stream(member,len(expected)) as source:assert source.read()==expected
+            assert container.source.fileno()==fd and container.reader is reader
+        assert len(hashes)==1
+    assert container.source.closed
+
+
+def test_staging_session_aggregate_time_bytes_and_count_caps(monkeypatch):
+    import pytest
+    monkeypatch.syspath_prepend(str(ROOT))
+    import stage_archives
+    now=[0];budget=stage_archives.Budget(clock=lambda:now[0])
+    now[0]=stage_archives.MAX_SECONDS+1
+    with pytest.raises(TimeoutError):budget.check()
+    with pytest.raises(ValueError):stage_archives.Budget().check(files=stage_archives.MAX_FILES+1)
+    with pytest.raises(ValueError):stage_archives.Budget().check(bytes=stage_archives.MAX_BYTES+1)
+
+
+def test_synthetic_stage_aliases_stream_once_with_real_modes_and_byte_accounting(tmp_path,monkeypatch):
+    import os,zipfile,hashlib,stat
+    monkeypatch.syspath_prepend(str(ROOT))
+    import stage_archives
+    archive=tmp_path/'synthetic.zip';content=b'synthetic source bytes, never executable code'
+    with zipfile.ZipFile(archive,'w') as out:out.writestr('same-source',content)
+    archive.chmod(0o444)
+    destinations=['/fixture/contained_driver.py','/runtime/bin/python','/usr/bin/setpriv']
+    rows=[{'source':path.lstrip('/'),'destination':path,'archive':archive.name,'member':'same-source',
+        'size':len(content),'sha256':hashlib.sha256(content).hexdigest(),'mode':0o555} for path in destinations]
+    manifest={'status':'EXACT_REVIEWED_ANDROID_CLOSURE','files':rows}
+    lock={'status':'EXACT_REVIEWED_SIBLING_STAGE_LOCK','sdk_license_reviewed':True,
+        'archives':[{'name':archive.name,'bytes':archive.stat().st_size,'sha256':hashlib.sha256(archive.read_bytes()).hexdigest()}],
+        'roles':{'runtime':manifest}}
+    original_stat=os.fstat
+    class RootPolicyOnly:
+        def __init__(self,meta):self.meta=meta
+        @property
+        def st_uid(self):return 0
+        def __getattr__(self,key):return getattr(self.meta,key)
+    # Only metadata identity policy is mocked. Real byte streaming, filesystem
+    # writes/fsync/chmod and budget accounting operate on tiny synthetic data.
+    monkeypatch.setattr(stage_archives.os,'fstat',lambda fd:RootPolicyOnly(original_stat(fd)))
+    monkeypatch.setattr(stage_archives.os,'geteuid',lambda:0)
+    root=tmp_path/'synthetic-role'
+    monkeypatch.setitem(stage_archives.ROLES,'runtime',(str(root),'/fixture/contained_driver.py'))
+    calls=[];original_stream=stage_archives.Container.stream
+    def counted_stream(self,*args,**kwargs):calls.append(args);return original_stream(self,*args,**kwargs)
+    monkeypatch.setattr(stage_archives.Container,'stream',counted_stream)
+    mask=os.umask(0o077)
+    try:
+        with stage_archives.verify_archives(tmp_path,lock) as (archives,budget):
+            result=stage_archives.stage_role('runtime',lock,archives,budget)
+            assert budget.files==3 and budget.bytes==3*len(content)
+    finally:os.umask(mask)
+    assert len(calls)==1 and result['staging_only_no_code_executed']
+    assert stat.S_IMODE(root.stat().st_mode)==0o755
+    for row in rows:
+        path=root/row['source'];assert path.read_bytes()==content
+        assert stat.S_IMODE(path.stat().st_mode)==0o555
+        assert stat.S_IMODE(path.parent.stat().st_mode)==0o755
+
+
+def test_recover_only_main_stale_workflow_locator_has_no_signal_or_cleanup(tmp_path,monkeypatch):
+    import pytest,sys
+    monkeypatch.syspath_prepend(str(ROOT))
+    import outer_owner
+    fields={'workflow_run_id':'123','workflow_attempt':'2','reviewed_sha':'a'*40}
+    context={**fields,'context_id':'b'*32,'owner_launch_expected':True}
+    stale={'root':'/opt/d061-owned-android-run-'+'c'*32,'run_id':'c'*32,
+        'workflow_context':{**context,'workflow_attempt':'1'},'relay_identity':{'synthetic':True}}
+    monkeypatch.setattr(outer_owner,'APPROVED_FOR_EXECUTION',True)
+    monkeypatch.setattr(outer_owner.os,'geteuid',lambda:0)
+    monkeypatch.setattr(sys,'argv',['outer_owner.py','--recover-only'])
+    monkeypatch.setattr(outer_owner,'workflow_fields',lambda env:fields)
+    monkeypatch.setattr(outer_owner,'trusted_context',lambda f:context)
+    monkeypatch.setattr(outer_owner,'read',lambda *args:json.dumps(stale).encode())
+    effects=[]
+    monkeypatch.setattr(outer_owner,'terminate',lambda *args,**kwargs:effects.append('signal'))
+    monkeypatch.setattr(outer_owner,'recover',lambda *args,**kwargs:effects.append('cleanup'))
+    monkeypatch.setattr(outer_owner,'json_write',lambda *args,**kwargs:effects.append('write'))
+    with pytest.raises(ValueError,match='different workflow'):outer_owner.main()
+    assert not effects
+
+
+def test_zip_metadata_preflight_refuses_declarations_before_zipfile_allocation(tmp_path,monkeypatch):
+    import io,zipfile,struct,pytest
+    monkeypatch.syspath_prepend(str(ROOT))
+    import stage_archives
+    from zip_preflight import preflight
+    buffer=io.BytesIO()
+    with zipfile.ZipFile(buffer,'w') as out:out.writestr('unit',b'unit source only')
+    data=buffer.getvalue();end=data.rfind(b'PK\x05\x06')
+    valid=preflight(io.BytesIO(data));assert valid['entries']==1 and not valid['hard_resource_or_elapsed_bound']
+    bad=bytearray(data);struct.pack_into('<HH',bad,end+8,50001,50001)
+    with pytest.raises(ValueError):preflight(io.BytesIO(bytes(bad)))
+    archive=tmp_path/'oversized-directory.zip';archive.write_bytes(bad)
+    constructors=[]
+    def no_allocation(*args,**kwargs):constructors.append(True);raise AssertionError('ZipFile allocated before preflight')
+    monkeypatch.setattr(stage_archives.zipfile,'ZipFile',no_allocation)
+    with pytest.raises(ValueError):
+        with stage_archives.member_stream(archive,'unit',16):pass
+    assert not constructors
+    for field,value in [(12,32*1024**2+1),(16,0xffffffff)]:
+        invalid=bytearray(data);struct.pack_into('<I',invalid,end+field,value)
+        with pytest.raises(ValueError):preflight(io.BytesIO(bytes(invalid)))
+    invalid=bytearray(data);struct.pack_into('<HH',invalid,end+8,65535,65535)
+    with pytest.raises(ValueError):preflight(io.BytesIO(bytes(invalid)))

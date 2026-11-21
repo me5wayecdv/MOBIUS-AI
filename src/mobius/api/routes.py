@@ -1731,7 +1731,8 @@ def execute_poc(
     if payload.investigation_id != scan_id:
         raise HTTPException(status_code=422, detail="plan investigation_id must match route")
     ctx = get_context()
-    result = PoCExecutionService(session, ctx.store, native_adapter=ctx.native_fixture_adapter).execute_and_persist(payload)
+    result = PoCExecutionService(session, ctx.store, native_adapter=ctx.native_fixture_adapter,
+        owned_android_adapter=ctx.owned_android_fixture_adapter).execute_and_persist(payload)
     return {"run_id": result.run_id, "plan_id": result.plan_id, "status": result.status,
             "evidence_ids": list(result.evidence_ids), "input_sha256": result.input_sha256,
             "output_sha256": result.output_sha256, "output": result.result.output_json}

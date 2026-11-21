@@ -47,10 +47,11 @@ class PersistedPoCExecution:
 class PoCExecutionService:
     """Execute through the D-041 allowlist and persist the complete reproducibility record."""
 
-    def __init__(self, session: Session, artifact_store, *, native_adapter=None) -> None:
+    def __init__(self, session: Session, artifact_store, *, native_adapter=None, owned_android_adapter=None) -> None:
         self.session = session
         self.artifact_store = artifact_store
         self.native_adapter = native_adapter
+        self.owned_android_adapter = owned_android_adapter
 
     def execute_and_persist(self, plan: PoCTestPlan) -> PersistedPoCExecution:
         cancel_event = Event()
@@ -61,7 +62,9 @@ class PoCExecutionService:
         native_output = None
         try:
             from .phantom import adapter_from_env
-            if plan.target_kind == "native_local_fixture":
+            if plan.target_kind == "owned_android_fixture":
+                result, native_output = self._run_owned_android(plan, cancel_event)
+            elif plan.target_kind == "native_local_fixture":
                 result, native_output = self._run_native(plan, cancel_event)
             else:
                 result = SafePoCRunner(
@@ -106,10 +109,14 @@ class PoCExecutionService:
                 break
             if preparation:
                 raise ValueError("bounded failed-attempt record exceeds approved total output budget")
-            from .native_local_fixture import NativeFixtureRequest
-            request=NativeFixtureRequest(**result.output_json['binding'])
+            if plan.target_kind=='owned_android_fixture':
+                from .owned_android_fixture import OwnedAppRequest as Request
+            else:
+                from .native_local_fixture import NativeFixtureRequest as Request
+            request=Request(**result.output_json['binding'])
             native_output=self._rejected_output(request,native_output,'total_output_budget',retain=False)
-            result=self._native_result(plan,request,native_output,result.started_at,result.duration_ms)
+            result=(self._owned_android_result if plan.target_kind=='owned_android_fixture' else self._native_result)(
+                plan,request,native_output,result.started_at,result.duration_ms)
         input_sha = hashlib.sha256(input_bytes).hexdigest()
         output_sha = hashlib.sha256(output_bytes).hexdigest()
 
@@ -121,9 +128,12 @@ class PoCExecutionService:
                     investigation_id=plan.investigation_id,
                     kind=EvidenceKind.HTTP if name == "initial.native" else EvidenceKind.TOOL_OUTPUT,
                     content=content,
-                    summary=(f"Native local fixture {name}; plan {plan.id}; anchor {plan.target_sha256}; "
+                    summary=(f"Owned Android fixture {name}; plan {plan.id}; APK source {plan.target_sha256}; "
+                             "controlled owned-app test, not vulnerability evidence" if plan.target_kind=="owned_android_fixture"
+                             else f"Native local fixture {name}; plan {plan.id}; anchor {plan.target_sha256}; "
                              "stdlib-loopback traffic, NOT APK traffic"),
-                    produced_by="NATIVE_LOCAL", evidence_id=reserved[name],
+                    produced_by="OWNED_ANDROID" if plan.target_kind=="owned_android_fixture" else "NATIVE_LOCAL",
+                    evidence_id=reserved[name],
                 )
                 if item.id != reserved[name]:
                     raise ValueError("native evidence reservation changed before write")
@@ -190,7 +200,7 @@ class PoCExecutionService:
             if item.id not in {plan_evidence.id, result_evidence.id, log_evidence.id}:
                 self.session.merge(PoCRunEvidenceRow(
                     investigation_id=plan.investigation_id, run_id=run_id,
-                    evidence_id=item.id, kind="native-local",
+                    evidence_id=item.id, kind="owned-android" if plan.target_kind=="owned_android_fixture" else "native-local",
                 ))
         self.session.flush()
         SqlEventStore(self.session).emit(
@@ -253,14 +263,69 @@ class PoCExecutionService:
         duration = max(0,int((time.monotonic()-clock)*1000))
         return self._native_result(plan,request,output,started,duration),output
 
+    def _run_owned_android(self,plan,cancel_event):
+        from .owned_android_fixture import OwnedAppRequest,OwnedAppAdapter
+        from .poc_runner import PoCAdapterUnavailable,PoCExecutionError
+        import time
+        SafePoCRunner(self.session).validate_authority(plan)
+        with Session(bind=self.session.get_bind()) as fresh:
+            SafePoCRunner(fresh).validate_authority(plan)
+        if self.owned_android_adapter is None:
+            raise PoCAdapterUnavailable("owned Android host adapter is disabled by default")
+        if cancel_event.is_set():raise PoCExecutionError("cancelled before owned APK host launch")
+        plan_bytes=json.dumps(plan.model_dump(mode='json'),sort_keys=True,separators=(',',':')).encode()
+        if len(plan_bytes)+12288>plan.max_output_bytes:raise PoCExecutionError('owned APK failed-attempt reserve')
+        request=OwnedAppRequest.from_plan(plan);request.validate()
+        started,clock=utcnow(),time.monotonic();output=None;phase='host_exception'
+        try:
+            output=self.owned_android_adapter.execute(request,cancel_check=cancel_event.is_set)
+            phase='post_host_authority_rejected'
+            with Session(bind=self.session.get_bind()) as fresh:
+                SafePoCRunner(fresh).validate_authority(plan)
+            phase='host_output_validation_rejected'
+            OwnedAppAdapter.validate(request,output)
+            phase='total_duration_or_cancel_rejected'
+            if output.status=='passed' and (cancel_event.is_set() or time.monotonic()-clock>130):
+                raise PoCExecutionError('owned APK cancelled or exceeded approved total duration')
+        except Exception as error:
+            output=self._rejected_output(request,output,phase,error_class=type(error).__name__)
+        duration=max(0,int((time.monotonic()-clock)*1000))
+        return self._owned_android_result(plan,request,output,started,duration),output
+
+    def _owned_android_result(self,plan,request,output,started,duration):
+        from .owned_android_fixture import TRAFFIC_SOURCE
+        from .poc_runner import PoCStepResult
+        payload={'binding':asdict(request),'traffic_source':TRAFFIC_SOURCE,'apk_is_intended_traffic_source':True,
+            'apk_execution':True if output.status=='passed' else None,
+            'apk_execution_status':'verified' if output.status=='passed' else 'unverified_or_partial_inspect_originals','simulation_only':False,'profile':request.profile,
+            'host_status':output.status,'host_failure_code':output.failure_code,'tls_negative_controls':'UNTESTED',
+            'native_artifacts':[{'name':name,'sha256':hashlib.sha256(content).hexdigest(),'bytes':len(content)}
+                for name,content in sorted(output.artifacts.items())]}
+        step=PoCStepResult(0,'capture_owned_android_fixture_v1',request.profile,output.status,
+            output.status=='passed',output.status=='passed',None,duration,'owned-android',self.owned_android_adapter.VERSION,
+            'Controlled owned-app capture/request replay only' if output.status=='passed'
+            else 'Failed/rejected owned-app host attempt, no traffic or cleanup success inferred')
+        return PoCExecutionResult(plan.id,plan.investigation_id,plan.target_sha256,output.status,started,utcnow(),
+            duration,(step,),payload,output.tool_versions,
+            ('Owned fixture integration test only, not a third-party app or vulnerability finding',
+             'TLS negative controls and lifecycle fault paths require their own actual evidence'),
+            ({'action':'stop_owned_android_fixture','status':'completed' if output.status=='passed' else 'inspect_failure_evidence',
+              'detail':'validated stage-aware original cleanup/absence' if output.status=='passed'
+              else 'failed host diagnostics retained, no absence inferred'},))
+
     @staticmethod
     def _rejected_output(request, output, phase, *, error_class=None, retain=True):
-        from .native_local_fixture import NativeFixtureOutput, REQUIRED
+        from .owned_android_fixture import OwnedAppRequest
+        if isinstance(request,OwnedAppRequest):
+            from .owned_android_fixture import OwnedAppOutput as Output,REQUIRED,DIAGNOSTICS
+        else:
+            from .native_local_fixture import NativeFixtureOutput as Output,REQUIRED
+            DIAGNOSTICS=frozenset()
         files={}
         inventory=[]
         originals=getattr(output,'artifacts',{})
         if isinstance(originals,dict):
-            allowed=REQUIRED|{'policy.json','proxy.log','origin.log','host-failure.json','workflow-command.json'}
+            allowed=REQUIRED|DIAGNOSTICS|{'policy.json','proxy.log','origin.log','host-failure.json','workflow-command.json'}
             for name,content in list(originals.items())[:40]:
                 if not isinstance(name,str) or not isinstance(content,bytes):continue
                 inventory.append({'name':name[:80],'bytes':len(content),'sha256':hashlib.sha256(content).hexdigest()})
@@ -276,7 +341,7 @@ class PoCExecutionService:
             'binding_json_source':'service_expected_request_not_host_proof',
             'originals_retained':retain,'not_a_capture_or_cleanup_proof':True},
             sort_keys=True,separators=(',',':')).encode()
-        return NativeFixtureOutput(request,files,tuple(str(v)[:120] for v in getattr(output,'tool_versions',())[:8]),
+        return Output(request,files,tuple(str(v)[:120] for v in getattr(output,'tool_versions',())[:8]),
             'failed','product_rejected')
 
     def _native_result(self,plan,request,output,started,duration):
@@ -342,14 +407,18 @@ class PoCExecutionService:
             or row.input_json.get("authorization_id")!=row.authorization_id
             or row.input_json.get("approval_id")!=row.approval_id):
             raise ValueError("run/plan/case/target binding mismatch")
-        if row.input_json.get("target_kind")=="native_local_fixture":
-            from .native_local_fixture import REQUIRED, NativeFixtureRequest, NativeFixtureOutput, NativeLocalFixtureAdapter
+        if row.input_json.get("target_kind") in {"native_local_fixture","owned_android_fixture"}:
+            owned=row.input_json['target_kind']=='owned_android_fixture'
+            if owned:
+                from .owned_android_fixture import REQUIRED,OwnedAppRequest as Request,OwnedAppOutput as Output,OwnedAppAdapter as Adapter
+            else:
+                from .native_local_fixture import REQUIRED,NativeFixtureRequest as Request,NativeFixtureOutput as Output,NativeLocalFixtureAdapter as Adapter
             payload=row.output_json["output_json"]
             manifest=payload["native_artifacts"]
             if len({x["name"] for x in manifest})!=len(manifest):raise ValueError("duplicate native artifact name")
             mapping={x["name"]:x for x in manifest}
             if row.status=="passed" and not REQUIRED<=mapping.keys():raise ValueError("required native artifact mapping missing")
-            native_refs={x["evidence_id"]:x for x in references if x["kind"]=="native-local"}
+            native_refs={x["evidence_id"]:x for x in references if x["kind"]==("owned-android" if owned else "native-local")}
             if {x["evidence_id"] for x in manifest}!=set(native_refs):raise ValueError("native links incomplete/substituted")
             files={}
             for name,item in mapping.items():
@@ -357,19 +426,23 @@ class PoCExecutionService:
                 if ref["sha256"]!=item["sha256"] or ref["bytes"]!=item["bytes"]:
                     raise ValueError("native artifact evidence mapping changed")
                 files[name]=linked_bytes(ref)
-            request=NativeFixtureRequest(**payload["binding"])
+            request=Request(**payload["binding"])
             if (request.plan_id!=row.plan_id or request.investigation_id!=investigation_id
                 or request.authorization_id!=row.authorization_id or request.approval_id!=row.approval_id
-                or request.anchor_apk_sha256!=row.target_sha256
-                or request.anchor_package!=row.input_json["target_package"]):
+                or (request.apk_sha256 if owned else request.anchor_apk_sha256)!=row.target_sha256
+                or (request.package if owned else request.anchor_package)!=row.input_json["target_package"]):
                 raise ValueError("native host binding differs from persisted plan/run")
             expected_plan=hashlib.sha256(encoded({k:v for k,v in row.input_json.items() if k!="approval_id"})).hexdigest()
             if request.plan_sha256!=expected_plan:raise ValueError("native approved plan digest mismatch")
-            NativeLocalFixtureAdapter.validate(request,NativeFixtureOutput(request,files,tuple(row.tool_versions),
+            if owned and request.public_ca_sha256!=row.input_json['steps'][0]['input_values']['public_ca_sha256']:
+                raise ValueError('owned APK public CA differs from approved plan')
+            Adapter.validate(request,Output(request,files,tuple(row.tool_versions),
                 payload.get("host_status","passed"),payload.get("host_failure_code")))
         return {"run_id":row.id,"plan_id":row.plan_id,"investigation_id":investigation_id,
                 "authorization_id":row.authorization_id,"approval_id":row.approval_id,
-                "anchor_apk_sha256":row.target_sha256,"status":row.status,
+                **({"actual_apk_sha256":row.target_sha256,"traffic_source":"owned-android-app-process-fixed-loopback"}
+                   if row.input_json.get("target_kind")=="owned_android_fixture" else {"anchor_apk_sha256":row.target_sha256}),
+                "status":row.status,
                 "input_sha256":row.input_sha256,"output_sha256":row.output_sha256,
                 "evidence":references,"output":row.output_json}
 

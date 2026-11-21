@@ -1,0 +1,754 @@
+"""HELD trusted outer supervisor for archive staging. Source only, not reviewed for activation.
+
+Honest limits. Size scans are polling, NOT a disk quota (a fast writer can overshoot between polls, bounded
+by write rate and RLIMIT_FSIZE per file). Descendants are contained only by the child's own session plus
+per-process pidfd signalling found through /proc, NOT by a PID namespace or cgroup: a process that leaves
+the session (setsid) escapes it, so production still needs a namespace/cgroup boundary. RLIMIT_NPROC is
+per-UID and is not claimed. Exit status 0 is never proof: completion needs verified group absence, the
+exact reviewed lock identity, the report/closure/file-hash content and a clean bounded final validation.
+Root mutation (quarantine) happens ONLY after absence is verified; otherwise the state is recorded UNVERIFIED.
+"""
+import ctypes
+import hashlib
+import json
+import os
+from pathlib import Path
+import re
+import resource
+import secrets
+import select
+import signal
+import stat as _stat
+import subprocess
+import sys
+import time
+
+APPROVED_FOR_EXECUTION = False
+WALL_SECONDS = 1200
+FINAL_SECONDS = 600
+CPU_SECONDS = 1100
+MAX_OUTPUT_BYTES = 25 * 1024**3
+MAX_OUTPUT_FILES = 100500
+MAX_OUTPUT_DIRS = 20000
+MAX_FILE_BYTES = 4 * 1024**3 + 4096
+MAX_OPEN = 256
+MAX_ADDRESS_SPACE = 8 * 1024**3
+MAX_SCAN_DEPTH = 32
+POLL = 1.0
+ABSENCE_WAIT = 10.0
+REAP_WAIT = 10.0
+STAGER = Path(__file__).with_name('stage_archives.py')
+PR_SET_PDEATHSIG = 1
+ROLE_NAMES = ('runtime', 'control')
+
+
+# ---------------------------------------------------------------- anchored filesystem helpers
+def open_dir(path):
+    """Open an absolute directory by walking EVERY component with O_NOFOLLOW|O_DIRECTORY from '/'."""
+    path = Path(path)
+    if not path.is_absolute():
+        raise ValueError('absolute path required')
+    fd = os.open('/', os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in path.parts[1:]:
+            if part in ('', '.', '..'):
+                raise ValueError('non-canonical path component')
+            nxt = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+            os.close(fd)
+            fd = nxt
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def lexists_anchored(path):
+    path = Path(path)
+    parent = open_dir(path.parent)
+    try:
+        os.stat(path.name, dir_fd=parent, follow_symlinks=False)
+        return True
+    except FileNotFoundError:
+        return False
+    finally:
+        os.close(parent)
+
+
+def read_anchored(path, limit):
+    """Read a regular file through anchored ancestors, O_NOFOLLOW|O_NONBLOCK, bounded."""
+    path = Path(path)
+    parent = open_dir(path.parent)
+    try:
+        fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+    finally:
+        os.close(parent)
+    try:
+        if not _stat.S_ISREG(os.fstat(fd).st_mode):
+            raise ValueError('regular file required')
+        data = os.read(fd, limit + 1)
+        if len(data) > limit:
+            raise ValueError('file exceeds bound')
+        return data
+    finally:
+        os.close(fd)
+
+
+def record(directory, name, value):
+    """Create-exclusive private record file through an anchored directory fd."""
+    dfd = open_dir(directory)
+    try:
+        st = os.fstat(dfd)
+        if st.st_uid != os.geteuid() or st.st_mode & 0o077:
+            raise ValueError('private owned record directory required')
+        fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=dfd)
+        with os.fdopen(fd, 'w') as handle:
+            handle.write(json.dumps(value, sort_keys=True))
+            handle.flush()
+            os.fsync(handle.fileno())
+    finally:
+        os.close(dfd)
+
+
+def walk_root(root, *, max_files=MAX_OUTPUT_FILES, max_dirs=MAX_OUTPUT_DIRS, max_bytes=MAX_OUTPUT_BYTES,
+              deadline=None, clock=time.monotonic, collect=False):
+    """Anchored bounded traversal of one exact root. Counts dirs AND files; budgets/deadline checked per entry.
+
+    Returns (files, dirs, bytes, entries) where entries (if collect) maps relative path -> (size, mode, fd-less).
+    Raises on symlink/special file. Absent root returns None.
+    """
+    try:
+        rfd = open_dir(root)
+    except FileNotFoundError:
+        return None
+    files = dirs = size = 0
+    entries = {}
+
+    def walk(fd, prefix, depth):
+        nonlocal files, dirs, size
+        if depth > MAX_SCAN_DEPTH:
+            raise ValueError('staging output depth ceiling')
+        with os.scandir(fd) as it:
+            for entry in it:
+                if deadline is not None and clock() > deadline:
+                    raise TimeoutError('scan exceeded deadline')
+                st = os.stat(entry.name, dir_fd=fd, follow_symlinks=False)
+                rel = prefix + entry.name
+                if _stat.S_ISDIR(st.st_mode):
+                    dirs += 1
+                    if dirs > max_dirs:
+                        raise ValueError('staging output directory ceiling')
+                    child = os.open(entry.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
+                    try:
+                        walk(child, rel + '/', depth + 1)
+                    finally:
+                        os.close(child)
+                elif _stat.S_ISREG(st.st_mode):
+                    files += 1
+                    size += st.st_size
+                    if files > max_files:
+                        raise ValueError('staging output file ceiling')
+                    if size > max_bytes:
+                        raise ValueError('staging output byte ceiling')
+                    if collect:
+                        entries[rel] = (st.st_size, _stat.S_IMODE(st.st_mode))
+                else:
+                    raise ValueError('non-regular or symlink entry in staging output')
+    try:
+        walk(rfd, '', 0)
+    finally:
+        os.close(rfd)
+    return files, dirs, size, entries
+
+
+def scan_roots(roots, *, max_files=MAX_OUTPUT_FILES, max_dirs=MAX_OUTPUT_DIRS, max_bytes=MAX_OUTPUT_BYTES, **kw):
+    """Budgets are AGGREGATE across all roots: each walk receives only what the earlier roots left."""
+    out = {'files': 0, 'dirs': 0, 'bytes': 0, 'absent_roots': []}
+    for root in roots:
+        res = walk_root(root, max_files=max_files - out['files'], max_dirs=max_dirs - out['dirs'],
+                        max_bytes=max_bytes - out['bytes'], **kw)
+        if res is None:
+            out['absent_roots'].append(str(root))
+        else:
+            out['files'] += res[0]
+            out['dirs'] += res[1]
+            out['bytes'] += res[2]
+    return out
+
+
+def hash_anchored(root, rel, deadline, clock=time.monotonic):
+    rfd = open_dir(root)
+    fd = None
+    try:
+        parts = rel.split('/')
+        cur = rfd
+        opened = []
+        for part in parts[:-1]:
+            cur = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=cur)
+            opened.append(cur)
+        fd = os.open(parts[-1], os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=cur)
+        for d in opened:
+            os.close(d)
+        h = hashlib.sha256()
+        total = 0
+        while block := os.read(fd, 1048576):
+            if clock() > deadline:
+                raise TimeoutError('hash exceeded deadline')
+            total += len(block)
+            h.update(block)
+        return total, h.hexdigest()
+    finally:
+        if fd is not None:
+            os.close(fd)
+        os.close(rfd)
+
+
+def canonical_digest(manifest):
+    return hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+
+def validate_staged(role_roots, lock, report_bytes, *, deadline, clock=time.monotonic):
+    """Content validation: report, closure-lock and every staged file's exact size/mode/sha256, no extras."""
+    report = json.loads(report_bytes)
+    if report.get('no_code_executed') is not True or not isinstance(report.get('results'), list):
+        raise ValueError('report content invalid')
+    by_role = {r.get('role'): r for r in report['results']}
+    if set(by_role) != set(role_roots):
+        raise ValueError('report roles differ from exact owned roots')
+    for role, root in role_roots.items():
+        manifest = lock['roles'][role]
+        row = by_role[role]
+        if row.get('root') != str(root) or row.get('closure_sha256') != canonical_digest(manifest) or row.get('file_count') != len(manifest['files']):
+            raise ValueError('report role identity differs from reviewed lock')
+        walked = walk_root(root, deadline=deadline, clock=clock, collect=True)
+        if walked is None:
+            raise ValueError('role root absent')
+        entries = walked[3]
+        if json.loads(read_anchored(Path(root) / 'closure-lock.json', 16 * 1024**2)) != manifest:
+            raise ValueError('closure-lock content differs from reviewed lock')
+        expected = {f['source']: f for f in manifest['files']}
+        if set(entries) != set(expected) | {'closure-lock.json'}:
+            raise ValueError('staged file set differs from reviewed lock (extra or missing)')
+        for rel, f in expected.items():
+            size, mode = entries[rel]
+            if size != f['size'] or mode != f['mode']:
+                raise ValueError('staged file size/mode differs from reviewed lock')
+            if hash_anchored(root, rel, deadline, clock) != (f['size'], f['sha256']):
+                raise ValueError('staged file digest differs from reviewed lock')
+
+
+# ---------------------------------------------------------------- process identity and containment
+def process_identity(pid):
+    """(pid, pgrp, sid, state, start_ticks) from /proc, or None. start_ticks defeats PID reuse."""
+    try:
+        text = Path('/proc/%d/stat' % pid).read_text()
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+    fields = text[text.rindex(')') + 2:].split()
+    return {'pid': pid, 'state': fields[0], 'pgrp': int(fields[2]), 'sid': int(fields[3]), 'start_ticks': int(fields[19])}
+
+
+def session_members(sid):
+    """Live (non-zombie) pids still in session sid, via a /proc scan."""
+    members = []
+    for entry in os.scandir('/proc'):
+        if entry.name.isdigit():
+            ident = process_identity(int(entry.name))
+            if ident and ident['sid'] == sid and ident['state'] != 'Z':
+                members.append(ident)
+    return members
+
+
+def kill_session_stable(sid, wait=ABSENCE_WAIT, clock=time.monotonic):
+    """Signal each live member through its own pidfd after re-verifying identity; never a numeric kill.
+
+    Repeats until no member remains or the bounded wait expires. Returns the remaining members.
+    """
+    deadline = clock() + wait
+    while True:
+        members = session_members(sid)
+        if not members:
+            return []
+        for ident in members:
+            try:
+                pfd = os.pidfd_open(ident['pid'])
+            except ProcessLookupError:
+                continue
+            except OSError:
+                continue  # cannot signal stably: the member stays listed, so absence is NOT verified
+            try:
+                again = process_identity(ident['pid'])
+                if again and again['sid'] == sid and again['start_ticks'] == ident['start_ticks']:
+                    signal.pidfd_send_signal(pfd, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            finally:
+                os.close(pfd)
+        if clock() > deadline:
+            return session_members(sid)
+        time.sleep(0.02)
+
+
+def validate_stage_lock(lock, roots):
+    """Pre-spawn: the SAME production validators the stager uses (no weaker duplicate schema), plus the exact staging-row checks
+    stage_role applies. Raises ValueError on any defect, before any record or effect."""
+    here = str(Path(__file__).resolve().parent)
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    import stage_archives as sa
+    import namespace_supervisor as ns
+    if not isinstance(lock, dict) or lock.get('status') != 'EXACT_REVIEWED_SIBLING_STAGE_LOCK':
+        raise ValueError('unresolved or incomplete reviewed lock')
+    if lock.get('sdk_license_reviewed') is not True:
+        raise ValueError('explicit scoped license review missing')
+    if not isinstance(lock.get('roles'), dict) or set(lock['roles']) != set(roots):
+        raise ValueError('reviewed lock roles must equal the exact owned roots (missing or unexpected role)')
+    names = {row['name'] for row in sa.archive_rows(lock)}
+    files = total = 0
+    for role in roots:
+        manifest = lock['roles'][role]
+        ns.validate_manifest(manifest, role)
+        seen = set()
+        groups = {}
+        for row in manifest['files']:
+            source = sa.relative(row['source'])
+            member = sa.relative(row['member'])
+            if row.get('archive') not in names or source in seen or source == 'closure-lock.json':
+                raise ValueError('unique exact source archive/path required')
+            seen.add(source)
+            group = groups.setdefault((row['archive'], member), [])
+            group.append(row)
+            if len(group) > 16 or any((x['size'], x['sha256'], x['mode']) != (row['size'], row['sha256'], row['mode']) for x in group):
+                raise ValueError('member alias fanout or content mismatch')
+        files += len(manifest['files'])
+        total += sum(x['size'] for x in manifest['files'])
+    if files > sa.MAX_FILES or total > sa.MAX_BYTES:
+        raise ValueError('aggregate staging declarations exceed session ceiling')
+
+
+NS_GET_PARENT = 0xb702
+NS_ESTABLISH_WAIT = 5.0
+
+
+class NamespaceInspectionError(RuntimeError):
+    """A /proc or namespace inspection could not be completed: absence cannot be claimed."""
+
+
+def open_child_pid_ns(pid):
+    """Open a trusted handle on the PID namespace the process's CHILDREN are created in, or None. The fd keeps it alive."""
+    try:
+        return os.open('/proc/%d/ns/pid_for_children' % pid, os.O_RDONLY | os.O_CLOEXEC)
+    except OSError:
+        return None
+
+
+def _ref(ns_ref):
+    if isinstance(ns_ref, int):
+        st = os.fstat(ns_ref)
+        return (st.st_dev, st.st_ino)
+    return tuple(ns_ref)
+
+
+def _stat_ns(path):
+    """(dev, ino) of an nsfs link, None if the process vanished; any other failure is an inspection error."""
+    try:
+        st = os.stat(path)
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+    except OSError as error:
+        raise NamespaceInspectionError('%s: %s' % (path, error.__class__.__name__))
+    return (st.st_dev, st.st_ino)
+
+
+def _own_ref():
+    fd = os.open('/proc/self/ns/pid', os.O_RDONLY | os.O_CLOEXEC)
+    try:
+        return _ref(fd)
+    finally:
+        os.close(fd)
+
+
+def _in_or_under(pid, target):
+    """True if the process's PID namespace is the target or a DESCENDANT of it (walks NS_GET_PARENT, bounded)."""
+    import fcntl
+    own = _own_ref()
+    try:
+        fd = os.open('/proc/%d/ns/pid' % pid, os.O_RDONLY | os.O_CLOEXEC)
+    except (FileNotFoundError, ProcessLookupError):
+        return False
+    except OSError as error:
+        raise NamespaceInspectionError('ns/pid open: %s' % error.__class__.__name__)
+    try:
+        for _ in range(33):
+            st = os.fstat(fd)
+            if (st.st_dev, st.st_ino) == target:
+                return True
+            if (st.st_dev, st.st_ino) == own:
+                return False  # positively OUTSIDE: it is in the watchdog's own namespace, an ancestor of the target
+            try:
+                parent = fcntl.ioctl(fd, NS_GET_PARENT)
+            except OSError as error:
+                if error.errno == 1:
+                    # EPERM can mean ancestry authority/visibility is missing, not "no ancestor". Without a positive
+                    # outside proof (own namespace above) this stays an inspection obligation, never nonmembership.
+                    raise NamespaceInspectionError('NS_GET_PARENT EPERM: ancestry indeterminate')
+                raise NamespaceInspectionError('NS_GET_PARENT: %s' % error.__class__.__name__)
+            os.close(fd)
+            fd = parent if isinstance(parent, int) else None
+            if fd is None:
+                raise NamespaceInspectionError('NS_GET_PARENT returned no handle')
+        raise NamespaceInspectionError('namespace nesting ceiling')
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+def ns_members(ns_ref, skip_foreign=False):
+    """Obligations for the recorded namespace: live processes in it or any DESCENDANT PID namespace, processes whose
+    pid_for_children points at it, and processes holding an open namespace handle to it. Inspection failures raise
+    NamespaceInspectionError (never silently read as absence)."""
+    target = _ref(ns_ref)
+    out = []
+    for entry in os.scandir('/proc'):
+        if not entry.name.isdigit():
+            continue
+        pid = int(entry.name)
+        if skip_foreign:
+            # ONLY for the unprivileged user-namespace test form: a process of another uid cannot have joined a namespace an
+            # unprivileged user created. Production (root) never sets this, so EACCES stays an inspection error there.
+            try:
+                if os.stat('/proc/%d' % pid).st_uid != os.geteuid():
+                    continue
+            except OSError:
+                continue
+        member = _in_or_under(pid, target)
+        hit = member
+        if not hit:
+            hit = _stat_ns('/proc/%d/ns/pid_for_children' % pid) == target
+        if not hit:
+            try:
+                fds = os.listdir('/proc/%d/fd' % pid)
+            except (FileNotFoundError, ProcessLookupError):
+                fds = []
+            except OSError as error:
+                raise NamespaceInspectionError('fd dir: %s' % error.__class__.__name__)
+            for fd in fds:
+                try:
+                    st = os.stat('/proc/%d/fd/%s' % (pid, fd))
+                except (FileNotFoundError, ProcessLookupError):
+                    continue
+                except OSError as error:
+                    raise NamespaceInspectionError('fd stat: %s' % error.__class__.__name__)
+                if (st.st_dev, st.st_ino) == target and pid != os.getpid():
+                    hit = True
+                    break
+        if hit:
+            ident = process_identity(pid)
+            if ident and ident['state'] != 'Z':
+                out.append(dict(ident, kind='member' if member else 'handle_holder'))
+    return out
+
+
+def scan_ns_final(target, skip_foreign=False):
+    """Non-signalling final obligation scan (run after our own namespace handle is released). Inspection errors are obligations."""
+    try:
+        return ns_members(target, skip_foreign)
+    except NamespaceInspectionError as error:
+        return [{'pid': -1, 'inspection_error': str(error)[:120]}]
+
+
+def kill_ns_members(ns_ref, wait=ABSENCE_WAIT, clock=time.monotonic, skip_foreign=False):
+    """Live-owner only. ns_ref is the HELD namespace fd, so the identity cannot be reused while we signal. Each member is
+    pidfd-signalled after its identity is re-verified. Returns remaining obligations; an inspection failure is returned
+    as a remaining obligation (UNVERIFIED), never as absence."""
+    deadline = clock() + wait
+    target = _ref(ns_ref)
+    while True:
+        try:
+            members = ns_members(target, skip_foreign)
+        except NamespaceInspectionError as error:
+            return [{'pid': -1, 'inspection_error': str(error)[:120]}]
+        if not [m for m in members if m.get('kind') == 'member']:
+            return members  # nothing left to signal; remaining holders (if any) are reported as blockers
+        for ident in members:
+            if ident.get('kind') != 'member':
+                continue  # an external handle holder is an absence BLOCKER to report, never a termination target
+            try:
+                pfd = os.pidfd_open(ident['pid'])
+            except OSError:
+                continue
+            try:
+                again = process_identity(ident['pid'])
+                if again and again['start_ticks'] == ident['start_ticks']:
+                    signal.pidfd_send_signal(pfd, signal.SIGKILL)
+            except (ProcessLookupError, OSError):
+                pass
+            finally:
+                os.close(pfd)
+        if clock() > deadline:
+            try:
+                return ns_members(target, skip_foreign)
+            except NamespaceInspectionError as error:
+                return [{'pid': -1, 'inspection_error': str(error)[:120]}]
+        time.sleep(0.02)
+
+
+def contain_argv(argv, *, user_namespace=False):
+    """Wrap argv in a fresh PID namespace whose init is the stager and which dies with it/unshare.
+
+    Everything the stager spawns, including processes that call setsid, lives in that namespace and is killed
+    when its init (or the unshare parent) is killed. user_namespace is only for unprivileged tests; the
+    production root watchdog uses the plain form.
+    """
+    prefix = ['unshare', '--pid', '--fork', '--kill-child']
+    if user_namespace:
+        prefix = ['unshare', '--user', '--map-root-user', '--pid', '--fork', '--kill-child']
+    return prefix + ['--'] + list(argv)
+
+
+def child_limits(expected_parent):
+    def apply():
+        os.setsid()
+        resource.setrlimit(resource.RLIMIT_CPU, (CPU_SECONDS, CPU_SECONDS))
+        resource.setrlimit(resource.RLIMIT_FSIZE, (MAX_FILE_BYTES, MAX_FILE_BYTES))
+        resource.setrlimit(resource.RLIMIT_NOFILE, (MAX_OPEN, MAX_OPEN))
+        resource.setrlimit(resource.RLIMIT_AS, (MAX_ADDRESS_SPACE, MAX_ADDRESS_SPACE))
+        resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
+        if ctypes.CDLL(None, use_errno=True).prctl(PR_SET_PDEATHSIG, signal.SIGKILL, 0, 0, 0) != 0:
+            os._exit(112)
+        if os.getppid() != expected_parent:  # watchdog already died between fork and prctl
+            os._exit(111)
+    return apply
+
+
+def quarantine_partial(roots, attempt, uid=None):
+    """Rename roots to a private failed name through anchored parents. Never deletes; callers MUST have
+    verified process absence first. Only roots this run created are passed in (never preexisting ones)."""
+    uid = os.geteuid() if uid is None else uid
+    out = []
+    for root in roots:
+        root = Path(root)
+        try:
+            pfd = open_dir(root.parent)
+        except (FileNotFoundError, OSError) as error:
+            out.append({'root': str(root), 'state': 'refused_parent:' + type(error).__name__})
+            continue
+        try:
+            try:
+                st = os.stat(root.name, dir_fd=pfd, follow_symlinks=False)
+            except FileNotFoundError:
+                out.append({'root': str(root), 'state': 'absent'})
+                continue
+            if not _stat.S_ISDIR(st.st_mode) or st.st_uid != uid:
+                out.append({'root': str(root), 'state': 'refused_not_owned_directory'})
+                continue
+            target = root.name + '.failed-' + attempt
+            try:
+                os.stat(target, dir_fd=pfd, follow_symlinks=False)
+                out.append({'root': str(root), 'state': 'refused_target_exists'})
+                continue
+            except FileNotFoundError:
+                pass
+            os.rename(root.name, target, src_dir_fd=pfd, dst_dir_fd=pfd)
+            tfd = os.open(target, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=pfd)
+            try:
+                os.fchmod(tfd, 0o700)
+            finally:
+                os.close(tfd)
+            out.append({'root': str(root), 'state': 'quarantined', 'to': str(root.parent / target)})
+        finally:
+            os.close(pfd)
+    return out
+
+
+def stop_and_reap(child, sid, ns_fd=None, skip_foreign=False):
+    """Bounded: kill the session via pidfds, verify absence, then reap the leader with a timeout."""
+    remaining = kill_session_stable(sid)
+    if ns_fd is not None:
+        # Signal OWNED namespace members first, while the leader is unreaped and our namespace handle is held.
+        kill_ns_members(ns_fd, skip_foreign=skip_foreign)
+    if child.poll() is None:
+        child.kill()  # Popen-guarded kill of the still-unreaped leader (fallback when pidfd signalling failed)
+        end = time.monotonic() + ABSENCE_WAIT
+        remaining = session_members(sid)
+        while remaining and time.monotonic() < end:
+            time.sleep(0.02)
+            remaining = session_members(sid)
+    code = None
+    try:
+        code = child.wait(timeout=REAP_WAIT)
+    except subprocess.TimeoutExpired:
+        remaining = remaining or ['leader_unreaped']
+    return code, remaining
+
+
+def supervise(argv, report_path, *, role_roots, lock_bytes, expected_lock_sha256, attempt=None, record_dir,
+              cancel=None, wall=WALL_SECONDS, final_seconds=FINAL_SECONDS, max_bytes=MAX_OUTPUT_BYTES,
+              max_files=MAX_OUTPUT_FILES, max_dirs=MAX_OUTPUT_DIRS, clock=time.monotonic, sleep=time.sleep,
+              preexec=None, pid_namespace=False, user_namespace=False):
+    if not APPROVED_FOR_EXECUTION:
+        raise RuntimeError('staging watchdog HELD')
+    if pid_namespace:
+        argv = contain_argv(argv, user_namespace=user_namespace)
+    attempt = attempt or secrets.token_hex(16)
+    roots = {r: str(role_roots[r]) for r in ROLE_NAMES if r in role_roots}
+    if set(roots) != set(role_roots) or not roots:
+        raise ValueError('exact owned role roots required')
+    # ---- one-shot pre-effect identities: exact reviewed lock, and no preexisting output to adopt.
+    if hashlib.sha256(lock_bytes).hexdigest() != expected_lock_sha256:
+        raise ValueError('lock bytes differ from the reviewed lock identity')
+    lock = json.loads(lock_bytes)
+    validate_stage_lock(lock, roots)
+    for path in list(roots.values()) + [str(report_path)]:
+        if lexists_anchored(path):
+            raise ValueError('refusing preexisting stage output (never adopted or quarantined): ' + path)
+    started = clock()
+    deadline = started + wall
+    # Durable attributable intent BEFORE any effect.
+    record(record_dir, 'stage-watchdog-intent-%s.json' % attempt,
+           {'attempt': attempt, 'argv': list(argv), 'roots': roots, 'report': str(report_path),
+            'lock_sha256': expected_lock_sha256, 'watchdog_pid': os.getpid(),
+            'watchdog_identity': process_identity(os.getpid())})
+    child = subprocess.Popen(argv, preexec_fn=preexec or child_limits(os.getpid()), stdin=subprocess.DEVNULL, close_fds=True)
+    sid = child.pid  # setsid in the child; leader unreaped, so the number is reserved until we reap
+    reason = None
+    setup_error = None
+    pidfd = None
+    ns_link = None
+    ns_fd = None
+    ns_ref = None
+    try:
+        # ALL post-Popen setup is inside this guard.
+        pidfd = os.pidfd_open(child.pid)
+        if pid_namespace:
+            own = _own_ref()
+            end = clock() + NS_ESTABLISH_WAIT
+            while ns_fd is None:
+                fd = open_child_pid_ns(child.pid)
+                if fd is not None and _ref(fd) != own:
+                    ns_fd = fd
+                    ns_link = os.readlink('/proc/self/fd/%d' % fd)
+                    ns_ref = _ref(fd)
+                elif clock() > end:
+                    if fd is not None:
+                        os.close(fd)
+                    raise RuntimeError('pid namespace identity not established')
+                else:
+                    if fd is not None:
+                        os.close(fd)
+                    time.sleep(0.01)
+        ident = process_identity(child.pid)
+        if ident is None or ident['sid'] != sid:
+            raise RuntimeError('child session identity not confirmed')
+        record(record_dir, 'stage-watchdog-progress-%s.json' % attempt, {'attempt': attempt, 'child_identity': ident, 'sid': sid, 'pid_namespace': ns_link, 'pid_namespace_dev_ino': list(ns_ref) if ns_ref else None, 'absence_obligation': 'session_and_namespace' if pid_namespace else 'session'})
+        while True:
+            if select.select([pidfd], [], [], 0)[0]:
+                break  # leader exited (still unreaped)
+            if cancel is not None and cancel.is_set():
+                reason = 'cancelled'
+            elif clock() > deadline:
+                reason = 'wall_clock'
+            else:
+                try:
+                    scan_roots(roots.values(), max_files=max_files, max_dirs=max_dirs, max_bytes=max_bytes, deadline=deadline, clock=clock)
+                except (ValueError, TimeoutError, OSError) as error:
+                    reason = 'output_scan:' + type(error).__name__
+            if reason:
+                break
+            sleep(POLL)
+    except BaseException as error:
+        setup_error = type(error).__name__ + ':' + str(error)[:120]
+        reason = reason or 'supervision_error'
+    code, remaining = stop_and_reap(child, sid, ns_fd, skip_foreign=user_namespace)
+    if ns_fd is not None:
+        os.close(ns_fd)  # release OUR handle; from here on only non-signalling inspection
+        remaining = list(remaining) + [dict(m, ns=True) for m in scan_ns_final(ns_ref, user_namespace)]
+    if pid_namespace and ns_ref is None:
+        remaining = list(remaining) + [{'pid': -1, 'namespace_unestablished': True}]  # requested but never established: UNVERIFIED
+    if pidfd is not None:
+        os.close(pidfd)
+    absence_verified = not remaining
+    # ---- bounded final validation, even after exit 0; only meaningful with verified absence.
+    scan_error = None
+    complete = False
+    final = None
+    if absence_verified:
+        final_deadline = clock() + final_seconds
+        try:
+            final = scan_roots(roots.values(), max_files=max_files, max_dirs=max_dirs, max_bytes=max_bytes, deadline=final_deadline, clock=clock)
+            if code == 0 and reason is None and setup_error is None:
+                validate_staged(roots, lock, read_anchored(report_path, 1048576), deadline=final_deadline, clock=clock)
+                complete = True
+        except BaseException as error:
+            scan_error = type(error).__name__ + ':' + str(error)[:120]
+    if absence_verified and not complete:
+        dispositions = quarantine_partial(list(roots.values()), attempt)
+    elif not absence_verified:
+        dispositions = [{'state': 'UNVERIFIED_ABSENCE_NO_ROOT_MUTATION'}]
+    else:
+        dispositions = []
+    result = {'version': 'staging-watchdog/3', 'attempt': attempt, 'exit_code': code, 'killed_reason': reason,
+              'setup_error': setup_error, 'pid_namespace_containment': pid_namespace, 'absence_verified': absence_verified,
+              'session_members_remaining': [m if isinstance(m, str) else m['pid'] for m in remaining], 'pid_namespace_identity': ns_link,
+              'final_scan': final, 'final_validation_error': scan_error, 'complete': complete,
+              'root_dispositions': dispositions, 'elapsed_seconds': round(clock() - started, 3),
+              'exit0_alone_is_not_proof': True, 'not_attestation': True}
+    record(record_dir, 'stage-watchdog-result-%s.json' % attempt, result)
+    return result
+
+
+def recover(record_dir, attempt):
+    """Independent attributable recovery after a watchdog death.
+
+    Strictly UNVERIFIED: sends no signal and mutates no root. Writes a unique recovery record preserving the recorded
+    identities for a reviewed outer owner. Originals are never overwritten.
+    """
+    if not APPROVED_FOR_EXECUTION:
+        raise RuntimeError('staging watchdog HELD')
+    intent = json.loads(read_anchored(Path(record_dir) / ('stage-watchdog-intent-%s.json' % attempt), 65536))
+    if lexists_anchored(Path(record_dir) / ('stage-watchdog-result-%s.json' % attempt)):
+        return {'attempt': attempt, 'state': 'original_result_present_no_action'}
+    token = secrets.token_hex(8)
+    try:
+        progress = json.loads(read_anchored(Path(record_dir) / ('stage-watchdog-progress-%s.json' % attempt), 65536))
+    except FileNotFoundError:
+        progress = None
+    # Independent recovery after the live owner died is STRICTLY UNVERIFIED: no signals, no root mutation. A numeric SID or
+    # namespace link cannot be authenticated across the owner's death without a persistent containment handle (cgroup/pidfd
+    # owner) that this source does not have. Recorded identities are preserved for a reviewed outer owner.
+    state = 'UNVERIFIED_no_progress_record' if progress is None else 'UNVERIFIED_no_persistent_containment_handle'
+    result = {'attempt': attempt, 'recovery_id': token, 'state': state, 'signals_sent': 0,
+              'recorded_sid': None if progress is None else progress.get('sid'),
+              'recorded_pid_namespace': None if progress is None else progress.get('pid_namespace'),
+              'root_dispositions': [{'state': 'UNVERIFIED_ABSENCE_NO_ROOT_MUTATION'}]}
+    record(record_dir, 'stage-watchdog-recovery-%s-%s.json' % (attempt, token), result)
+    return result
+
+
+def main():
+    if not APPROVED_FOR_EXECUTION:
+        raise SystemExit('HELD reviewed trusted staging watchdog required')
+    if os.geteuid() != 0:
+        raise RuntimeError('disposable root watchdog only')
+    from threading import Event
+    from stage_archives import ROLES
+    args = sys.argv[1:]
+    report = Path(args[args.index('--output') + 1])
+    lock_path = Path(args[args.index('--lock') + 1])
+    cancel = Event()
+    for number in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(number, lambda *_: cancel.set())
+    result = supervise([sys.executable, str(STAGER)] + args, report,
+                       role_roots={r: ROLES[r][0] for r in ROLE_NAMES},
+                       lock_bytes=read_anchored(lock_path, 16 * 1024**2),
+                       expected_lock_sha256=os.environ['WATCHDOG_REVIEWED_LOCK_SHA256'],
+                       record_dir=Path(os.environ['WATCHDOG_RECORD_DIR']), cancel=cancel, pid_namespace=True)
+    print(json.dumps(result))
+    if not result['complete']:
+        raise SystemExit(1)
+
+
+if __name__ == '__main__':
+    main()
