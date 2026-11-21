@@ -1871,44 +1871,103 @@ def _dl(monkeypatch):
     return dl
 
 
-def test_docker_lifecycle_spec_validator_fail_closed(monkeypatch):
+def _fixture(dl,role,run,img,image_id,mem_mb=2048,pids=256,cpus=2,kvm=108):
+    work,inbox=dl.mount_sources(role,run)
+    mem=mem_mb*1048576
+    return {'Id':'c'*64,'Name':'/'+dl.container_name(role,run),'Image':image_id,
+        'HostConfig':{'NetworkMode':'none','Privileged':False,'PidMode':'','IpcMode':'none','UTSMode':'','UsernsMode':'','CgroupnsMode':'private',
+            'Runtime':'runc','CapDrop':['ALL'],'CapAdd':None,'SecurityOpt':['no-new-privileges'],'ReadonlyRootfs':True,'GroupAdd':None,
+            'DeviceRequests':None,'Tmpfs':None,'ExtraHosts':None,'Dns':[],'Links':None,'VolumesFrom':None,'PortBindings':{},'Binds':None,
+            'RestartPolicy':{'Name':'no','MaximumRetryCount':0},'LogConfig':{'Type':'none','Config':{}},'Memory':mem,'MemorySwap':mem,
+            'PidsLimit':pids,'NanoCpus':cpus*10**9,'OomKillDisable':False,
+            'Ulimits':[{'Name':n,'Soft':v,'Hard':v} for n,v in dl.ULIMITS],
+            'Devices':[dict(dl.KVM_DEV)] if role=='runtime' else [],
+            'Mounts':[{'Type':'bind','Source':work,'Target':'/work','BindOptions':{'Propagation':'rprivate'}},
+                      {'Type':'bind','Source':inbox,'Target':'/control','ReadOnly':True,'BindOptions':{'Propagation':'rprivate'}}]},
+        'Config':{'User':dl.user_for(role,kvm),'Image':img,'Entrypoint':[dl.EXE],'Cmd':dl.cmd_for(role),'Env':list(reversed(dl.ENV)),
+            'WorkingDir':'/work','Volumes':None,'Healthcheck':{'Test':['NONE']},'OpenStdin':True,'Tty':False,'AttachStdin':False,
+            'Labels':{'d061.run_id':run,'d061.role':role}},
+        'Mounts':[{'Type':'bind','Source':work,'Destination':'/work','Mode':'','RW':True,'Propagation':'rprivate'},
+                  {'Type':'bind','Source':inbox,'Destination':'/control','Mode':'ro','RW':False,'Propagation':'rprivate'}],
+        'State':{'Status':'created','Running':False,'Pid':0}}
+
+
+def test_docker_lifecycle_v2_exact_spec_and_lifecycle(monkeypatch):
     import copy
     dl=_dl(monkeypatch)
     assert dl.APPROVED_FOR_EXECUTION is False
-    run='a'*32;img='registry.invalid/x@sha256:'+'b'*64
+    run='a'*32;img='registry.invalid/x@sha256:'+'b'*64;iid='sha256:'+'d'*64
+    assert dl.validate_image_record({'Id':iid,'RepoDigests':[img]},img)==iid
+    for badimg in ({'Id':iid,'RepoDigests':[]},{'Id':'x','RepoDigests':[img]},{}):
+        with pytest.raises(dl.SpecError):dl.validate_image_record(badimg,img)
     for role in ('runtime','control'):
-        src='/opt/d061-owned-android-run-%s/%s-work'%(run,role)
-        kw=dict(mem_mb=2048,pids=256,cpus=2,work_src=src)
-        argv=dl.create_argv(role,run,img,**kw)
-        s=' '.join(argv)
-        assert '--network none' in s and '--cap-drop ALL' in s and '--read-only' in s and '--pull never' in s
-        assert '--privileged' not in s and '--pid ' not in s and '--pid=' not in s and 'docker.sock' not in s
-        assert ('--device /dev/kvm' in s)==(role=='runtime')
-        mem=2048*1048576
-        rec={'Id':'c'*64,'Name':'/'+dl.container_name(role,run),'Image':'sha256:'+'d'*64,
-             'HostConfig':{'NetworkMode':'none','Privileged':False,'PidMode':'','IpcMode':'none','UsernsMode':'','CapDrop':['ALL'],
-                 'CapAdd':None,'SecurityOpt':['no-new-privileges'],'ReadonlyRootfs':True,'Memory':mem,'MemorySwap':mem,'PidsLimit':256,
-                 'NanoCpus':2*10**9,'Devices':[{'PathOnHost':'/dev/kvm'}] if role=='runtime' else [],'Binds':None},
-             'Config':{'User':'65534:65534','Image':img,'Labels':{'d061.run_id':run,'d061.role':role}},
-             'Mounts':[{'Type':'bind','Source':src,'Destination':'/work'}],'State':{'Status':'created'}}
-        assert dl.validate_inspect(rec,role,run,img,**kw)['daemon_enforcement_verified'] is False
+        kw=dict(mem_mb=2048,pids=256,cpus=2,kvm_gid=108 if role=='runtime' else None)
+        argv=dl.create_argv(role,run,img,**kw);s=' '.join(argv)
+        for must in ('--network none','--ipc none','--cap-drop ALL','--read-only','--pull never','--no-healthcheck','--log-driver none','--interactive',
+                     'dst=/control,readonly','--entrypoint /runtime/bin/python'):
+            assert must in s
+        assert '--privileged' not in s and '--pid ' not in s and 'docker.sock' not in s and '--group-add' not in s
+        assert ('/dev/kvm:/dev/kvm:rw' in s)==(role=='runtime')
+        assert argv[-3:]==dl.cmd_for(role)
+        kv=108 if role=='runtime' else None
+        rec=_fixture(dl,role,run,img,iid,kvm=kv)
+        assert dl.validate_inspect(rec,role,run,img,iid,**kw)['daemon_enforcement_verified'] is False
         def mut(f):
             r=copy.deepcopy(rec);f(r);return r
-        for f in (lambda r:r['HostConfig'].update(NetworkMode='host'),lambda r:r['HostConfig'].update(Privileged=True),
-                  lambda r:r['HostConfig'].update(PidMode='host'),lambda r:r['HostConfig'].update(CapAdd=['SYS_ADMIN']),
-                  lambda r:r['HostConfig'].update(PidsLimit=0),lambda r:r['HostConfig'].update(Memory=0),
-                  lambda r:r['HostConfig'].update(ReadonlyRootfs=False),lambda r:r['HostConfig'].update(Devices=[{'PathOnHost':'/dev/kvm'},{'PathOnHost':'/dev/fuse'}]),
-                  lambda r:r['Mounts'].append({'Type':'bind','Source':'/','Destination':'/host'}),
-                  lambda r:r['Mounts'][0].update(Source='/var/run/docker.sock'),lambda r:r['Config'].update(User='0:0'),
-                  lambda r:r['Config'].update(Image='x:latest'),lambda r:r.pop('HostConfig')):
-            with pytest.raises(dl.SpecError):dl.validate_inspect(mut(f),role,run,img,**kw)
-    ctrl=dl.create_argv('control',run,img,mem_mb=512,pids=64,cpus=1,work_src='/opt/d061-owned-android-run-%s/control-work'%run)
-    assert '/dev/kvm' not in ' '.join(ctrl)
-    for bad in (dict(role='runtime',work_src='/opt/d061-owned-android-run-%s/control-work'%run),dict(role='x'),dict(image='x:latest'),
-                dict(mem_mb=10),dict(run_id='A'*32),dict(work_src='/')):
-        a=dict(role='runtime',run_id=run,image=img,mem_mb=2048,pids=256,cpus=2,work_src='/opt/d061-owned-android-run-%s/runtime-work'%run);a.update(bad)
+        H=lambda **k:(lambda r:r['HostConfig'].update(**k))
+        C=lambda **k:(lambda r:r['Config'].update(**k))
+        muts=[H(NetworkMode='host'),H(Privileged=True),H(PidMode='host'),H(UTSMode='host'),H(CgroupnsMode='host'),H(Runtime='nvidia'),
+              H(CapAdd=['SYS_ADMIN']),H(GroupAdd=['0']),H(DeviceRequests=[{'Count':-1}]),H(PidsLimit=0),H(Memory=0),H(ReadonlyRootfs=False),
+              H(SecurityOpt=['no-new-privileges','seccomp=unconfined']),H(LogConfig={'Type':'json-file'}),H(RestartPolicy={'Name':'always'}),
+              H(Devices=[dict(dl.KVM_DEV,CgroupPermissions='rwm')]+([] if role=='runtime' else [])),
+              H(Devices=[dict(dl.KVM_DEV,PathInContainer='/dev/x')]),H(Ulimits=[]),H(Mounts=[{'Type':'bind','Source':'/','Target':'/h','BindOptions':{'Propagation':'shared'}}]),
+              lambda r:r['Mounts'].append({'Type':'bind','Source':'/','Destination':'/host','Mode':'','RW':True,'Propagation':'rprivate'}),
+              lambda r:r['Mounts'][1].update(RW=True),lambda r:r['Mounts'][0].update(Propagation='shared'),
+              lambda r:r['Mounts'][0].update(Source='/var/run/docker.sock'),
+              C(User='0:0'),C(Image='x:latest'),C(Entrypoint=['/bin/sh']),C(Cmd=['sh']),C(Env=list(dl.ENV)+['LD_PRELOAD=/x']),
+              C(Healthcheck={'Test':['CMD','x']}),C(Volumes={'/v':{}}),C(WorkingDir='/'),C(OpenStdin=False),
+              lambda r:r.update(Image='sha256:'+'e'*64),lambda r:r.pop('HostConfig'),lambda r:r['State'].update(Status='running')]
+        if role=='control':muts.append(H(Devices=[dict(dl.KVM_DEV)]))
+        for f in muts:
+            with pytest.raises(dl.SpecError):dl.validate_inspect(mut(f),role,run,img,iid,**kw)
+    for bad in (dict(role='x'),dict(image='x:latest'),dict(mem_mb=10),dict(run_id='A'*32),dict(kvm_gid=None)):
+        a=dict(role='runtime',run_id=run,image=img,mem_mb=2048,pids=256,cpus=2,kvm_gid=108);a.update(bad)
         with pytest.raises(dl.SpecError):dl.create_argv(a.pop('role'),a.pop('run_id'),a.pop('image'),**a)
-    assert dl.absence_verdict({'inspect_not_found':True,'cgroup_unpopulated_or_gone':True})=='VERIFIED_ABSENT_RECORD'
-    assert dl.absence_verdict({'inspect_not_found':True})=='UNVERIFIED'
-    assert dl.absence_verdict({'inspect_not_found':True,'cgroup_unpopulated_or_gone':False})=='PRESENT'
+    it=dl.launch_intent('runtime',run);assert it['may_remove_by_name'] is False and it['stage']=='before_create'
+    cr=dl.after_create(it,('e'*64)+'\n');assert cr['stage']=='created' and cr['container_id']=='e'*64
+    for bad in ('',('e'*64),'garbled\n',b''):
+        u=dl.after_create(it,bad);assert u['state']=='UNVERIFIED' and u['may_remove_by_name'] is False and u['container_id'] is None
+    cid=cr['container_id']
+    started={'Id':cid,'State':{'Running':True,'Pid':4242}}
+    obs={'pid':4242,'cgroup_path':'/system.slice/docker-%s.scope'%cid,'pid_ns_inode':1,'mnt_ns_inode':2,'net_ns_inode':3}
+    b=dl.bind_started(cr,started,obs,99);assert b['stage']=='started_gated' and b['gate_released'] is False
+    for bad in (dict(pid=1),dict(cgroup_path='/system.slice/other.scope'),dict(net_ns_inode=99),dict(pid_ns_inode=0),dict(cgroup_path='/a/../b'+cid)):
+        with pytest.raises(dl.SpecError):dl.bind_started(cr,started,dict(obs,**bad),99)
+    with pytest.raises(dl.SpecError):dl.bind_started(dl.after_create(it,'x'),started,obs,99)
+    with pytest.raises(dl.SpecError):dl.bind_started(cr,{'Id':cid,'State':{'Running':False,'Pid':0}},obs,99)
+    keys=('inspect_not_found','cgroup_unpopulated_or_gone','ns_members_empty','handles_absent','leader_reaped')
+    assert dl.absence_verdict({k:True for k in keys})=='VERIFIED_ABSENT_RECORD'
+    for k in keys:
+        assert dl.absence_verdict({**{x:True for x in keys},k:False})=='PRESENT'
+        d={x:True for x in keys};d.pop(k);assert dl.absence_verdict(d)=='UNVERIFIED'
     assert dl.absence_verdict(None)=='UNVERIFIED'
+    ok=['/runtime/bin/python',dl.GATE,dl.DRIVER['control']]
+    assert dl.role_closure_ok('control',ok) and not dl.role_closure_ok('control',ok+['/opt/android/platform-tools/adb'])
+    assert not dl.role_closure_ok('control',ok+['/usr/bin/qemu-system-x86_64']) and not dl.role_closure_ok('control',[dl.DRIVER['control']])
+    assert dl.role_closure_ok('runtime',[dl.GATE,dl.DRIVER['runtime'],'/opt/android/emulator/emulator'])
+
+
+def test_container_gate_blocks_until_owner_byte(monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1]/'research'/'d061_android'))
+    import container_gate as g
+    assert g.APPROVED_FOR_EXECUTION is False
+    calls=[]
+    def run(data,argv=('/fixture/contained_driver.py','/work')):
+        r,w=os.pipe();os.write(w,data);os.close(w)
+        try:return g.main(list(argv),stdin_fd=r,execv=lambda *a:calls.append(a))
+        finally:os.close(r)
+    assert run(b'')==3 and calls==[]                    # owner died: target never runs
+    assert run(b'x')==3 and calls==[]                    # only the one release byte
+    assert run(b'\x01',('/bin/sh','/work'))==2 and calls==[]
+    assert run(b'\x01',('/fixture/control_driver.py','/tmp'))==2 and calls==[]
+    assert run(b'\x01')==4 and calls==[(sys.executable,[sys.executable,'/fixture/contained_driver.py','/work'])]
