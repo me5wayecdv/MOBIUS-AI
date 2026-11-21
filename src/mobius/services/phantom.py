@@ -129,38 +129,43 @@ class PhantomEmulatorAdapter:
             "content query row count", text[:_DETAIL_OUTPUT_BYTES],
         )
 
-    def _pid_of(self, package: str) -> str | None:
+    def _pids_of(self, package: str) -> list[str]:
         rc, text = self._run(self._argv("shell", "pidof", package))
-        pids = text.split()
-        if rc == 0 and pids:
-            return pids[0]
-        return None
+        if rc != 0:
+            return []
+        return text.split()
 
-    def _ensure_app_running(self, package: str) -> str | None:
+    def _ensure_app_running(self, package: str) -> tuple[str | None, bool]:
         """Target-side setup (not instrumentation): launch the lab app on the
-        verified emulator if its process is not running, waiting bounded, and
-        return its pid. Emulators kill background apps aggressively, so a
-        process verified at install time may be gone by the time a plan
-        executes. Returns None when the process still is not running after
-        the bounded wait."""
-        pid = self._pid_of(package)
-        if pid:
-            return pid
+        verified emulator if its process is not running, waiting bounded.
+        Returns (pid, ambiguous): pid is the single observed process id, or
+        None when no process is running after the bounded wait or when more
+        than one pid is listed (ambiguous, and the caller must fail closed
+        rather than guess which process is the target)."""
+        pids = self._pids_of(package)
+        if len(pids) == 1:
+            return pids[0], False
+        if len(pids) > 1:
+            return None, True
         self._run(self._argv(
             "shell", "monkey", "-p", package,
             "-c", "android.intent.category.LAUNCHER", "1",
         ))
         for _ in range(6):
-            pid = self._pid_of(package)
-            if pid:
-                return pid
+            pids = self._pids_of(package)
+            if len(pids) == 1:
+                return pids[0], False
+            if len(pids) > 1:
+                return None, True
             time.sleep(5)
-        return None
+        return None, False
 
     def probe_frida_enumerate_classes(self, package: str) -> EmulatorProbeResult:
-        """Observation-only instrumentation: ensure the lab app process is
-        running (launching it on the verified emulator if needed), attach by
-        pid, and count loaded classes with the fixed embedded script. actual is
+        """Observation-only instrumentation: ensure exactly one target
+        process is running (launching the lab app on the verified emulator
+        if needed), attach by its observed pid, and count loaded classes with
+        the fixed embedded script. Fails closed without attaching when the
+        target process is absent or ambiguous. actual is
         the class count, or None when attach/enumeration failed. Requires
         frida tooling configured and a frida-server already running on the
         verified emulator (the CI job owns the server lifecycle); the
@@ -170,13 +175,28 @@ class PhantomEmulatorAdapter:
             raise PoCAdapterUnavailable(
                 "frida tooling is not configured on this host"
             )
-        pid = self._ensure_app_running(package)
+        pid, ambiguous = self._ensure_app_running(package)
+        if ambiguous:
+            return EmulatorProbeResult(
+                "frida_enumerate_classes", package, None,
+                "frida attach refused: multiple pids listed for the target "
+                "(frida-ambiguous-process); failing closed rather than "
+                "attaching to an unverified process",
+                b"",
+            )
+        if pid is None:
+            return EmulatorProbeResult(
+                "frida_enumerate_classes", package, None,
+                "frida attach refused: no target process running after the "
+                "bounded relaunch wait (frida-process-not-running)",
+                b"",
+            )
         device = ["-D", self._serial] if self._serial else ["-U"]
-        # Attach by pid, not by process name: an app's process name is its
-        # label (e.g. frida-ps shows "Allsafe"), not necessarily the package
-        # id, so name matching can miss a process that is verifiably running.
-        target = ["-p", pid] if pid else ["-n", package]
-        argv = [self._frida, *device, "-q", *target, "-e", _FRIDA_ENUMERATE_SCRIPT]
+        # Attach by the observed pid only. On the prior CI run, attach by
+        # package name reported process-not-found while the same run's
+        # checks listed a running pid; pid attachment targets exactly the
+        # verified process, never a name match on another process.
+        argv = [self._frida, *device, "-q", "-p", pid, "-e", _FRIDA_ENUMERATE_SCRIPT]
         rc, out, err = self._runner(argv, FRIDA_TIMEOUT_SECONDS)
         text = (out + err)[:MAX_OUTPUT_BYTES].decode("utf-8", "replace")
         count = None

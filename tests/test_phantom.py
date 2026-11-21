@@ -245,6 +245,49 @@ def test_frida_probe_launches_app_when_process_is_gone(monkeypatch):
     assert attach and "-p" in attach[0] and "4321" in attach[0]
 
 
+def test_frida_probe_fails_closed_on_ambiguous_pids():
+    calls = []
+
+    def runner(argv, timeout):
+        calls.append(tuple(argv))
+        suffix = tuple(argv[-3:])
+        if suffix == ("shell", "pidof", "com.example"):
+            return (0, b"1234 5678\n", b"")
+        if "ro.kernel.qemu" in argv:
+            return (0, b"1\n", b"")
+        return (0, b"MOBIUS_CLASSES:9\n", b"")
+
+    adapter = PhantomEmulatorAdapter(
+        adb_path="/fake/adb", frida_path="/fake/frida", runner=runner)
+    result = adapter.probe_frida_enumerate_classes("com.example")
+    assert result.actual is None
+    assert "frida-ambiguous-process" in result.detail
+    assert not any("-e" in c for c in calls), "must not attach on ambiguity"
+
+
+def test_frida_probe_fails_closed_when_process_stays_gone(monkeypatch):
+    calls = []
+
+    def runner(argv, timeout):
+        calls.append(tuple(argv))
+        suffix = tuple(argv[-3:])
+        if suffix == ("shell", "pidof", "com.example"):
+            return (1, b"", b"")
+        if "ro.kernel.qemu" in argv:
+            return (0, b"1\n", b"")
+        if "monkey" in argv:
+            return (0, b"Events injected: 1\n", b"")
+        return (0, b"MOBIUS_CLASSES:9\n", b"")
+
+    monkeypatch.setattr("mobius.services.phantom.time.sleep", lambda _s: None)
+    adapter = PhantomEmulatorAdapter(
+        adb_path="/fake/adb", frida_path="/fake/frida", runner=runner)
+    result = adapter.probe_frida_enumerate_classes("com.example")
+    assert result.actual is None
+    assert "frida-process-not-running" in result.detail
+    assert not any("-e" in c for c in calls), "must not attach without a pid"
+
+
 def test_stop_instrumentation_is_idempotent_cleanup():
     adapter = _adapter({
         ("shell", "pkill", "-f", "frida-server"): (0, b"", b""),
