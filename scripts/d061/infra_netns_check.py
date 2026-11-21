@@ -400,7 +400,6 @@ def main():
         try:
             CURRENT_STAGE = "protected cleanup and after snapshot"
             cleanup_errors = cleanup(out, ownership)
-            errors.extend(DIAGNOSTIC_ERRORS)
         except BaseException as exc:
             cleanup_errors.append("unexpected cleanup failure: " + repr(exc))
         finally:

@@ -63,3 +63,59 @@ class InfraDiagnosticsTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class ExactWorkflowContractTests(unittest.TestCase):
+    def test_workflow_collector_arguments_parse_exactly(self):
+        import shlex
+        from unittest import mock
+        import yaml
+        spec = importlib.util.spec_from_file_location(
+            'collector', Path(__file__).parents[1] / 'scripts/d061/infra_collect_evidence.py')
+        collector = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(collector)
+        workflow = yaml.safe_load((Path(__file__).parents[1] / '.github/workflows/d061-infra-only.yml').read_text())
+        step = next(s for s in workflow['jobs']['infra']['steps']
+                    if 'infra_collect_evidence.py' in s.get('run', ''))
+        command = step['run'].strip().replace('$(id -u)', '1000').replace('$(id -g)', '1000')
+        command = command.replace('$RUNNER_TEMP', '/tmp/job-contract-test')
+        argv = shlex.split(command)
+        argv = ['collector'] + argv[argv.index('scripts/d061/infra_collect_evidence.py')+1:]
+        # Stop immediately AFTER argparse has accepted the actual workflow
+        # options, before any root/file action. Unknown options raise SystemExit.
+        with mock.patch.object(sys, 'argv', argv), mock.patch.object(collector.os, 'geteuid', return_value=1000):
+            with self.assertRaisesRegex(RuntimeError, 'root exporter required'):
+                collector.main()
+
+    def test_normal_finalization_keeps_original_and_cleanup_errors(self):
+        from unittest import mock
+        import contextlib
+        import io
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            argv = ['infra', '--review-authorized', '--collector-gid', str(os.getgid())]
+            # Exercise the REAL normal-main exception/finally path without
+            # root, network commands, namespaces or loopback sockets. Inject
+            # failure at the first host snapshot, before mutation.
+            with mock.patch.object(sys, 'argv', argv), \
+                 mock.patch.object(infra.os, 'geteuid', return_value=0), \
+                 mock.patch.object(infra.os, 'chown'), \
+                 mock.patch.object(infra.tempfile, 'mkdtemp', return_value=str(out)), \
+                 mock.patch.object(infra.signal, 'signal'), \
+                 mock.patch.object(infra, 'phase_record'), \
+                 mock.patch.object(infra, 'host_snapshot', side_effect=RuntimeError('injected pre-mutation failure')), \
+                 mock.patch.object(infra, 'cleanup', return_value=['injected cleanup evidence failure']) as cleanup, \
+                 mock.patch.object(infra, 'DIAGNOSTIC_ERRORS', ['injected diagnostic failure']), \
+                 contextlib.redirect_stdout(io.StringIO()) as stdout:
+                old_umask = os.umask(0o027)
+                try:
+                    rc = infra.main()
+                finally:
+                    os.umask(old_umask)
+            self.assertEqual(rc, 1)
+            cleanup.assert_called_once()
+            summary = json.loads((out / 'summary.json').read_text())
+            self.assertTrue(summary['failed'])
+            self.assertIn('injected pre-mutation failure', summary['original_errors'][0])
+            self.assertEqual(summary['cleanup_errors'], ['injected cleanup evidence failure', 'injected diagnostic failure'])
+            self.assertIn('artifacts=', stdout.getvalue())
+            self.assertNotIn('UnboundLocalError', stdout.getvalue())
