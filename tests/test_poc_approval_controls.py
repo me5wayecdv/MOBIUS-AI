@@ -92,3 +92,22 @@ def test_step_timeout_runs_cleanup(session, store, future_iso):
     result = runner.run(ready)
     assert result.status == "timed_out"
     assert result.cleanup_results[0]["status"] == "completed"
+
+
+def test_poc_runs_list_exposes_hypothesis_binding(session, store, future_iso):
+    # The plan->hypothesis binding is persisted on the run row; the list
+    # endpoint must expose it so evidence consumers (and the connected
+    # journey check) can verify which hypothesis an approved run tested.
+    from mobius.api.routes import list_poc_runs
+    from mobius.services.poc_execution import PoCExecutionService
+
+    scan, plan, approval = _approval_plan(session, store, future_iso)
+    PoCApprovalService(session).resolve(
+        approval.id, investigation_id=scan.id, decision="granted",
+        decided_by="reviewer-1", note="Approved.",
+    )
+    PoCExecutionService(session, store).execute_and_persist(
+        plan.model_copy(update={"approval_id": approval.id}))
+    payload = list_poc_runs(scan.id, session=session, who="analyst-1")
+    assert payload["items"], "a persisted run must be listed"
+    assert payload["items"][0]["hypothesis_ids"] == list(plan.hypothesis_ids)

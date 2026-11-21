@@ -1763,6 +1763,7 @@ def list_poc_runs(scan_id: str, session=SessionDep, who: str = Depends(analyst_i
         "output_sha256": row.output_sha256, "tool_versions": row.tool_versions,
         "started_at": row.started_at, "finished_at": row.finished_at,
         "duration_ms": row.duration_ms, "cleanup": row.cleanup_json,
+        "hypothesis_ids": list(row.hypothesis_ids or []),
     } for row in rows]}
 
 
