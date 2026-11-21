@@ -170,69 +170,102 @@ class CaptureError(Exception):
     def __init__(self,kind):super().__init__(kind);self.kind=kind
 
 
-KINDS={'deadline','output_bound','nonzero_exit','bad_json','bad_schema','spawn'}
-ROW_KEYS={'path','size','kind','mode','sha256','target'}
+KINDS={'deadline','output_bound','nonzero_exit','bad_json','bad_schema','spawn','pidfd','read_error','reap_timeout'}
+ENVELOPE={'container_sha256','container_bytes','member_count','declared_expanded_bytes','members',
+    'inspection','member_written','package_code_executed','license_accepted','runtime_closure_resolved','provenance_note'}
+ROW_KEYS={'regular':{'path','size','kind','mode','sha256'},'directory':{'path','size','kind','mode'},
+    'symlink':{'path','size','kind','mode','target'},'hardlink':{'path','size','kind','mode','target'}}
+HEX=re.compile('[0-9a-f]{64}')
+
+
+def is_int(x):return type(x) is int
 
 
 def validate_inventory(out,sha256,size):
-    if not isinstance(out,dict) or set(out)!={'container_sha256','container_bytes','member_count','declared_expanded_bytes','members',
-        'inspection','member_written','package_code_executed','license_accepted','runtime_closure_resolved','provenance_note'}:raise CaptureError('bad_schema')
-    if (out['container_sha256']!=sha256 or out['container_bytes']!=size or out['inspection']!='data_only_streaming_hash'
-        or out['member_written'] is not False or out['package_code_executed'] is not False or out['license_accepted'] is not False
-        or out['runtime_closure_resolved'] is not False):raise CaptureError('bad_schema')
+    bad=lambda:CaptureError('bad_schema')
+    if not isinstance(out,dict) or set(out)!=ENVELOPE:raise bad()
+    if (out['container_sha256']!=sha256 or not is_int(out['container_bytes']) or out['container_bytes']!=size
+        or out['inspection']!='data_only_streaming_hash' or out['member_written'] is not False
+        or out['package_code_executed'] is not False or out['license_accepted'] is not False
+        or out['runtime_closure_resolved'] is not False or not isinstance(out['provenance_note'],str) or len(out['provenance_note'])>200):raise bad()
     rows=out['members']
-    if not isinstance(rows,list) or out['member_count']!=len(rows) or len(rows)>MAX_FILES:raise CaptureError('bad_schema')
+    if (not isinstance(rows,list) or not is_int(out['member_count']) or out['member_count']!=len(rows) or len(rows)>MAX_FILES
+        or not is_int(out['declared_expanded_bytes'])):raise bad()
     total=0;seen=set()
     for r in rows:
-        if not isinstance(r,dict) or not {'path','size','kind','mode'}<=set(r)<=ROW_KEYS:raise CaptureError('bad_schema')
-        try:canon(r['path'])
-        except (ValueError,TypeError):raise CaptureError('bad_schema')
-        if (r['path'] in seen or r['kind'] not in ('regular','directory','symlink','hardlink') or type(r['size']) is not int
-            or type(r['mode']) is not int or not 0<=r['size']<=MAX_MEMBER or r['mode']&0o7000):raise CaptureError('bad_schema')
-        if r['kind']=='regular' and not re.fullmatch('[0-9a-f]{64}',r.get('sha256') or ''):raise CaptureError('bad_schema')
-        seen.add(r['path']);total+=r['size']
-    if total!=out['declared_expanded_bytes'] or total>MAX_TOTAL:raise CaptureError('bad_schema')
+        if not isinstance(r,dict) or r.get('kind') not in ROW_KEYS or set(r)!=ROW_KEYS[r['kind']]:raise bad()
+        path=r['path']
+        if not isinstance(path,str):raise bad()
+        try:
+            if canon(path)!=path:raise bad()
+        except ValueError:raise bad()
+        if path in seen:raise bad()
+        if not is_int(r['size']) or not 0<=r['size']<=MAX_MEMBER or not is_int(r['mode']) or not 0<=r['mode']<=0o777:raise bad()
+        k=r['kind']
+        if k=='regular' and not (isinstance(r['sha256'],str) and HEX.fullmatch(r['sha256'])):raise bad()
+        if k in ('directory','symlink','hardlink') and k!='regular' and k!='symlink' and r['size']!=0:raise bad()
+        if k in ('symlink','hardlink'):
+            t=r['target']
+            if not isinstance(t,str) or not 0<len(t)<=MAX_LINK or '\x00' in t:raise bad()
+        seen.add(path);total+=r['size']
+    if total!=out['declared_expanded_bytes'] or total>MAX_TOTAL:raise bad()
     return out
 
 
-def run_child(path,sha256,size,*,wall=1300,cmd=None):
-    """Parent capture. One direct child, no group signalling. Termination goes only
-    through a pidfd opened before any reap, so a reaped/reused PID is never signalled.
-    Success needs exit 0 plus a closed schema that echoes the exact requested pins."""
+def run_child(path,sha256,size,*,wall=1300,cmd=None,_pidfd_open=None):
+    """Parent capture. One direct child, no group signalling. Everything after spawn
+    is inside one ownership scope: the unreaped direct child is killed through a
+    pidfd when we have one, else through Popen.kill() while still unreaped.
+    Every failure maps to a closed CaptureError kind."""
     argv=cmd or [sys.executable,os.path.abspath(__file__),path,'--sha256',sha256,'--size',str(size)]
     try:
         p=subprocess.Popen(argv,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,close_fds=True,env={})
     except OSError:raise CaptureError('spawn')
-    pidfd=os.pidfd_open(p.pid);buf=bytearray();end=time.monotonic()+wall;kind=None
+    pidfd=None;buf=bytearray();kind=None
     def kill():
-        try:signal.pidfd_send_signal(pidfd,signal.SIGKILL)
+        if p.poll() is not None:return
+        try:
+            if pidfd is not None:signal.pidfd_send_signal(pidfd,signal.SIGKILL)
+            else:p.kill()
         except OSError:pass
+    def reap():
+        try:p.wait(timeout=5);return True
+        except subprocess.TimeoutExpired:return False
     try:
+        try:pidfd=(_pidfd_open or os.pidfd_open)(p.pid)
+        except OSError:
+            kind='pidfd'
+        end=time.monotonic()+wall
         while kind is None:
             left=end-time.monotonic()
             if left<=0:kind='deadline';break
-            if not select.select([p.stdout],[],[],min(left,1))[0]:continue
-            d=os.read(p.stdout.fileno(),65536)
+            try:
+                if not select.select([p.stdout],[],[],min(left,1))[0]:continue
+                d=os.read(p.stdout.fileno(),65536)
+            except (OSError,ValueError):kind='read_error';break
             if not d:break
             buf+=d
             if len(buf)>MAX_OUTPUT:kind='output_bound'
-        if kind:kill()
-        try:rc=p.wait(timeout=5 if kind else max(1,end-time.monotonic()))
+        if kind:
+            kill()
+            if not reap():kill();reap();kind='reap_timeout' if kind not in ('pidfd',) else kind
+            raise CaptureError(kind)
+        try:rc=p.wait(timeout=max(1,end-time.monotonic()))
         except subprocess.TimeoutExpired:
-            kill();p.wait(timeout=5);kind=kind or 'deadline';rc=None
-        if kind:raise CaptureError(kind)
+            kill()
+            if not reap():raise CaptureError('reap_timeout')
+            raise CaptureError('deadline')
         if rc!=0:raise CaptureError('nonzero_exit')
         try:out=json.loads(bytes(buf))
         except ValueError:raise CaptureError('bad_json')
         return validate_inventory(out,sha256,size)
     except BaseException:
-        if p.poll() is None:
-            kill()
-            try:p.wait(timeout=5)
-            except subprocess.TimeoutExpired:pass
+        kill();reap()
         raise
     finally:
-        p.stdout.close();os.close(pidfd)
+        try:p.stdout.close()
+        except OSError:pass
+        if pidfd is not None:os.close(pidfd)
 
 
 def main():

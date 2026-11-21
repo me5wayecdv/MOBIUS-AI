@@ -1319,6 +1319,33 @@ def test_member_hash_inspect_anchored_open_and_outer_limits_in_child(tmp_path,mo
     bad_rows=[{'path':'../a','size':1,'kind':'regular','mode':420,'sha256':sha},{'path':'a','size':1,'kind':'regular','mode':0o4755,'sha256':sha},{'path':'a','size':1,'kind':'regular','mode':420}]
     for r in bad_rows:
         assert kind('import json,sys;json.dump(%r,sys.stdout)'%{**good,'members':[r]})=='bad_schema'
+    # pidfd failure after a successful spawn: child stopped and reaped, CaptureError, no leak
+    import time as T
+    def nopidfd(pid):raise OSError(24,'x')
+    code='import time;time.sleep(60)'
+    t0=T.monotonic()
+    with pytest.raises(m.CaptureError) as e:m.run_child('x',sha,1,cmd=child(code),_pidfd_open=nopidfd)
+    assert e.value.kind=='pidfd' and T.monotonic()-t0<15 and e.value.kind in m.KINDS
+    # read error class
+    import select as S
+    orig_sel=S.select
+    monkeypatch.setattr(m.select,'select',lambda *a,**k:(_ for _ in ()).throw(OSError(5,'x')))
+    assert kind('import time;time.sleep(30)')=='read_error'
+    monkeypatch.setattr(m.select,'select',orig_sel)
+    # semantic closure: types, keys, aliases, modes, targets
+    def sch(**mut):return 'import json,sys;json.dump(%r,sys.stdout)'%{**good,**mut}
+    reg={'path':'a','size':1,'kind':'regular','mode':420,'sha256':sha}
+    lnk={'path':'l','size':0,'kind':'symlink','mode':511,'target':'a'}
+    assert run(sch(members=[reg,lnk],member_count=2))['member_count']==2
+    for rows,extra in (([{**reg,'path':'a/'}],{}),([reg,{**reg,'path':'a/'}],{'member_count':2,'declared_expanded_bytes':2}),
+        ([{**reg,'mode':-1}],{}),([{**reg,'mode':0o1000}],{}),([{**reg,'mode':True}],{}),([{**reg,'size':True}],{}),
+        ([{**reg,'sha256':sha.upper()}],{}),([{**reg,'extra':1}],{}),([{'path':'l','size':0,'kind':'symlink','mode':511}],{'declared_expanded_bytes':0}),
+        ([{**lnk,'target':'x'*5000}],{'declared_expanded_bytes':0}),([{**lnk,'target':5}],{'declared_expanded_bytes':0}),
+        ([{**lnk,'target':''}],{'declared_expanded_bytes':0}),([{**lnk,'sha256':sha}],{'declared_expanded_bytes':0}),
+        ([{'path':'d','size':1,'kind':'directory','mode':493}],{}),([{**reg,'kind':'fifo'}],{})):
+        assert kind(sch(members=rows,**extra))=='bad_schema',rows
+    assert kind(sch(container_bytes=1.0))=='bad_schema' and kind(sch(container_bytes=True))=='bad_schema'
+    assert kind(sch(member_count=True))=='bad_schema' and kind(sch(declared_expanded_bytes=1.0))=='bad_schema'
     # no group signalling anywhere in the parent
     import inspect as I
     assert 'killpg' not in I.getsource(m)
