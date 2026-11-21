@@ -8,11 +8,17 @@ from lifecycle import identity, lexical
 from wire import atomic_json
 
 
-def inspect(raw):
+def inspect(raw, *, require_launched=False):
     raw=lexical(raw,leaf_missing=True)
     errors=[]
     report={'errors':errors,'checked_identities':[],'private_keys_absent':True,
             'homes_absent':True,'recorded_jail_absent':True}
+    if require_launched:
+        required=('outer-child.json','fixture/wrapper-lifecycle.json','fixture/namespace-supervisor.json','fixture/namespace-setup.json')
+        report['required_launch_records']=list(required)
+        missing=[name for name in required if not (raw/name).is_file()]
+        report['missing_launch_records']=missing
+        if missing:errors.append('postlaunch_absence_unverified_missing_records')
     if raw.exists():
         for relative in ('outer-child.json','fixture/namespace-supervisor.json'):
             path=raw/relative
@@ -68,8 +74,9 @@ def inspect(raw):
 
 
 def main():
-    if len(sys.argv)!=3:raise SystemExit('usage: absence.py EXACT_RAW_ROOT REPORT_PATH')
-    report=inspect(Path(sys.argv[1]))
+    if len(sys.argv) not in (3,4) or len(sys.argv)==4 and sys.argv[3]!='--require-launched':
+        raise SystemExit('usage: absence.py EXACT_RAW_ROOT REPORT_PATH [--require-launched]')
+    report=inspect(Path(sys.argv[1]),require_launched=len(sys.argv)==4)
     atomic_json(Path(sys.argv[2]),report)
     if report['errors']:raise SystemExit(1)
 

@@ -202,3 +202,48 @@ sanitizer followed by this final absence checker even when product host cleanup
 is terminated; disposable API test actors/auth/approval plus genuine historical
 hypothesis provenance wiring; local TLS rejection execution. Product host,
 journey and TLS execution gates remain FALSE. PR118 is not runtime approval.
+
+## Consolidated held product/API/TLS workflow source
+
+`research/d061_native/product-integration.yml` remains outside registered
+workflows, manual-only, exact-SHA gated. `stage_product.py`, setup, HTTP journey,
+owned supervisor, TLS driver/control and product host all remain FALSE. No
+runtime follows from this checkpoint. A later explicit exact review must cover
+staging and activation mechanics as well as the source SHA.
+
+The proposed setup retrieves only original artifact14691009604 from run44865900582,
+verifies ZIP SHA2e123119845bf6da37067dd9b8eed9eb6d92335716e4e477c4941abf3f3ccb76,
+reads its database with SQLite read-only mode and preserves its digest. New
+clearly disposable test actor/API authorization/case/PoC approval are created
+through ordinary product routes. Only genuine historical five hypotheses and
+their referenced observations/evidence are copied as explicitly fixture-only DB
+imports, with original case/decision/hypothesis/claim hashes and ID mapping. No
+old authorization/expiry/grant/PoC/report is transferred, no model runs, and
+fixture import is not advertised as an API capability or new generation.
+
+The HTTP journey injects the trusted fixed host in process and exercises actual
+execute/readback/report endpoints using independent request sessions, then
+compares stored report hash and exact run/plan/evidence references. This is an
+API integration test, not a production authentication claim. Sync API worker
+threads do not install process signal handlers. The workflow-owned supervisor
+records intent, root and child identity independently of product code.
+
+Always-run independent sanitation targets the exact product/TLS roots, then a
+separate absence check requires the launch-stage identity/lifecycle/namespace
+records. Missing records after launch are explicitly unverified, not clean.
+The independent recovery collector preserves available bounded allowlisted
+originals, product evidence blobs/DB and request/readback/report/provenance.
+It is a bounded partial recovery archive, never an unconditional full-original
+archive or cleanup-success assertion. Keys/private homes/raw recursion are
+excluded. Collector errors remain errors while upload is still attempted.
+
+The separate TLS wrapper has the same fixed namespace/sanitizer mechanics as
+the positive wrapper, with only its two fixed driver literals changed to the
+reviewed TLS driver. It runs a distinct origin/proxy pair, nonce/output/ledger
+and never alters the positive receipt ledger. Certificate and hostname
+verification remain enabled with no proxy trust anchor. Expected certificate
+verification failure plus retained initialized ledger delta0 after both
+producers stop is required. Only this proxy-chain case is implemented; hostname
+mismatch and untrusted-origin cases remain unimplemented. Product positive
+report still says TLS controls untested in that profile; separate workflow
+control cannot silently be promoted into product profile coverage.

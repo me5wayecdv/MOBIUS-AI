@@ -195,3 +195,32 @@ def test_actual_host_rejections_persist_failed_attempts_without_fake_proof(sessi
     if mode=='invalid':assert 'host-failure.json' in names
     if mode=='budget':assert 'proxy.log' not in names
     assert sum(x['bytes'] for x in data['evidence'])<=plan.max_output_bytes
+
+
+def test_independent_absence_never_calls_missing_records_clean_after_launch(tmp_path,monkeypatch):
+    import sys
+    from pathlib import Path
+    monkeypatch.syspath_prepend(str(Path(__file__).parents[1]/'research/d061_native'))
+    from absence import inspect
+    raw=tmp_path/'raw'
+    assert inspect(raw)['complete']
+    data=inspect(raw,require_launched=True)
+    assert not data['complete']
+    assert data['missing_launch_records']
+
+
+def test_exact_consolidated_workflow_is_unregistered_manual_and_source_held():
+    import ast
+    from pathlib import Path
+    import yaml
+    root=Path(__file__).parents[1]
+    source=root/'research/d061_native'
+    workflow=source/'product-integration.yml'
+    assert not (root/'.github/workflows'/workflow.name).exists()
+    data=yaml.safe_load(workflow.read_text())
+    assert set(data.get('on',data.get(True)))=={'workflow_dispatch'}
+    for name in ('stage_product.py','product_setup.py','product_http_journey.py','run_product_owned.py','tls_driver.py','tls_controls.py','product_host.py'):
+        values={target.id:node.value.value for node in ast.parse((source/name).read_text()).body
+            if isinstance(node,ast.Assign) and isinstance(node.value,ast.Constant)
+            for target in node.targets if isinstance(target,ast.Name)}
+        assert values['APPROVED_FOR_EXECUTION'] is False

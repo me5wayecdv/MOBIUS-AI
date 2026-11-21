@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import threading
 
 from cleanup import attempt, ordinary_signals_ignored
 from lifecycle import identity, lexical, parent_death
@@ -66,7 +67,10 @@ class PreparedCIHost:
         original=None
         command={'argv':argv,'rc':None,'errors':[]}
         def interrupted(signum,frame):raise SystemExit(128+signum)
-        old_handlers={sig:signal.signal(sig,interrupted) for sig in (signal.SIGINT,signal.SIGTERM,signal.SIGHUP)}
+        # HTTP sync endpoints run on a worker thread. OS signals belong to the
+        # workflow-owned supervisor, never install process handlers from there.
+        old_handlers=({sig:signal.signal(sig,interrupted) for sig in (signal.SIGINT,signal.SIGTERM,signal.SIGHUP)}
+            if threading.current_thread() is threading.main_thread() else {})
         try:
             with (raw/'fixture.log').open('xb') as log:
                 child=subprocess.Popen(argv,env=env,stdin=subprocess.DEVNULL,stdout=log,
