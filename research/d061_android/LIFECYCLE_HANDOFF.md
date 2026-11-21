@@ -195,3 +195,33 @@ archive links/duplicate members, requires all materialized regular file hashes,
 uses bounded streaming for the3GB system image and immutable root-owned outputs.
 Its transitive runtime/control stage lock does not exist yet. No archive was
 extracted, SDK installed, license accepted or downloaded binary executed here.
+
+## Held source follow-up: real effect ordering and app-negative preparation
+
+The recover-only attempt intent precedes the relay signal as well as role
+cleanup. Missing launch identity remains unverified failure and does not prevent
+independent cleanup of the other role. Mock-only tests cover this distinction;
+no real SIGKILL, cancel or timeout experiment has been run.
+
+Offline builder source accepts closed positive/untrusted-ca/wrong-hostname APK
+scenarios. Positive remains the sole contained-driver/default-product case.
+Untrusted-ca embeds a distinct canonical disposable public CA, never a user key.
+Wrong-hostname retains fixed TCP/CONNECT loopback scope and HTTPS verification,
+changes only the layered TLS peer name, and explicitly suppresses client SNI so
+the interception proxy cannot simply issue a matching leaf for that peer name.
+Actual pinned Android/proxy behavior remains untested. Build metadata identifies
+the scenario, embedded CA and compiled Java; negative cases are rejected before
+positive fixture API setup creates any objects, and by positive output checks.
+App logs now delimit handshake begin/established with nonce/UID/PID. Those logs
+alone cannot establish the reason for a TLS failure or verify zero backend traffic.
+A separately reviewed negative runtime driver, presented certificate evidence,
+independent raw native/receipt ledgers and teardown remain missing. No negative
+scenario is added to an existing workflow or product execution path. No build or
+app execution has occurred. Upstream untrusted-origin negative remains separate
+unimplemented preparation, not silently covered by the app trust negative.
+
+Archive staging now rehashes the same open root-owned nonwritable single-link
+archive descriptor used to retrieve each member, not a later path-open assumed
+to match a prior hash. This is deliberately conservative and may reread archives;
+no speed claim or staging completion is made. Public intermediate directories use
+explicit fchmod0755 under private umask077; incomplete role roots remain private.

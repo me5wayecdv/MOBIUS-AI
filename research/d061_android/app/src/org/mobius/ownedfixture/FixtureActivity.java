@@ -71,7 +71,8 @@ public final class FixtureActivity extends Activity {
                 Log.i(TAG, "OWNED_FIXTURE_REQUEST_COMPLETED nonce=" + nonce);
                 runOnUiThread(() -> view.setText("Owned fixture request completed"));
             } catch (Exception error) {
-                Log.e(TAG, "OWNED_FIXTURE_FAILED nonce=" + nonce + " class=" + error.getClass().getSimpleName());
+                Log.e(TAG, "OWNED_FIXTURE_FAILED nonce=" + nonce + " pid=" + android.os.Process.myPid() + " uid=" + android.os.Process.myUid()
+                    + " class=" + error.getClass().getSimpleName());
                 runOnUiThread(() -> view.setText("Owned fixture failed"));
             }
         }, "owned-fixture-network").start();
@@ -129,7 +130,11 @@ public final class FixtureActivity extends Activity {
                 SSLParameters parameters = tls.getSSLParameters();
                 parameters.setEndpointIdentificationAlgorithm("HTTPS");
                 tls.setSSLParameters(parameters);
+                Log.i(TAG, "OWNED_FIXTURE_TLS_BEGIN nonce=" + nonce + " pid=" + android.os.Process.myPid()
+                    + " uid=" + android.os.Process.myUid());
                 tls.startHandshake();
+                Log.i(TAG, "OWNED_FIXTURE_TLS_ESTABLISHED nonce=" + nonce + " pid=" + android.os.Process.myPid()
+                    + " uid=" + android.os.Process.myUid());
                 OutputStream secure = tls.getOutputStream();
                 String request = "GET /receipt?nonce=" + nonce + " HTTP/1.1\r\nHost: 127.0.0.1:" + ORIGIN_PORT
                     + "\r\nAccept: application/json\r\nX-D061-Nonce: " + nonce + "\r\n\r\n";

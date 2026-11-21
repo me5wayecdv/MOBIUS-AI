@@ -42,7 +42,7 @@ def verify_root_inputs():
     if lock.get('status')!='EXACT_REVIEWED_SIBLING_SOURCE_LOCK':raise ValueError('source lock unresolved')
     required={'sibling_supervisor.py','namespace_supervisor.py','contained_driver.py','control_driver.py',
         'handoff_protocol.py','handoff_io.py','owned_collect.py','owned_absence.py','owned_product_setup.py',
-        'adb_scope.py','emulator_scope.py','build_owned.py','profile.py','product_contract.py','outer_owner.py'}
+        'adb_scope.py','emulator_scope.py','build_owned.py','app_negative_preparation.py','profile.py','product_contract.py','outer_owner.py'}
     rows=lock.get('files',[])
     if len(rows)!=len(required) or {row['path'] for row in rows}!=required:raise ValueError('fixed complete relay source set required')
     for row in rows:

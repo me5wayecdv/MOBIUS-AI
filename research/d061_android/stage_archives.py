@@ -9,13 +9,14 @@ import argparse
 import hashlib
 import json
 import os
+import re
 from pathlib import Path,PurePosixPath
 import stat
 import tarfile
 import zipfile
 from contextlib import contextmanager
 
-from handoff_io import read,write,json_write,mkdir,digest
+from handoff_io import read,json_write,mkdir,digest,public_directory
 from namespace_supervisor import validate_manifest,ROLES
 
 APPROVED_FOR_EXECUTION = False
@@ -23,13 +24,13 @@ APPROVED_FOR_EXECUTION = False
 
 def relative(value):
     path=PurePosixPath(value)
-    if not value or path.is_absolute() or '..' in path.parts or str(path)!=value or '\\' in value:
+    if not value or value=='.' or path.is_absolute() or '..' in path.parts or str(path)!=value or '\\' in value:
         raise ValueError('exact canonical relative archive path required')
     return value
 
 
 @contextmanager
-def member_stream(archive,name,size):
+def member_stream(archive,name,size,*,expected=None):
     from handoff_io import parent_fd
     name=relative(name)
     with parent_fd(archive) as (parent,leaf):
@@ -37,6 +38,16 @@ def member_stream(archive,name,size):
         meta=os.fstat(fd)
         if not stat.S_ISREG(meta.st_mode):os.close(fd);raise ValueError('regular archive FD required')
         with os.fdopen(fd,'rb') as container:
+            if expected is not None:
+                if meta.st_uid!=0 or meta.st_mode&0o222 or meta.st_nlink!=1 or meta.st_size!=expected['bytes']:
+                    raise ValueError('immutable root-owned single-link archive required')
+                before=(meta.st_dev,meta.st_ino,meta.st_size,meta.st_mtime_ns,meta.st_ctime_ns)
+                h=hashlib.sha256()
+                while block:=container.read(1048576):h.update(block)
+                after=os.fstat(container.fileno())
+                if before!=(after.st_dev,after.st_ino,after.st_size,after.st_mtime_ns,after.st_ctime_ns) or h.hexdigest()!=expected['sha256']:
+                    raise ValueError('archive changed or reviewed same-FD digest differs')
+                container.seek(0)
             if zipfile.is_zipfile(container):
                 container.seek(0)
                 with zipfile.ZipFile(container) as source:
@@ -50,7 +61,11 @@ def member_stream(archive,name,size):
             else:
                 container.seek(0)
                 with tarfile.open(fileobj=container,mode='r:*') as source:
-                    items=[x for x in source.getmembers() if x.name==name]
+                    items=[]
+                    for index,item in enumerate(source):
+                        if index>=100000:raise ValueError('bounded archive member inventory required')
+                        if item.name==name:items.append(item)
+                        if len(items)>1:raise ValueError('duplicate exact TAR member')
                     if len(items)!=1 or not items[0].isfile() or items[0].size!=size:
                         raise ValueError('regular exact TAR member required, no link resolution')
                     with source.extractfile(items[0]) as stream:yield stream
@@ -59,7 +74,14 @@ def member_stream(archive,name,size):
 def verify_archives(directory,lock):
     rows=lock.get('archives',[]);result={}
     if not rows or len(rows)>64:raise ValueError('bounded exact archive set required')
+    total=0
     for row in rows:
+        if set(row)!={'name','bytes','sha256'} or type(row['bytes']) is not int or row['bytes']<=0:
+            raise ValueError('exact archive row schema and positive byte count required')
+        if not isinstance(row['sha256'],str) or re.fullmatch('[0-9a-f]{64}',row['sha256']) is None:
+            raise ValueError('exact reviewed archive SHA256 required')
+        total+=row['bytes']
+        if total>32*1024**3:raise ValueError('aggregate archive size bound')
         name=relative(row['name'])
         if '/' in name or name in result:raise ValueError('fixed unique archive basename')
         path=directory/name
@@ -69,14 +91,17 @@ def verify_archives(directory,lock):
         with parent_fd(path) as (parent,leaf):
             fd=os.open(leaf,os.O_RDONLY|os.O_NOFOLLOW,dir_fd=parent)
             try:
+                parent_meta=os.fstat(parent)
+                if parent_meta.st_uid!=0 or parent_meta.st_mode&0o022:raise ValueError('root-owned archive directory required')
                 meta=os.fstat(fd)
-                if not stat.S_ISREG(meta.st_mode) or meta.st_size!=row['bytes']:raise ValueError('archive type/size differs')
+                if (not stat.S_ISREG(meta.st_mode) or meta.st_size!=row['bytes']
+                    or meta.st_uid!=0 or meta.st_mode&0o222 or meta.st_nlink!=1):raise ValueError('immutable root-owned archive type/size differs')
                 h=hashlib.sha256()
                 with os.fdopen(fd,'rb',closefd=False) as stream:
                     while block:=stream.read(1048576):h.update(block)
                 if h.hexdigest()!=row['sha256']:raise ValueError('reviewed archive digest differs')
             finally:os.close(fd)
-        result[name]=path
+        result[name]={'path':path,'bytes':row['bytes'],'sha256':row['sha256']}
     return result
 
 
@@ -97,10 +122,10 @@ def stage_role(role,lock,archives):
         current=root
         for part in destination.relative_to(root).parts[:-1]:
             current=current/part
-            if not current.exists():mkdir(current,0o755)
+            if not current.exists():public_directory(current)
             elif current.is_symlink():raise ValueError('staging ancestor link')
         from handoff_io import parent_fd
-        with member_stream(archives[archive_name],member,size) as source,parent_fd(destination) as (parent,leaf):
+        with member_stream(archives[archive_name]['path'],member,size,expected=archives[archive_name]) as source,parent_fd(destination) as (parent,leaf):
             temporary='.'+leaf+'.staging'
             fd=os.open(temporary,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=parent)
             count=0;h=hashlib.sha256()
@@ -120,7 +145,11 @@ def stage_role(role,lock,archives):
                 try:os.unlink(temporary,dir_fd=parent)
                 except FileNotFoundError:pass
     json_write(root/'closure-lock.json',manifest)
-    root.chmod(0o755)
+    from handoff_io import parent_fd
+    with parent_fd(root) as (parent,leaf):
+        fd=os.open(leaf,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=parent)
+        try:os.fchmod(fd,0o755)
+        finally:os.close(fd)
     return {'role':role,'root':str(root),'file_count':len(manifest['files']),
         'closure_sha256':digest(json.dumps(manifest,sort_keys=True,separators=(',',':')).encode()),
         'staging_only_no_code_executed':True}

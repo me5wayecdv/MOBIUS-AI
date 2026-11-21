@@ -28,7 +28,9 @@ def prepare(context,client,*,apk,build_record,source_root,output):
     apk=Path(apk);source_root=Path(source_root);output=Path(output)
     if not apk.is_file() or apk.is_symlink() or apk.stat().st_size>4*1024**2:raise ValueError('bounded actual owned APK required')
     content=apk.read_bytes();digest=hashlib.sha256(content).hexdigest()
-    if (build_record.get('apk_sha256')!=digest or build_record.get('package')!=PACKAGE
+    if (build_record.get('tls_scenario','positive')!='positive'
+        or build_record.get('embedded_public_ca_sha256',build_record.get('public_ca_sha256'))!=build_record.get('public_ca_sha256')
+        or build_record.get('apk_sha256')!=digest or build_record.get('package')!=PACKAGE
         or build_record.get('actual_app_network_not_executed_by_build') is not True):
         raise ValueError('actual owned build/zero-app-traffic record required')
     ca=build_record['public_ca_sha256']

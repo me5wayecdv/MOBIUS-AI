@@ -67,6 +67,9 @@ def main():
     p.add_argument('--public-proxy-ca',type=Path,required=True)
     p.add_argument('--public-ca-sha256',required=True)
     p.add_argument('--output',type=Path,required=True)
+    from app_negative_preparation import SCENARIOS,prepare
+    p.add_argument('--tls-scenario',choices=SCENARIOS,default='positive')
+    p.add_argument('--negative-public-ca',type=Path)
     a=p.parse_args()
     # Runs only in the later reviewed no-uplink child, never root/host shell.
     if os.geteuid()==0:raise RuntimeError('nonroot offline build child required')
@@ -86,7 +89,16 @@ def main():
     out=a.output;out.mkdir(mode=0o700,exist_ok=False)
     source=Path(__file__).resolve().parent/'app'
     app=out/'app';shutil.copytree(source,app,symlinks=False)
-    raw=app/'res/raw';raw.mkdir(exist_ok=False);shutil.copyfile(ca,raw/'fixture_proxy_ca.der')
+    java_source=app/'src/org/mobius/ownedfixture/FixtureActivity.java'
+    alternate=None
+    if a.negative_public_ca is not None:
+        negative=regular(a.negative_public_ca)
+        if negative.stat().st_size>16384:raise ValueError('negative public certificate bound')
+        alternate=negative.read_bytes()
+    prepared,embedded,variant=prepare(java_source.read_text(),ca.read_bytes(),scenario=a.tls_scenario,
+        negative_public_ca_der=alternate)
+    java_source.write_text(prepared)
+    raw=app/'res/raw';raw.mkdir(exist_ok=False);(raw/'fixture_proxy_ca.der').write_bytes(embedded)
     classes=out/'classes';classes.mkdir()
     dex=out/'dex';dex.mkdir()
     generated=out/'generated';generated.mkdir()
@@ -160,10 +172,11 @@ def main():
     with zipfile.ZipFile(apk) as archive:
         names=archive.namelist()
         if len(names)!=len(set(names)):raise ValueError('duplicate APK entries')
-        if archive.read('res/raw/fixture_proxy_ca.der')!=ca.read_bytes():raise ValueError('APK public CA differs')
+        if archive.read('res/raw/fixture_proxy_ca.der')!=embedded:raise ValueError('APK embedded scenario public CA differs')
     signature=re.findall(r'(?m)^Signer #1 certificate SHA-256 digest: ([0-9a-f]{64})$',(out/'verify-signature.log').read_text())
     if len(signature)!=1:raise ValueError('exact single APK signer certificate identity required')
-    record={'signature_sha256':signature[0],'apk_sha256':digest(apk),'public_ca_sha256':digest(ca),'package':PACKAGE,
+    record={**variant,'compiled_java_sha256':digest(java_source),
+        'scenario_preparer_sha256':digest(Path(__file__).parent/'app_negative_preparation.py'),'signature_sha256':signature[0],'apk_sha256':digest(apk),'public_ca_sha256':digest(ca),'package':PACKAGE,
         'source_files':[{ 'path':str(path.relative_to(source)),'sha256':digest(path)} for path in sorted(source.rglob('*')) if path.is_file()],
         'toolchain_lock_sha256':digest(a.toolchain_lock),'disposable_key_not_for_upload':True,
         'actual_app_network_not_executed_by_build':True}

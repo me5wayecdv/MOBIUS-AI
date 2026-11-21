@@ -168,3 +168,22 @@ def test_owned_rejections_keep_failure_and_full_budget_without_positive_proof(se
     assert readback['output']['output_json']['apk_execution'] is None
     assert sum(x['bytes'] for x in readback['evidence'])<=plan.max_output_bytes
     if mode=='budget':assert 'proxy.log' not in {x['name'] for x in readback['output']['output_json']['native_artifacts']}
+
+
+@pytest.mark.parametrize('variant',[{'tls_scenario':'untrusted-ca'},{'tls_scenario':'wrong-hostname'},
+    {'embedded_public_ca_sha256':'d'*64}])
+def test_negative_apk_variants_rejected_before_product_setup_effects(tmp_path,monkeypatch,variant):
+    import sys
+    from pathlib import Path
+    root=Path(__file__).parents[1]/'research/d061_android';monkeypatch.syspath_prepend(str(root))
+    import owned_product_setup
+    monkeypatch.setattr(owned_product_setup,'APPROVED_FOR_EXECUTION',True)
+    monkeypatch.setattr(owned_product_setup.os,'geteuid',lambda:65534)
+    apk=tmp_path/'synthetic.apk';apk.write_bytes(b'not a built APK')
+    record={'apk_sha256':hashlib.sha256(apk.read_bytes()).hexdigest(),'package':'org.mobius.ownedfixture',
+        'actual_app_network_not_executed_by_build':True,'public_ca_sha256':'b'*64,**variant}
+    class NoEffects:
+        def __getattr__(self,key):raise AssertionError('negative may not create positive grants/API objects')
+    with pytest.raises(ValueError,match='actual owned build'):
+        owned_product_setup.prepare(NoEffects(),NoEffects(),apk=apk,build_record=record,source_root=root,output=tmp_path/'forbidden')
+    assert not (tmp_path/'forbidden').exists()

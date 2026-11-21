@@ -128,7 +128,9 @@ class OwnedAppAdapter:
             if target.startswith('socket:[') or target.startswith(('net:[','mnt:[','pid:[')):
                 raise ValueError('inherited broker or namespace descriptor')
         build=read('build-result.json')
-        if (build.get('apk_sha256')!=request.apk_sha256 or build.get('public_ca_sha256')!=request.public_ca_sha256
+        if (build.get('tls_scenario','positive')!='positive'
+            or build.get('embedded_public_ca_sha256',request.public_ca_sha256)!=request.public_ca_sha256
+            or build.get('apk_sha256')!=request.apk_sha256 or build.get('public_ca_sha256')!=request.public_ca_sha256
             or build.get('package')!=PACKAGE or not re.fullmatch('[0-9a-f]{64}',build.get('signature_sha256',''))
             or build.get('actual_app_network_not_executed_by_build') is not True):
             raise ValueError('owned APK build/package/public-CA/signature identity')

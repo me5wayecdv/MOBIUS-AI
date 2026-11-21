@@ -426,3 +426,103 @@ def test_held_workflow_is_manual_unregistered_and_recovery_always_runs():
     assert not (ROOT.parents[1]/'.github/workflows/owned-siblings.yml').exists()
     assert not (ROOT/'reviewed-stage-lock.json').exists()
     assert not (ROOT/'reviewed-source-lock.json').exists()
+
+
+def test_archive_stream_rejects_changed_identity_before_member_yield(tmp_path,monkeypatch):
+    import hashlib,zipfile,pytest
+    monkeypatch.syspath_prepend(str(ROOT))
+    import stage_archives
+    archive=tmp_path/'unit.zip'
+    with zipfile.ZipFile(archive,'w') as out:out.writestr('member',b'unit payload')
+    expected={'bytes':archive.stat().st_size,'sha256':hashlib.sha256(archive.read_bytes()).hexdigest()}
+    archive.chmod(0o444)
+    # Production requires root ownership, even where the digest matches.
+    if archive.stat().st_uid!=0:
+        with pytest.raises(ValueError):
+            with stage_archives.member_stream(archive,'member',12,expected=expected):pass
+    else:
+        with stage_archives.member_stream(archive,'member',12,expected=expected) as stream:assert stream.read()==b'unit payload'
+    wrong=dict(expected,sha256='0'*64)
+    with pytest.raises(ValueError):
+        with stage_archives.member_stream(archive,'member',12,expected=wrong):pass
+    archive.chmod(0o644)
+    with pytest.raises(ValueError):
+        with stage_archives.member_stream(archive,'member',12,expected=expected):pass
+
+
+def test_recovery_missing_identity_fails_but_continues_other_role(tmp_path,monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT))
+    import outer_owner,sibling_supervisor
+    root=tmp_path/'synthetic-recovery';root.mkdir()
+    (root/'runtime-launch-intent.json').write_text('{}')
+    (root/'control-launch-intent.json').write_text('{}')
+    (root/'control-launch.json').write_text(json.dumps({'identity':{'synthetic':True}}))
+    checked=[]
+    monkeypatch.setattr(outer_owner,'terminate',lambda identity:checked.append(identity) or {'state':'unit_absent'})
+    monkeypatch.setattr(sibling_supervisor,'check_absent',lambda *args,**kwargs:{'complete':True})
+    result=outer_owner.recover(root,attempt_id='c'*32)
+    assert not result['complete'] and result['errors']==[{'role':'runtime','class':'RuntimeError'}]
+    assert result['roles'][0]['state']=='expected_but_unverified'
+    assert result['roles'][1]['state']=='verified_absent' and checked==[{'synthetic':True}]
+
+
+def test_recovery_attempt_intent_precedes_relay_effect_and_reuse_cannot_signal(tmp_path,monkeypatch):
+    import pytest
+    monkeypatch.syspath_prepend(str(ROOT))
+    import outer_owner
+    root=tmp_path/'synthetic-recovery';root.mkdir();effects=[]
+    def terminate(identity):
+        assert (root/('outer-recovery-intent-'+'d'*32+'.json')).is_file()
+        effects.append(identity);raise ProcessLookupError('unit fault, no real signal')
+    monkeypatch.setattr(outer_owner,'terminate',terminate)
+    result=outer_owner.recover(root,attempt_id='d'*32,relay_identity={'synthetic':True})
+    assert not result['complete'] and result['errors']==[{'role':'relay','class':'ProcessLookupError'}]
+    with pytest.raises(FileExistsError):outer_owner.recover(root,attempt_id='d'*32,relay_identity={'synthetic':True})
+    assert len(effects)==1
+
+
+def test_negative_app_source_preparation_is_closed_and_keeps_tcp_scope(monkeypatch):
+    import pytest
+    monkeypatch.syspath_prepend(str(ROOT))
+    from app_negative_preparation import prepare
+    source=(ROOT/'app/src/org/mobius/ownedfixture/FixtureActivity.java').read_text()
+    positive,ca,record=prepare(source,b'unit positive, not used as certificate')
+    assert positive==source and record['tls_scenario']=='positive'
+    wrong,ca,record=prepare(source,b'unit positive',scenario='wrong-hostname')
+    assert 'createSocket(tunnel, "owned-name-mismatch.invalid", ORIGIN_PORT, true)' in wrong
+    assert 'new InetSocketAddress("127.0.0.1", PROXY_PORT)' in wrong
+    assert 'setEndpointIdentificationAlgorithm("HTTPS")' in wrong
+    assert 'parameters.setServerNames(java.util.Collections.emptyList());' in wrong
+    assert 'OWNED_FIXTURE_TLS_BEGIN' in wrong and 'OWNED_FIXTURE_TLS_ESTABLISHED' in wrong
+    assert record['negative_runtime_not_executed'] and record['tcp_and_connect_destination_unchanged']
+    for case in ['arbitrary-host','trust-all','disabled-verifier']:
+        with pytest.raises(ValueError):prepare(source,b'unit',scenario=case)
+    with pytest.raises(ValueError):prepare(source,b'unit',scenario='untrusted-ca')
+    with pytest.raises(ValueError):prepare(source,b'unit',scenario='untrusted-ca',negative_public_ca_der=b'unit')
+    with pytest.raises(ValueError):prepare(source,b'unit',scenario='positive',negative_public_ca_der=b'other')
+
+
+def test_negative_app_anchor_requires_distinct_public_key_not_only_certificate(monkeypatch):
+    import pytest
+    from datetime import datetime,timedelta,timezone
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.hazmat.primitives.serialization import Encoding
+    from cryptography.x509.oid import NameOID
+    monkeypatch.syspath_prepend(str(ROOT))
+    from app_negative_preparation import prepare
+    source=(ROOT/'app/src/org/mobius/ownedfixture/FixtureActivity.java').read_text()
+    # Ephemeral unit-test keys only, never written and never used for app traffic.
+    key=ec.generate_private_key(ec.SECP256R1());other=ec.generate_private_key(ec.SECP256R1())
+    def certificate(key,serial):
+        name=x509.Name([x509.NameAttribute(NameOID.COMMON_NAME,'synthetic unit CA')]);now=datetime.now(timezone.utc)
+        return (x509.CertificateBuilder().subject_name(name).issuer_name(name).public_key(key.public_key())
+            .serial_number(serial).not_valid_before(now-timedelta(minutes=1)).not_valid_after(now+timedelta(minutes=1))
+            .add_extension(x509.BasicConstraints(ca=True,path_length=None),critical=True)
+            .sign(key,hashes.SHA256()).public_bytes(Encoding.DER))
+    positive=certificate(key,1);same_key=certificate(key,2);negative=certificate(other,3)
+    with pytest.raises(ValueError,match='different public key'):
+        prepare(source,positive,scenario='untrusted-ca',negative_public_ca_der=same_key)
+    prepared,embedded,record=prepare(source,positive,scenario='untrusted-ca',negative_public_ca_der=negative)
+    assert prepared==source and embedded==negative and record['tls_scenario']=='untrusted-ca'

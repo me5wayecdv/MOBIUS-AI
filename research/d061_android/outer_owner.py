@@ -38,7 +38,7 @@ def terminate(record,seconds=10):
     finally:os.close(fd)
 
 
-def recover(root,*,attempt_id=None):
+def recover(root,*,attempt_id=None,relay_identity=None):
     # Independently called after relay death/failure. Separate recovery report,
     # never rewrite missing original cleanup into a fake successful wrapper log.
     from sibling_supervisor import check_absent
@@ -48,14 +48,19 @@ def recover(root,*,attempt_id=None):
     if re.fullmatch('[0-9a-f]{32}',attempt_id) is None:raise ValueError('unique recovery attempt ID required')
     json_write(root/('outer-recovery-intent-'+attempt_id+'.json'),{'attempt_id':attempt_id,
         'root':str(root),'stage':'before_recovery_effects','scope':'independent_outer_recovery'})
-    stage_path=root/'runtime-root-stage.json'
-    stage=json.loads(read(stage_path,65536)) if exists(stage_path) else None
+    # A recover-only relay signal is also an effect of THIS attempt. Its unique
+    # durable intent must exist before signaling, not only before role cleanup.
+    if relay_identity is not None:
+        try:terminate(relay_identity)
+        except BaseException as error:errors.append({'role':'relay','class':type(error).__name__})
     for role in ('runtime','control'):
         intent=root/(role+'-launch-intent.json');launched=root/(role+'-launch.json')
         if not exists(intent):roles.append({'role':role,'state':'not_reached'});continue
         state={'role':role,'state':'expected_but_unverified'}
         try:
             if not exists(launched):raise RuntimeError('launch identity missing after launch intent')
+            stage_path=root/'runtime-root-stage.json'
+            stage=json.loads(read(stage_path,65536)) if role=='runtime' and exists(stage_path) else None
             identity=json.loads(read(launched,65536))['identity']
             state['termination']=terminate(identity)
             # Parent-death closes unshare PID1. Membership/FD absence is checked
@@ -82,9 +87,7 @@ def main():
         root=Path(owner['root'])
         if root.parent!=Path('/opt') or root.name!='d061-owned-android-run-'+owner['run_id']:
             raise ValueError('exact independent recovery locator differs')
-        record=owner.get('relay_identity')
-        if record is not None:terminate(record)
-        result=recover(root)
+        result=recover(root,relay_identity=owner.get('relay_identity'))
         if not result['complete']:raise RuntimeError('independent outer recovery incomplete')
         return
     os.umask(0o077);run_id=secrets.token_hex(16);provisioning_id=secrets.token_hex(16)
