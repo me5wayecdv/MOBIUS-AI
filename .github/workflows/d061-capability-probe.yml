@@ -1,0 +1,40 @@
+name: D-061 containment capability probe (read-only)
+on:
+  push:
+    branches: [d061-capability-probe]
+permissions: {}
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Kernel and OS
+        run: |
+          uname -r; uname -m
+          grep -E 'PRETTY_NAME' /etc/os-release
+      - name: nftables / iptables versions
+        run: |
+          nft --version || true
+          iptables --version || true
+          command -v nft iptables ip6tables || true
+      - name: Network interfaces and IPv6 presence
+        run: |
+          ip -brief addr || true
+          ip -6 route show || true
+          cat /proc/net/if_inet6 2>/dev/null || echo "NO_IPV6"
+          sysctl net.ipv6.conf.all.disable_ipv6 net.ipv6.conf.default.disable_ipv6 2>/dev/null || true
+      - name: cgroup v2 topology (read-only)
+        run: |
+          stat -fc %T /sys/fs/cgroup
+          cat /proc/self/cgroup
+          cat /sys/fs/cgroup/cgroup.controllers 2>/dev/null || true
+          cat /sys/fs/cgroup/cgroup.subtree_control 2>/dev/null || true
+          sudo -n true && echo SUDO_OK || echo NO_SUDO
+      - name: Kernel config for socket cgroupv2 / cgroup netfilter matches (read-only)
+        run: |
+          zcat /proc/config.gz 2>/dev/null | grep -E 'CONFIG_NF_SOCKET|CONFIG_NETFILTER_XT_MATCH_CGROUP|CONFIG_SOCK_CGROUP|CONFIG_CGROUP_NET_CLASSID|CONFIG_CGROUP_BPF' || echo "NO_CONFIG_GZ"
+          ls /lib/modules/$(uname -r)/kernel/net/netfilter/ 2>/dev/null | grep -iE 'socket|cgroup' || echo "no matching modules listed"
+          ls /lib/modules/$(uname -r)/kernel/net/core/ 2>/dev/null | grep -i cgroup || true
+      - name: nft syntax validation only (nft --check applies nothing)
+        run: |
+          printf '%s\n' 'table inet probe_check { chain out { type filter hook output priority 0; policy drop; socket cgroupv2 level 1 "probe.slice" ip daddr 127.0.0.1 tcp dport 9999 accept } }' > /tmp/probe.nft
+          sudo nft --check --file /tmp/probe.nft && echo NFT_CHECK_OK || echo NFT_CHECK_FAILED
