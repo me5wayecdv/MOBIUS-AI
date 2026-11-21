@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+  <base-config cleartextTrafficPermitted="false">
+    <trust-anchors>
+      <!-- Build must add only this run's public proxy CA certificate. No keys. -->
+      <certificates src="@raw/fixture_proxy_ca" />
+    </trust-anchors>
+  </base-config>
+</network-security-config>
