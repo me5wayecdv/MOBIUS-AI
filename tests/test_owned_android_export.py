@@ -914,10 +914,13 @@ def test_namespace_inspection_error_is_never_absence(wd, monkeypatch):
     assert left and left[0].get('inspection_error')
 
 
-def test_namespace_scan_sees_descendant_namespace_and_handle_holders(wd):
+def test_namespace_scan_sees_descendant_namespace_and_handle_holders(wd, monkeypatch):
     # a process that merely holds the namespace link open is an obligation too; use this process's own ns as the target
     own_fd = os.open('/proc/self/ns/pid', os.O_RDONLY)
     try:
+        # deterministic scan set: an unrelated same-uid process on a CI runner can refuse ns/pid (EACCES), which is a correct inspection error
+        # but not what this test exercises. The unreadable-process failure path is covered by its own tests.
+        monkeypatch.setattr(wd.os, 'scandir', lambda path: iter([NS(name=str(os.getpid()))]))
         pids = {m['pid'] for m in wd.ns_members(own_fd, True)}
         assert os.getpid() in pids
     finally:
@@ -1453,7 +1456,7 @@ def test_audience_gate_is_plan_validation_only(monkeypatch,tmp_path):
     with pytest.raises(ValueError):g.validate_content('package_hash_inventory',{'members':[]},sha256='0'*64,size=1)
 
 
-def test_host_primitive_probe_sequence_with_fake_ops_and_closed_result(monkeypatch):
+def test_host_primitive_probe_sequence_with_fake_ops_and_closed_result(monkeypatch,tmp_path):
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1]/'research'/'d061_android'))
     import host_primitive_probe as hp
     import audience_gate as g
@@ -1497,7 +1500,8 @@ def test_host_primitive_probe_sequence_with_fake_ops_and_closed_result(monkeypat
         with pytest.raises(ValueError):g.validate_content('host_primitive_result',bad)
     with pytest.raises(ValueError):hp.RealOps('/sys/fs/cgroup/../x','/bin/sleep','0'*64)
     with pytest.raises(ValueError):hp.RealOps('/tmp/x','/bin/sleep','0'*64)
-    with pytest.raises(ValueError):hp.RealOps('/sys/fs/cgroup','/bin/sleep','0'*64)   # pinned identity mismatch refuses
+    sl=tmp_path/'sleep-copy';sl.write_bytes(b'#!/bin/sh\n');os.chmod(sl,0o755)   # a regular file: /bin/sleep may be a symlink on a runner image
+    with pytest.raises(ValueError):hp.RealOps('/sys/fs/cgroup',str(sl),'0'*64,trusted_uid=os.getuid())   # pinned identity mismatch refuses
     for bad in (('r','a'*64,'b'*64),('r','a'*40,'b'*40)):
         with pytest.raises(ValueError):hp.envelope(*bad)   # commit and sha256 are separate types
 
