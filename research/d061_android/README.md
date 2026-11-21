@@ -8,7 +8,9 @@ not another stdlib traffic demonstration or an Allsafe capability claim.
 
 The owned test-only package org.mobius.ownedfixture performs one empty-body GET
 with the fixed reviewed canonical wire contract from its own Android process.
-Only the32hex run nonce is an input. The app contacts127.0.0.1:18080, CONNECTs
+Only the32hex run nonce and fixed prepare/commit phase are inputs. Prepare sends
+no network traffic. The harness records its UID/PID/command before a separate
+commit to the same singleTask activity permits one request. The app contacts127.0.0.1:18080, CONNECTs
 only127.0.0.1:18443, then sends the fixed request through verified TLS. A bounded
 response status/body/nonce is checked. No arbitrary URL, redirects, credentials,
 user data or external destination. Actual native addon replay must consume the
@@ -49,8 +51,11 @@ owned-app trust, not bypassing another app's certificate pinning.
   hostname/untrusted-origin negatives and lifecycle failure paths remain gaps.
 
 This directory supplies app source, held offline build-driver source and scope.
-No toolchain was downloaded/installed or driver executed. The metadata candidates
-are unresolved, not a valid runtime lock. Namespace/emulator/product harness still
-requires implementation. Build/harness/runtime remain
+The five Google archives and one official Adoptium JDK archive were retrieved
+and verified as bytes only. No archive was extracted, installed or executed.
+Archive hashes are not a valid runtime closure lock. A FALSE-gated namespace
+supervisor now supplies exact-copy closure/chroot/no-uplink/KVM/drop/timeout source,
+not a proven namespace or emulator result. Runtime dependency closure, fixed
+contained driver, emulator lifecycle and product registration still require implementation. Build/harness/runtime remain
 held pending exact review. No third-party egress, system-CA changes, pinning
 bypass, production activation, new model request or paid spend is implied.

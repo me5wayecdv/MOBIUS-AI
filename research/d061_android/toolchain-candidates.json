@@ -1,5 +1,5 @@
 {
-  "status": "HELD_METADATA_ONLY_NOT_RESOLVED_LOCK",
+  "status": "HELD_ARCHIVE_BYTES_VERIFIED_NOT_RUNTIME_CLOSURE",
   "metadata_checked": "2026-11-21",
   "packages": [
     {
@@ -11,8 +11,9 @@
       "official_checksum": "0bb560a90a7a2cbd0dd8348224d518b638fe7949",
       "source_url": "https://dl.google.com/android/repository/repository2-3.xml",
       "source_xml_sha256": "b97da160df8d80f0fe67739643cb53fbfcafd9c502ef57b78c038645062865ee",
-      "archive_sha256": null,
-      "archive_downloaded_or_executed": false
+      "archive_sha256": "0988cacad01b38a18a47bac14a0695f246bc76c1b06c0eeb8eb0dc825ab0c8e0",
+      "archive_downloaded": true,
+      "archive_executed": false
     },
     {
       "package": "build-tools;35.0.0",
@@ -23,8 +24,9 @@
       "official_checksum": "2cfaa0bbb2336e9ec18ed3ecea84fa2e2af607bc",
       "source_url": "https://dl.google.com/android/repository/repository2-3.xml",
       "source_xml_sha256": "b97da160df8d80f0fe67739643cb53fbfcafd9c502ef57b78c038645062865ee",
-      "archive_sha256": null,
-      "archive_downloaded_or_executed": false
+      "archive_sha256": "bd3a4966912eb8b30ed0d00b0cda6b6543b949d5ffe00bea54c04c81e1561d88",
+      "archive_downloaded": true,
+      "archive_executed": false
     },
     {
       "package": "platform-tools",
@@ -35,8 +37,9 @@
       "official_checksum": "e1579b288a7ae4e9bc28dedec6a154d78b3c04ed",
       "source_url": "https://dl.google.com/android/repository/repository2-3.xml",
       "source_xml_sha256": "b97da160df8d80f0fe67739643cb53fbfcafd9c502ef57b78c038645062865ee",
-      "archive_sha256": null,
-      "archive_downloaded_or_executed": false
+      "archive_sha256": "214548146cadb2ca3508143d8a1d4be4c59de5bb837253e3ede89ed74cf450d1",
+      "archive_downloaded": true,
+      "archive_executed": false
     },
     {
       "package": "emulator",
@@ -47,8 +50,9 @@
       "official_checksum": "5f7314368fc6c05c937f6991bb4106214dc389e7",
       "source_url": "https://dl.google.com/android/repository/repository2-3.xml",
       "source_xml_sha256": "b97da160df8d80f0fe67739643cb53fbfcafd9c502ef57b78c038645062865ee",
-      "archive_sha256": null,
-      "archive_downloaded_or_executed": false
+      "archive_sha256": "a4405349d8a9c52136ab7861e5331dc40e85574bd91cb8889a298a2ff4c52e26",
+      "archive_downloaded": true,
+      "archive_executed": false
     },
     {
       "package": "system-images;android-29;default;x86_64",
@@ -59,13 +63,24 @@
       "official_checksum": "e4b798d6fcddff90d528d74ef22ce3dd4a2ca798",
       "source_url": "https://dl.google.com/android/repository/sys-img/android/sys-img2-3.xml",
       "source_xml_sha256": "7b119fdc282a65432aab52e8bbc64546f7fb6ec74e79e235633c60d06564b111",
-      "archive_sha256": null,
-      "archive_downloaded_or_executed": false
+      "archive_sha256": "b5c3fda1f4b4931c30518d342e4ad5f7464945e0cdced3538d4ff2e12f7bf201",
+      "archive_downloaded": true,
+      "archive_executed": false
     }
   ],
   "gaps": [
-    "Actual SHA256 archive hashes and staged file manifest require separately reviewed download/verification, no package installed here.",
-    "Exact JDK distribution/version/archive/hash and host image/runtime libraries remain to pin before build.",
-    "Actual emulator/kernel/system image identity and complete offline runtime closure remain to verify, metadata is not execution evidence."
-  ]
+    "Archive bytes independently hashed and metadata verified, no SDK archive extracted or installed; no binary executed.",
+    "Complete staged regular-file runtime closure and host dependency identities still unresolved.",
+    "Archive identity does not establish build/emulator compatibility or runtime containment; exact source activation remains held."
+  ],
+  "jdk": {
+    "release": "jdk-17.0.21.1+2",
+    "source_url": "https://api.adoptium.net/v3/assets/feature_releases/17/ga?architecture=x64&heap_size=normal&image_type=jdk&jvm_impl=hotspot&os=linux&page=0&page_size=1&project=jdk&sort_method=DATE&sort_order=DESC&vendor=eclipse",
+    "archive_url": "https://github.com/adoptium/temurin17-binaries/releases/download/jdk-17.0.21.1%2B2/OpenJDK17U-jdk_x64_linux_hotspot_17.0.21.1_2.tar.gz",
+    "archive_bytes": 193630735,
+    "official_sha256": "0b0ac5eab6db6abaec68c9913bcddb31321e5da411c45073d520d9c125e6f7b4",
+    "archive_sha256": "0b0ac5eab6db6abaec68c9913bcddb31321e5da411c45073d520d9c125e6f7b4",
+    "archive_downloaded": true,
+    "archive_executed": false
+  }
 }

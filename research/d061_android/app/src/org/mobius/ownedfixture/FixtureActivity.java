@@ -1,6 +1,7 @@
 package org.mobius.ownedfixture;
 
 import android.app.Activity;
+import android.content.Intent;
 import android.os.Bundle;
 import android.util.Log;
 import android.widget.TextView;
@@ -28,15 +29,31 @@ public final class FixtureActivity extends Activity {
     private static final int ORIGIN_PORT = 18443;
     private static final int MAX_BYTES = 8192;
     private boolean started = false;
+    private String preparedNonce;
+    private TextView view;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
-        TextView view = new TextView(this);
-        view.setText("HELD owned network fixture");
+        view = new TextView(this);
+        view.setText("HELD owned network fixture prepared, no request sent");
         setContentView(view);
-        final String nonce = getIntent().getStringExtra("fixture_nonce");
-        if (state != null || nonce == null || !nonce.matches("[0-9a-f]{32}") || started) {
-            Log.i(TAG, "REFUSED invalid nonce or repeated launch");
+        String nonce = getIntent().getStringExtra("fixture_nonce");
+        String phase = getIntent().getStringExtra("fixture_phase");
+        if (state != null || nonce == null || !nonce.matches("[0-9a-f]{32}") || !"prepare".equals(phase)) {
+            Log.i(TAG, "REFUSED fresh prepare required");
+            return;
+        }
+        preparedNonce = nonce;
+        Log.i(TAG, "OWNED_FIXTURE_PREPARED nonce=" + nonce + " pid=" + android.os.Process.myPid()
+            + " uid=" + android.os.Process.myUid());
+    }
+
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        final String nonce = intent.getStringExtra("fixture_nonce");
+        if (!"commit".equals(intent.getStringExtra("fixture_phase")) || preparedNonce == null
+                || !preparedNonce.equals(nonce) || started) {
+            Log.i(TAG, "REFUSED mismatched or repeated commit");
             return;
         }
         started = true;
@@ -46,7 +63,7 @@ public final class FixtureActivity extends Activity {
                 Log.i(TAG, "OWNED_FIXTURE_REQUEST_COMPLETED nonce=" + nonce);
                 runOnUiThread(() -> view.setText("Owned fixture request completed"));
             } catch (Exception error) {
-                Log.e(TAG, "OWNED_FIXTURE_FAILED class=" + error.getClass().getSimpleName());
+                Log.e(TAG, "OWNED_FIXTURE_FAILED nonce=" + nonce + " class=" + error.getClass().getSimpleName());
                 runOnUiThread(() -> view.setText("Owned fixture failed"));
             }
         }, "owned-fixture-network").start();
@@ -87,6 +104,9 @@ public final class FixtureActivity extends Activity {
         try (Socket tunnel = new Socket()) {
             tunnel.connect(new InetSocketAddress("127.0.0.1", PROXY_PORT), 5000);
             tunnel.setSoTimeout(5000);
+            Log.i(TAG, "OWNED_FIXTURE_SOCKET nonce=" + nonce + " pid=" + android.os.Process.myPid()
+                + " uid=" + android.os.Process.myUid() + " local_port=" + tunnel.getLocalPort()
+                + " remote=127.0.0.1:" + PROXY_PORT);
             OutputStream output = tunnel.getOutputStream();
             output.write(("CONNECT 127.0.0.1:" + ORIGIN_PORT + " HTTP/1.1\r\nHost: 127.0.0.1:" + ORIGIN_PORT + "\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
             output.flush();

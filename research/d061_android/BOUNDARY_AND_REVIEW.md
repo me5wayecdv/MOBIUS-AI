@@ -22,7 +22,8 @@ Software rendering only, no host GPU/audio/webcam/microphone/smartcard or USB
 passthrough. Device access and /proc/FD namespace evidence must be reviewed.
 
 Read-only binds: exact hash-manifested SDK closure, runtime/toolchain, product
-source/dependencies and required host libraries; fixed individual /dev/null,
+source/dependencies and required host libraries, copied from verified exact-file
+manifests into an immutable root instead of broad host-directory binds; fixed individual /dev/null,
 /dev/urandom,/dev/random,/dev/kvm only. Fresh proc mounted for private PIDns,
 fresh tmpfs /tmp,/run,/dev/shm; private home/AVD state in exact owned output.
 No host /home,/root,/run,/var,/tmp,/sys, docker socket, credential path or broad
@@ -47,9 +48,11 @@ ADB serial/script or device import is supported by the profile.
 ## Stages and budgets
 
 A. Public toolchain archive retrieval, hash+size+path verification only, no SDK
-code execution. Official package metadata sources are recorded in
-`toolchain-candidates.json`; it is NOT a resolved executable lock. Pin all actual
-SHA256s, JDK and library closure first. Network retrieval ends before runtime
+code execution. Official package metadata and verified archive byte hashes are recorded in
+`toolchain-candidates.json`; it is NOT a resolved executable lock. Google
+size/SHA1 and local SHA256 match, Adoptium JDK official size/SHA256 match.
+No extraction, SDK installation or binary execution occurred. Pin complete
+staged file and host library closure first. Network retrieval ends before runtime
 namespace creation. Installing SDK/license acceptance is separately reviewable.
 
 B. Namespace setup/boot provisioning with explicit separate ceiling. This is
@@ -111,10 +114,14 @@ bounded allowlisted recovery must retain actual failures and partial originals.
 
 ## Remaining implementation blockers
 
-Resolved metadata lock and JDK/runtime closure; actual wrapper with reviewed
-KVM+chroot+emulator/adb lifecycle; offline build driver; product typed owned-APK
-registration; app/host attribution and negative-control driver; independent
+Staged runtime/library closure, complete fixed contained driver and reviewed
+KVM+chroot+emulator/adb lifecycle (namespace supervisor is FALSE-gated source,
+not runtime proof); offline build-driver certificate parsing/signature validation;
+product typed owned-APK registration; app/host attribution and negative-control driver; independent
 recovery/checker. These are stated gaps, not executable pseudocode. No workflow
 is registered for this directory. Do not invoke an unrestricted existing CI
 emulator as a shortcut. No model, third-party target, production action, image
 publication or paid resource is part of this preparation.
+
+The precise provisioning-to-approval sequence and remaining implementation gates
+are in `PROVISIONING_HANDOFF.md`. No source preparation checkpoint is readiness.

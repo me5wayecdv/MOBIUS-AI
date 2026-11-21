@@ -11,6 +11,8 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import selectors
+import time
 import zipfile
 
 APPROVED_FOR_BUILD = False
@@ -73,10 +75,14 @@ def main():
     if not re.fullmatch('[0-9a-f]{64}',a.public_ca_sha256) or digest(ca)!=a.public_ca_sha256:
         raise ValueError('this-run public proxy CA digest differs')
     if ca.stat().st_size>16384:raise ValueError('public certificate bound')
-    # DER certificate identity and actual parsing must be verified by the
-    # separately reviewed staging certificate step, never a key/PEM bundle.
-    if not ca.read_bytes().startswith(b"\x30") or b"PRIVATE KEY" in ca.read_bytes():
-        raise ValueError("public DER certificate only")
+    # Parse exactly one public CA certificate, not a DER-looking byte prefix.
+    # cryptography itself must belong to the reviewed offline runtime closure.
+    from cryptography import x509
+    from cryptography.hazmat.primitives.serialization import Encoding
+    certificate=x509.load_der_x509_certificate(ca.read_bytes())
+    if certificate.public_bytes(Encoding.DER)!=ca.read_bytes():raise ValueError('noncanonical DER or trailing bytes')
+    if not certificate.extensions.get_extension_for_class(x509.BasicConstraints).value.ca:
+        raise ValueError('explicit app anchor must be a public CA certificate')
     out=a.output;out.mkdir(mode=0o700,exist_ok=False)
     source=Path(__file__).resolve().parent/'app'
     app=out/'app';shutil.copytree(source,app,symlinks=False)
@@ -91,11 +97,36 @@ def main():
     env={'PATH':str(java_home/'bin')+':/usr/bin:/bin','JAVA_HOME':str(java_home),
         'LANG':'C.UTF-8','HOME':str(home),'TMPDIR':str(out)}
     commands=[]
+    build_started=time.monotonic()
     def run(argv,name):
         commands.append({'stage':name,'argv':list(map(str,argv))})
+        remaining=120-(time.monotonic()-build_started)
+        if remaining<=0:raise TimeoutError('fixed whole offline build ceiling')
+        deadline=time.monotonic()+min(60,remaining)
+        process=None
         with (out/(name+'.log')).open('xb') as log:
-            result=subprocess.run(list(map(str,argv)),env=env,cwd=out,stdin=subprocess.DEVNULL,
-                stdout=log,stderr=subprocess.STDOUT,close_fds=True,timeout=60)
+            try:
+                process=subprocess.Popen(list(map(str,argv)),env=env,cwd=out,stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,stderr=subprocess.STDOUT,close_fds=True)
+                os.set_blocking(process.stdout.fileno(),False)
+                total=0
+                with selectors.DefaultSelector() as poller:
+                    poller.register(process.stdout,selectors.EVENT_READ)
+                    eof=False
+                    while not eof:
+                        if time.monotonic()>deadline:raise TimeoutError('fixed build stage deadline')
+                        for key,events in poller.select(timeout=min(.1,max(0,deadline-time.monotonic()))):
+                            data=os.read(process.stdout.fileno(),4096)
+                            if not data:eof=True;break
+                            total+=len(data)
+                            if total>65536:raise ValueError('build stage diagnostic output bound')
+                            log.write(data)
+                process.wait(timeout=max(.1,deadline-time.monotonic()))
+                result=process
+            finally:
+                if process is not None:
+                    if process.poll() is None:process.kill();process.wait(timeout=5)
+                    process.stdout.close()
         commands[-1]['rc']=result.returncode
         (out/'build-commands.json').write_text(json.dumps(commands,sort_keys=True))
         if result.returncode:raise RuntimeError('actual offline build stage failed:'+name)
