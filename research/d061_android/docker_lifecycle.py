@@ -24,8 +24,9 @@ GATE = '/fixture/container_gate.py'
 DRIVER = {'runtime': '/fixture/contained_driver.py', 'control': '/fixture/control_driver.py'}
 ENV = ['PATH=/opt/android/platform-tools:/runtime/bin:/usr/bin:/bin', 'HOME=/home/fixture', 'ANDROID_USER_HOME=/home/fixture',
        'TMPDIR=/tmp', 'LANG=C.UTF-8', 'ADB_SERVER_SOCKET=tcp:127.0.0.1:5037', 'ADB_MDNS_AUTO_CONNECT=0']
-ULIMITS = [('as', 8 * 1024**3), ('cpu', 300), ('fsize', 4 * 1024**3)]
-ALLOWED_BIND_OPTS = {'Propagation', 'NonRecursive', 'CreateMountpoint', 'ReadOnlyNonRecursive', 'ReadOnlyForceRecursive'}
+ULIMITS = [('as', 8 * 1024**3), ('core', 0), ('cpu', 300), ('fsize', 4 * 1024**3), ('nofile', 512)]   # nproc: bounded by --pids-limit instead (no jail nproc rlimit existed)
+GATE_SECONDS = 30   # container_gate.py deadline; kept in sync by test
+SCRATCH = (('/tmp', 'size=256m,mode=1777'), ('/run', 'size=16m,mode=755'), ('/dev/shm', 'size=512m,mode=1777'), ('/home/fixture', 'size=4g,mode=700'))
 
 
 class SpecError(ValueError):
@@ -59,6 +60,14 @@ def user_for(role, kvm_gid):
     return '65534:%d' % kvm_gid if role == 'runtime' else '65534:65534'
 
 
+def scratch_for(role, kvm_gid):
+    """Exact tmpfs map equivalent to namespace_supervisor's private bounded mounts (owner uid 65534, gid as the role's primary gid).
+    Same option set as the jail: nosuid,nodev, exec allowed (the jail did not set noexec). The engine's treatment of default
+    tmpfs options (it may add noexec unless `exec` is given) and of `uid=`/`gid=` is NOT verified; any mismatch fails closed."""
+    gid = kvm_gid if role == 'runtime' else 65534
+    return {path: 'rw,nosuid,nodev,exec,%s,uid=65534,gid=%d' % (opts, gid) for path, opts in SCRATCH}
+
+
 def cmd_for(role):
     return [GATE, DRIVER[role], '/work']
 
@@ -70,9 +79,10 @@ def create_argv(role, run_id, image, *, mem_mb, pids, cpus, kvm_gid=None, docker
          '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges', '--read-only', '--interactive',
          '--user', user_for(role, kvm_gid), '--memory', '%dm' % mem_mb, '--memory-swap', '%dm' % mem_mb,
          '--pids-limit', str(pids), '--cpus', str(cpus), '--restart', 'no', '--log-driver', 'none', '--no-healthcheck',
-         '--cgroupns', 'private', '--workdir', '/work', '--entrypoint', EXE,
+         '--cgroupns', 'private', '--runtime', 'runc', '--workdir', '/work', '--entrypoint', EXE,
          '--label', 'd061.run_id=' + run_id, '--label', 'd061.role=' + role]
     for n, v in ULIMITS: a += ['--ulimit', '%s=%d:%d' % (n, v, v)]
+    for path, opts in scratch_for(role, kvm_gid).items(): a += ['--tmpfs', '%s:%s' % (path, opts)]
     for e in ENV: a += ['--env', e]
     a += ['--mount', 'type=bind,src=%s,dst=/work,bind-propagation=rprivate' % work,
           '--mount', 'type=bind,src=%s,dst=/control,readonly,bind-propagation=rprivate' % inbox]
@@ -115,7 +125,7 @@ def validate_inspect(rec, role, run_id, image, image_id, *, mem_mb, pids, cpus, 
         need(h.get('ReadonlyRootfs') is True, 'rootfs')
         need(not h.get('GroupAdd'), 'group add')
         need(not h.get('DeviceRequests'), 'device requests')
-        need(not h.get('Tmpfs') and not h.get('ExtraHosts') and not h.get('Dns') and not h.get('Links') and not h.get('VolumesFrom')
+        need(not h.get('ExtraHosts') and not h.get('Dns') and not h.get('Links') and not h.get('VolumesFrom')
              and not h.get('PortBindings') and not h.get('Binds') and not h.get('DeviceCgroupRules'), 'extra host config')
         need(h.get('OomKillDisable') in (False, None), 'oom')
         need((h.get('RestartPolicy') or {}).get('Name') in ('no', ''), 'restart')
@@ -125,9 +135,16 @@ def validate_inspect(rec, role, run_id, image, image_id, *, mem_mb, pids, cpus, 
         need(h.get('PidsLimit') == pids and h.get('NanoCpus') == cpus * 10**9, 'pids/cpus')
         need(sorted((u.get('Name'), u.get('Soft'), u.get('Hard')) for u in (h.get('Ulimits') or [])) == sorted((n, v, v) for n, v in ULIMITS), 'ulimits')
         need((h.get('Devices') or []) == ([KVM_DEV] if role == 'runtime' else []), 'devices exact tuple')
-        for m in h.get('Mounts') or []:
-            bo = m.get('BindOptions') or {}
-            need(set(bo) <= ALLOWED_BIND_OPTS and bo.get('Propagation') == 'rprivate' and not bo.get('CreateMountpoint'), 'bind options')
+        need((h.get('Tmpfs') or {}) == scratch_for(role, kvm_gid), 'tmpfs scratch exact (as supplied, engine normalization unverified)')
+        def norm(m):   # declared normalization: drop falsy engine defaults, keep every truthy field
+            o = {k: v for k, v in m.items() if v not in (False, None, '', {}, [])}
+            if isinstance(o.get('BindOptions'), dict):
+                o['BindOptions'] = {k: v for k, v in o['BindOptions'].items() if v not in (False, None, '', {}, [])}
+            return o
+        want_m = [{'Type': 'bind', 'Source': inbox, 'Target': '/control', 'ReadOnly': True, 'BindOptions': {'Propagation': 'rprivate'}},
+                  {'Type': 'bind', 'Source': work, 'Target': '/work', 'BindOptions': {'Propagation': 'rprivate'}}]
+        got_m = sorted((norm(m) for m in (h.get('Mounts') or [])), key=lambda m: str(m.get('Target')))
+        need(got_m == sorted(want_m, key=lambda m: m['Target']), 'HostConfig.Mounts exact (after falsy-default normalization)')
         want = [{'Type': 'bind', 'Source': inbox, 'Destination': '/control', 'RW': False, 'Propagation': 'rprivate'},
                 {'Type': 'bind', 'Source': work, 'Destination': '/work', 'RW': True, 'Propagation': 'rprivate'}]
         got = sorted(({k: m.get(k) for k in ('Type', 'Source', 'Destination', 'RW', 'Propagation')} for m in (rec.get('Mounts') or [])),
@@ -172,7 +189,7 @@ def after_create(intent, create_stdout):
     return {**intent, 'stage': 'created', 'container_id': s.strip(), 'may_remove_by_name': False}
 
 
-def bind_started(rec, inspect_started, observed, host_netns_inode):
+def bind_started(rec, inspect_started, observed, host_ns, sibling_ns=None):
     """`observed` = owner's own host-side reads for the leader pid: pid, unified cgroup path from /proc/<pid>/cgroup,
     pid/mnt/net namespace inodes. Gate is still closed here. Returns the identity record to persist before release."""
     cid = rec.get('container_id')
@@ -185,15 +202,58 @@ def bind_started(rec, inspect_started, observed, host_netns_inode):
     if not isinstance(cg, str) or not re.fullmatch(r'/[A-Za-z0-9_./:@-]{1,300}', cg) or '..' in cg or cid not in cg: raise SpecError('cgroup path not bound to this container id')
     ns = {k: observed.get(k) for k in ('pid_ns_inode', 'mnt_ns_inode', 'net_ns_inode')}
     if any(type(v) is not int or v <= 0 for v in ns.values()): raise SpecError('namespace inodes required')
-    if ns['net_ns_inode'] == host_netns_inode: raise SpecError('container shares the host network namespace')
-    return {**rec, 'stage': 'started_gated', 'pid': pid, 'cgroup_path': cg, **ns, 'gate_released': False}
+    t0, t1 = observed.get('start_ticks_before'), observed.get('start_ticks_after')
+    if type(t0) is not int or t0 <= 0 or t0 != t1: raise SpecError('same-process start identity (stat starttime before/after) required')
+    if not (observed.get('pidfd_held') is True and observed.get('ns_fds_held') is True and observed.get('cgroup_fd_held') is True):
+        raise SpecError('pidfd, namespace fds and cgroup dir fd must be held before release')
+    hostns = host_ns if isinstance(host_ns, dict) else {'net_ns_inode': host_ns}
+    if hostns.get('net_ns_inode') is None or any(ns[k] == v for k, v in hostns.items() if k in ns): raise SpecError('container shares a host namespace')
+    if sibling_ns is not None and any(ns[k] == sibling_ns.get(k) for k in ns): raise SpecError('container shares a namespace with the sibling')
+    return {**rec, 'stage': 'started_gated', 'pid': pid, 'start_ticks': t0, 'cgroup_path': cg, **ns,
+            'gate_seconds': GATE_SECONDS, 'gate_released': False, 'identity_scope': 'owner_held_fds_and_starttime_not_a_daemon_child'}
 
 
 def absence_verdict(rec):
     """All five required; Docker removal alone is never accepted. Missing evidence is UNVERIFIED, any False is PRESENT."""
-    keys = ('inspect_not_found', 'cgroup_unpopulated_or_gone', 'ns_members_empty', 'handles_absent', 'leader_reaped')
+    keys = ('inspect_not_found', 'cgroup_unpopulated_or_gone', 'ns_members_empty', 'handles_absent', 'leader_exit_observed')
     if not isinstance(rec, dict): return 'UNVERIFIED'
     vals = [rec.get(k) for k in keys]
     if any(v is False for v in vals): return 'PRESENT'
     if all(v is True for v in vals): return 'VERIFIED_ABSENT_RECORD'
     return 'UNVERIFIED'
+
+
+def leader_exit_observed(inspect_exited, bound, pidfd_readable, identity_changed_or_gone):
+    """Translated `leader_reaped`: the container init is a daemon child, not ours, so waitpid is impossible. Accepts only the
+    DAEMON's exit record (Running false, Status exited, Pid 0, integer ExitCode, same container ID) AND the owner's own held pidfd
+    reporting exit (or an exact-identity check showing that pid/starttime is gone). Labeled as translated, not as a reap."""
+    st = (inspect_exited or {}).get('State') or {}
+    ok = (bound.get('stage') == 'started_gated' and inspect_exited.get('Id') == bound.get('container_id') and st.get('Running') is False
+          and st.get('Status') == 'exited' and st.get('Pid') == 0 and type(st.get('ExitCode')) is int
+          and (pidfd_readable is True or identity_changed_or_gone is True))
+    return {'leader_exit_observed': bool(ok), 'exit_code': st.get('ExitCode') if ok else None, 'scope': 'translated_daemon_exit_plus_owner_pidfd_not_waitpid'}
+
+
+# Translated trusted evidence producer: the OWNER writes these from held observations. They replace files namespace_supervisor wrote from
+# inside the jail. Existing consumers (owned_absence.inspect, owned_collect, final_export ROLE_FILES) expect jail-shaped fields
+# (e.g. wrapper-cleanup.jail under /opt/d061-owned-android-jail-*), so they CANNOT consume these unchanged: a reviewed sibling schema change is required.
+def namespace_setup_record(bound):
+    if bound.get('stage') != 'started_gated': raise SpecError('bound identity required')
+    return {'namespaces': {'net': 'net:[%d]' % bound['net_ns_inode'], 'mnt': 'mnt:[%d]' % bound['mnt_ns_inode'], 'pid': 'pid:[%d]' % bound['pid_ns_inode']},
+            'container_id': bound['container_id'], 'cgroup_path': bound['cgroup_path'], 'scope': 'docker_translated_owner_observation'}
+
+
+def driver_result_record(exit_obs):
+    if not exit_obs.get('leader_exit_observed'): return {'complete': False, 'driver_rc': None, 'scope': exit_obs.get('scope')}
+    return {'complete': exit_obs['exit_code'] == 0, 'driver_rc': exit_obs['exit_code'], 'scope': exit_obs['scope']}
+
+
+def inventory_matches(role, inventory, lock_rows):
+    """Exact file-set equality between a SUPPLIED image content inventory ({path: sha256}) and the SUPPLIED closure-lock rows
+    ([{path, sha256}]), plus gate/driver presence and control-lacks-runtime. Acquisition of both inputs (owner reads the pinned
+    image layers from the daemon, hashes per file) is not implemented and unverified."""
+    if role not in ROLES or not isinstance(inventory, dict) or not isinstance(lock_rows, list): return False
+    try: want = {r['path']: r['sha256'] for r in lock_rows}
+    except (KeyError, TypeError): return False
+    if len(want) != len(lock_rows) or inventory != want: return False
+    return role_closure_ok(role, sorted(inventory))

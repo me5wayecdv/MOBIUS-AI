@@ -1877,7 +1877,7 @@ def _fixture(dl,role,run,img,image_id,mem_mb=2048,pids=256,cpus=2,kvm=108):
     return {'Id':'c'*64,'Name':'/'+dl.container_name(role,run),'Image':image_id,
         'HostConfig':{'NetworkMode':'none','Privileged':False,'PidMode':'','IpcMode':'none','UTSMode':'','UsernsMode':'','CgroupnsMode':'private',
             'Runtime':'runc','CapDrop':['ALL'],'CapAdd':None,'SecurityOpt':['no-new-privileges'],'ReadonlyRootfs':True,'GroupAdd':None,
-            'DeviceRequests':None,'Tmpfs':None,'ExtraHosts':None,'Dns':[],'Links':None,'VolumesFrom':None,'PortBindings':{},'Binds':None,
+            'DeviceRequests':None,'Tmpfs':dl.scratch_for(role,kvm),'ExtraHosts':None,'Dns':[],'Links':None,'VolumesFrom':None,'PortBindings':{},'Binds':None,
             'RestartPolicy':{'Name':'no','MaximumRetryCount':0},'LogConfig':{'Type':'none','Config':{}},'Memory':mem,'MemorySwap':mem,
             'PidsLimit':pids,'NanoCpus':cpus*10**9,'OomKillDisable':False,
             'Ulimits':[{'Name':n,'Soft':v,'Hard':v} for n,v in dl.ULIMITS],
@@ -1908,6 +1908,7 @@ def test_docker_lifecycle_v2_exact_spec_and_lifecycle(monkeypatch):
             assert must in s
         assert '--privileged' not in s and '--pid ' not in s and 'docker.sock' not in s and '--group-add' not in s
         assert ('/dev/kvm:/dev/kvm:rw' in s)==(role=='runtime')
+        assert '--runtime runc' in s and s.count('--tmpfs ')==4 and '--ulimit core=0:0' in s and '--ulimit nofile=512:512' in s
         assert argv[-3:]==dl.cmd_for(role)
         kv=108 if role=='runtime' else None
         rec=_fixture(dl,role,run,img,iid,kvm=kv)
@@ -1920,7 +1921,9 @@ def test_docker_lifecycle_v2_exact_spec_and_lifecycle(monkeypatch):
               H(CapAdd=['SYS_ADMIN']),H(GroupAdd=['0']),H(DeviceRequests=[{'Count':-1}]),H(PidsLimit=0),H(Memory=0),H(ReadonlyRootfs=False),
               H(SecurityOpt=['no-new-privileges','seccomp=unconfined']),H(LogConfig={'Type':'json-file'}),H(RestartPolicy={'Name':'always'}),
               H(Devices=[dict(dl.KVM_DEV,CgroupPermissions='rwm')]+([] if role=='runtime' else [])),
-              H(Devices=[dict(dl.KVM_DEV,PathInContainer='/dev/x')]),H(Ulimits=[]),H(Mounts=[{'Type':'bind','Source':'/','Target':'/h','BindOptions':{'Propagation':'shared'}}]),
+              H(Devices=[dict(dl.KVM_DEV,PathInContainer='/dev/x')]),H(Ulimits=[]),H(Ulimits=[u for u in [{'Name':n,'Soft':v,'Hard':v} for n,v in dl.ULIMITS] if u['Name']!='core']),H(Tmpfs=None),H(Tmpfs=dict(dl.scratch_for(role,kv),**{'/tmp':'rw,size=1g'})),
+              H(Mounts=[{'Type':'bind','Source':dl.mount_sources(role,run)[0],'Target':'/work','BindOptions':{'Propagation':'rprivate','NonRecursive':True}},{'Type':'bind','Source':dl.mount_sources(role,run)[1],'Target':'/control','ReadOnly':True,'BindOptions':{'Propagation':'rprivate'}}]),
+              H(Mounts=[{'Type':'bind','Source':dl.mount_sources(role,run)[0],'Target':'/work','BindOptions':{'Propagation':'rprivate'}}]),H(Mounts=[{'Type':'bind','Source':'/','Target':'/h','BindOptions':{'Propagation':'shared'}}]),
               lambda r:r['Mounts'].append({'Type':'bind','Source':'/','Destination':'/host','Mode':'','RW':True,'Propagation':'rprivate'}),
               lambda r:r['Mounts'][1].update(RW=True),lambda r:r['Mounts'][0].update(Propagation='shared'),
               lambda r:r['Mounts'][0].update(Source='/var/run/docker.sock'),
@@ -1939,13 +1942,30 @@ def test_docker_lifecycle_v2_exact_spec_and_lifecycle(monkeypatch):
         u=dl.after_create(it,bad);assert u['state']=='UNVERIFIED' and u['may_remove_by_name'] is False and u['container_id'] is None
     cid=cr['container_id']
     started={'Id':cid,'State':{'Running':True,'Pid':4242}}
-    obs={'pid':4242,'cgroup_path':'/system.slice/docker-%s.scope'%cid,'pid_ns_inode':1,'mnt_ns_inode':2,'net_ns_inode':3}
-    b=dl.bind_started(cr,started,obs,99);assert b['stage']=='started_gated' and b['gate_released'] is False
-    for bad in (dict(pid=1),dict(cgroup_path='/system.slice/other.scope'),dict(net_ns_inode=99),dict(pid_ns_inode=0),dict(cgroup_path='/a/../b'+cid)):
-        with pytest.raises(dl.SpecError):dl.bind_started(cr,started,dict(obs,**bad),99)
-    with pytest.raises(dl.SpecError):dl.bind_started(dl.after_create(it,'x'),started,obs,99)
-    with pytest.raises(dl.SpecError):dl.bind_started(cr,{'Id':cid,'State':{'Running':False,'Pid':0}},obs,99)
-    keys=('inspect_not_found','cgroup_unpopulated_or_gone','ns_members_empty','handles_absent','leader_reaped')
+    obs={'pid':4242,'cgroup_path':'/system.slice/docker-%s.scope'%cid,'pid_ns_inode':1,'mnt_ns_inode':2,'net_ns_inode':3,
+         'start_ticks_before':777,'start_ticks_after':777,'pidfd_held':True,'ns_fds_held':True,'cgroup_fd_held':True}
+    host={'pid_ns_inode':91,'mnt_ns_inode':92,'net_ns_inode':93}
+    b=dl.bind_started(cr,started,obs,host,sibling_ns={'pid_ns_inode':11,'mnt_ns_inode':12,'net_ns_inode':13})
+    assert b['stage']=='started_gated' and b['gate_released'] is False and b['start_ticks']==777 and b['gate_seconds']==dl.GATE_SECONDS
+    for bad in (dict(pid=1),dict(cgroup_path='/system.slice/other.scope'),dict(net_ns_inode=93),dict(mnt_ns_inode=92),dict(pid_ns_inode=91),dict(pid_ns_inode=0),
+                dict(cgroup_path='/a/../b'+cid),dict(start_ticks_after=778),dict(start_ticks_before=0,start_ticks_after=0),dict(pidfd_held=False),
+                dict(ns_fds_held=False),dict(cgroup_fd_held=None),dict(net_ns_inode=13)):
+        with pytest.raises(dl.SpecError):dl.bind_started(cr,started,dict(obs,**bad),host,sibling_ns={'pid_ns_inode':11,'mnt_ns_inode':12,'net_ns_inode':13})
+    with pytest.raises(dl.SpecError):dl.bind_started(cr,started,obs,{'pid_ns_inode':91})       # host net inode required
+    with pytest.raises(dl.SpecError):dl.bind_started(dl.after_create(it,'x'),started,obs,host)
+    with pytest.raises(dl.SpecError):dl.bind_started(cr,{'Id':cid,'State':{'Running':False,'Pid':0}},obs,host)
+    ex={'Id':cid,'State':{'Running':False,'Status':'exited','Pid':0,'ExitCode':0}}
+    assert dl.leader_exit_observed(ex,b,True,False)['leader_exit_observed'] is True
+    assert dl.leader_exit_observed(ex,b,False,True)['leader_exit_observed'] is True
+    for bad_ex,pf,gone in ((ex,False,False),(ex,None,None),({'Id':cid,'State':{'Running':True,'Status':'running','Pid':4242,'ExitCode':0}},True,True),
+                           ({'Id':'f'*64,'State':ex['State']},True,True),({'Id':cid,'State':dict(ex['State'],ExitCode=None)},True,True),(ex,True,True)):
+        r=dl.leader_exit_observed(bad_ex,b if bad_ex is not ex or (pf,gone)!=(True,True) else dict(b,stage='created'),pf,gone)
+        assert r['leader_exit_observed'] is False
+    assert dl.driver_result_record(dl.leader_exit_observed(ex,b,True,False))=={'complete':True,'driver_rc':0,'scope':'translated_daemon_exit_plus_owner_pidfd_not_waitpid'}
+    assert dl.driver_result_record({'leader_exit_observed':False,'scope':'x'})['complete'] is False
+    rec_ns=dl.namespace_setup_record(b);assert rec_ns['namespaces']=={'net':'net:[3]','mnt':'mnt:[2]','pid':'pid:[1]'}
+    with pytest.raises(dl.SpecError):dl.namespace_setup_record(cr)
+    keys=('inspect_not_found','cgroup_unpopulated_or_gone','ns_members_empty','handles_absent','leader_exit_observed')
     assert dl.absence_verdict({k:True for k in keys})=='VERIFIED_ABSENT_RECORD'
     for k in keys:
         assert dl.absence_verdict({**{x:True for x in keys},k:False})=='PRESENT'
@@ -1955,9 +1975,18 @@ def test_docker_lifecycle_v2_exact_spec_and_lifecycle(monkeypatch):
     assert dl.role_closure_ok('control',ok) and not dl.role_closure_ok('control',ok+['/opt/android/platform-tools/adb'])
     assert not dl.role_closure_ok('control',ok+['/usr/bin/qemu-system-x86_64']) and not dl.role_closure_ok('control',[dl.DRIVER['control']])
     assert dl.role_closure_ok('runtime',[dl.GATE,dl.DRIVER['runtime'],'/opt/android/emulator/emulator'])
+    inv={dl.GATE:'1'*64,dl.DRIVER['control']:'2'*64,'/runtime/bin/python':'3'*64}
+    rows=[{'path':k,'sha256':v} for k,v in inv.items()]
+    assert dl.inventory_matches('control',inv,rows)
+    assert not dl.inventory_matches('control',dict(inv,**{'/extra':'4'*64}),rows)
+    assert not dl.inventory_matches('control',inv,rows[:-1])
+    assert not dl.inventory_matches('control',dict(inv,**{dl.GATE:'9'*64}),rows)
+    assert not dl.inventory_matches('control',dict(inv,**{'/opt/android/x':'4'*64}),rows+[{'path':'/opt/android/x','sha256':'4'*64}])
+    assert not dl.inventory_matches('control',inv,[{'path':'x'}])
 
 
 def test_container_gate_blocks_until_owner_byte(monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1]/'research'/'d061_android'))
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1]/'research'/'d061_android'))
     import container_gate as g
     assert g.APPROVED_FOR_EXECUTION is False
@@ -1970,4 +1999,9 @@ def test_container_gate_blocks_until_owner_byte(monkeypatch):
     assert run(b'x')==3 and calls==[]                    # only the one release byte
     assert run(b'\x01',('/bin/sh','/work'))==2 and calls==[]
     assert run(b'\x01',('/fixture/control_driver.py','/tmp'))==2 and calls==[]
+    r,w=os.pipe()
+    try:assert g.main(['/fixture/contained_driver.py','/work'],stdin_fd=r,execv=lambda *a:calls.append(a),timeout=0.05)==3 and calls==[]   # open stdin, no byte: deadline
+    finally:os.close(r);os.close(w)
+    import docker_lifecycle as dl
+    assert g.GATE_SECONDS==dl.GATE_SECONDS
     assert run(b'\x01')==4 and calls==[(sys.executable,[sys.executable,'/fixture/contained_driver.py','/work'])]
