@@ -1228,3 +1228,30 @@ def test_wrong_hostname_refuses_non_keycertsign_anchor_and_profile_checks_apply_
     prem = dict(_prem('untrusted-ca'))
     prem['presented_chain_der'] = [_der(k['leaf_b'][1]), _der(k['b'][1])]
     assert _ev('untrusted-ca', _log(*KINDS), premises=prem)['passed'] is True
+
+
+def test_member_hash_inspect_streams_zip_and_tar_without_writes(tmp_path,monkeypatch):
+    import hashlib,io,os,sys,tarfile,zipfile
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1]/'research'/'d061_android'))
+    import member_hash_inspect as m
+    assert m.APPROVED_FOR_EXECUTION is False
+    z=tmp_path/'a.zip'
+    with zipfile.ZipFile(z,'w',zipfile.ZIP_DEFLATED) as w:w.writestr('p/x.txt',b'hello')
+    fd=os.open(z,os.O_RDONLY);out=m.inspect_fd(fd,hashlib.sha256(z.read_bytes()).hexdigest(),z.stat().st_size);os.close(fd)
+    assert out['members'][0]['sha256']==hashlib.sha256(b'hello').hexdigest() and out['license_accepted'] is False
+    t=tmp_path/'a.tar.gz'
+    with tarfile.open(t,'w:gz') as w:
+        i=tarfile.TarInfo('j/f');i.size=3;w.addfile(i,io.BytesIO(b'abc'))
+        l=tarfile.TarInfo('j/l');l.type=tarfile.SYMTYPE;l.linkname='f';w.addfile(l)
+    fd=os.open(t,os.O_RDONLY);out=m.inspect_fd(fd,hashlib.sha256(t.read_bytes()).hexdigest());os.close(fd)
+    assert out['members'][0]['sha256']==hashlib.sha256(b'abc').hexdigest() and out['members'][1]['target']=='f'
+    fd=os.open(t,os.O_RDONLY)
+    with pytest.raises(ValueError):m.inspect_fd(fd,'0'*64)
+    os.close(fd)
+    bad=tmp_path/'b.zip'
+    with zipfile.ZipFile(bad,'w') as w:w.writestr('../e',b'x')
+    fd=os.open(bad,os.O_RDONLY)
+    with pytest.raises(ValueError):m.inspect_fd(fd)
+    os.close(fd)
+    assert not (tmp_path/'p').exists() and not (tmp_path/'j').exists()
+    with pytest.raises(SystemExit):m.main()
