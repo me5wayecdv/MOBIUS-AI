@@ -205,7 +205,7 @@ def _full_root(tmp_path, status='passed'):
         (root / 'runtime/work/evidence' / name).write_text('x')
         (root / 'control-in/result').mkdir(parents=True, exist_ok=True)
         (root / 'control-in/result' / name).write_text('x')
-    _wjson(root / 'control-in/result/result.json', {})
+    _wjson(root / 'control-in/result/result.json', {'status': status})
     snap = root / 'control-in/snapshot'
     snap.mkdir(parents=True)
     (snap / 'owned-fixture.apk').write_bytes(apk)
@@ -219,21 +219,21 @@ def _full_root(tmp_path, status='passed'):
         (d / (h + '.apk')).write_bytes(data)
     _wjson(work / 'control-privileges.json', {})
     _wjson(work / 'control-result.json', {'status': status, 'run_id': 'pcr_C3', 'plan_id': 'poc_A1', 'report_sha256': sha(rep)})
-    _wjson(work / 'execute-response.json', {'body': {'run_id': 'pcr_C3', 'plan_id': 'poc_A1'}})
+    _wjson(work / 'execute-response.json', {'body': {'run_id': 'pcr_C3', 'plan_id': 'poc_A1', 'status': status, 'evidence_ids': ['ev1', 'ev2']}})
     _wjson(work / 'setup/approved-plan.json', {'id': 'poc_A1', 'investigation_id': 'scn_B2', 'target_sha256': sha(apk)})
     _wjson(work / 'setup/fixture-provenance.json', {})
     (work / 'report.md').write_bytes(rep)
-    _wjson(work / 'api-readback.json', {'evidence': [
+    _wjson(work / 'api-readback.json', {'run_id': 'pcr_C3', 'plan_id': 'poc_A1', 'investigation_id': 'scn_B2', 'status': status, 'evidence': [
         {'evidence_id': 'ev1', 'sha256': sha(e1), 'bytes': len(e1)}, {'evidence_id': 'ev2', 'sha256': sha(e2), 'bytes': len(e2)}]})
     _wjson(work / 'export-manifest.json', {'version': 'owned-product-export/1', 'infrastructure_run_id': 'r1', 'provisioning_id': 'p1',
         'investigation_id': 'scn_B2', 'product_run_id': 'pcr_C3', 'plan_id': 'poc_A1', 'apk_sha256': sha(apk), 'report_sha256': sha(rep),
         'objects': [{'sha256': h, 'bytes': len(d)} for h, d in sorted(objs.items())]})
     db = sqlite3.connect(work / 'mobius.db')
-    db.execute('create table poc_runs(id text, investigation_id text, plan_id text)')
+    db.execute('create table poc_runs(id text, investigation_id text, plan_id text, status text)')
     db.execute('create table evidence(id text, investigation_id text, sha256 text, byte_size int, object_key text)')
     db.execute('create table reports(investigation_id text, content_sha256 text, object_key text)')
     db.execute('create table poc_run_evidence(investigation_id text, run_id text, evidence_id text)')
-    db.execute("insert into poc_runs values('pcr_C3','scn_B2','poc_A1')")
+    db.execute("insert into poc_runs values('pcr_C3','scn_B2','poc_A1',?)", (status,))
     for eid, data in (('ev1', e1), ('ev2', e2), ('ev_report', rep)):
         db.execute('insert into evidence values(?,?,?,?,?)', (eid, 'scn_B2', sha(data), len(data), 'apk/%s/%s.apk' % (sha(data)[:2], sha(data))))
     for eid in ('ev1', 'ev2'):
@@ -257,6 +257,7 @@ def test_export_complete_happy_path(tmp_path, monkeypatch):
     root, work, owner = _full_root(tmp_path)
     res = _export(tmp_path, root, owner, monkeypatch)
     assert res['errors'] == [] and res['complete'] is True and res['diagnostic_partial_export'] is False
+    assert res['complete_product_evidence'] is True and res['published_status'] == 'passed'
     paths = {r['path'] for r in res['inventory']}
     assert 'control/mobius.db' in paths and 'control/report.md' in paths
     assert len([p for p in paths if p.startswith('product-store/')]) == 4
@@ -272,9 +273,10 @@ def test_export_failed_run_does_not_require_success_only_files(tmp_path, monkeyp
     res = _export(tmp_path, root, owner, monkeypatch)
     assert not any(e['class'] == 'RequiredOriginalMissing' for e in res['errors'])
     assert res['original_status_not_upgraded'] is True
+    assert res['complete_diagnostic_export'] is True and res['complete_product_evidence'] is False
 
 
-@pytest.mark.parametrize('mutate', ['report_bytes', 'db_run_case', 'missing_object', 'extra_manifest_object', 'readback_link',
+@pytest.mark.parametrize('mutate', ['report_bytes', 'db_run_case', 'status_pub_passed_control_failed', 'status_control_missing', 'status_db_failed', 'status_pub_unknown', 'status_pub_failed_control_passed', 'status_readback_identity', 'status_execute_failed', 'missing_object', 'extra_manifest_object', 'readback_link',
                                     'db_evidence_missing_from_manifest', 'wrong_ready', 'apk_swap'])
 def test_export_mismatches_fail_closed(tmp_path, monkeypatch, mutate):
     root, work, owner = _full_root(tmp_path)
@@ -284,6 +286,20 @@ def test_export_mismatches_fail_closed(tmp_path, monkeypatch, mutate):
         (work / 'report.md').write_bytes(b'changed')
     elif mutate == 'db_run_case':
         db = sqlite3.connect(work / 'mobius.db'); db.execute("update poc_runs set investigation_id='scn_X'"); db.commit(); db.close()
+    elif mutate == 'status_pub_passed_control_failed':
+        cr = json.loads((work / 'control-result.json').read_text()); cr['status'] = 'failed'; _wjson(work / 'control-result.json', cr)
+    elif mutate == 'status_control_missing':
+        cr = json.loads((work / 'control-result.json').read_text()); cr.pop('status'); _wjson(work / 'control-result.json', cr)
+    elif mutate == 'status_db_failed':
+        db = sqlite3.connect(work / 'mobius.db'); db.execute("update poc_runs set status='failed'"); db.commit(); db.close()
+    elif mutate == 'status_pub_unknown':
+        _wjson(root / 'control-in/result/result.json', {})
+    elif mutate == 'status_pub_failed_control_passed':
+        _wjson(root / 'control-in/result/result.json', {'status': 'failed'})
+    elif mutate == 'status_readback_identity':
+        rb = json.loads((work / 'api-readback.json').read_text()); rb['investigation_id'] = 'scn_other'; _wjson(work / 'api-readback.json', rb)
+    elif mutate == 'status_execute_failed':
+        ex = json.loads((work / 'execute-response.json').read_text()); ex['body']['status'] = 'failed'; _wjson(work / 'execute-response.json', ex)
     elif mutate == 'missing_object':
         h = man['objects'][0]['sha256']
         (work / 'store/apk' / h[:2] / (h + '.apk')).unlink()
@@ -298,7 +314,7 @@ def test_export_mismatches_fail_closed(tmp_path, monkeypatch, mutate):
     elif mutate == 'apk_swap':
         (root / 'control-in/snapshot/owned-fixture.apk').write_bytes(b'other')
     res = _export(tmp_path, root, owner, monkeypatch)
-    assert res['complete'] is False and res['errors'], mutate
+    assert res['complete'] is False and res['errors'] and res['complete_product_evidence'] is False, mutate
 
 
 def test_export_reached_stage_missing_originals_are_errors(tmp_path, monkeypatch):
@@ -331,81 +347,150 @@ def wd(monkeypatch):
     return mod
 
 
-def _env(tmp_path):
-    root = tmp_path / 'role'
-    root.mkdir()
+def _lockset(tmp_path):
+    """A reviewed-lock-shaped fixture plus a stager stand-in script that writes consistent output."""
+    import hashlib
+    files = {'runtime': (b'rt-bytes', 'bin/rt'), 'control': (b'ct-bytes', 'lib/ct')}
+    roots = {r: tmp_path / (r + '_closure') for r in files}
+    lock = {'status': 'EXACT_REVIEWED_SIBLING_STAGE_LOCK', 'roles': {
+        r: {'files': [{'source': rel, 'size': len(b), 'sha256': hashlib.sha256(b).hexdigest(), 'mode': 0o444}]}
+        for r, (b, rel) in files.items()}}
+    lock_bytes = json.dumps(lock).encode()
     rec = tmp_path / 'rec'
     rec.mkdir(mode=0o700)
-    return root, rec, tmp_path / 'report.json'
+    report = tmp_path / 'report.json'
+    return files, roots, lock, lock_bytes, hashlib.sha256(lock_bytes).hexdigest(), rec, report
+
+
+STAGER_SRC = r'''
+import hashlib, json, os, sys
+mode = sys.argv[1]
+spec = json.load(open(sys.argv[2]))
+if mode == 'sleep':
+    import time
+    time.sleep(60)
+if mode == 'hang':
+    import subprocess, time
+    subprocess.Popen(['sleep', '60'])
+    time.sleep(60)
+for role, row in spec['roles'].items():
+    root = spec['roots'][role]
+    rel = row['rel']
+    os.makedirs(os.path.join(root, os.path.dirname(rel)), exist_ok=True)
+    data = bytes.fromhex(row['hex'])
+    if mode == 'wrong_digest':
+        data = b'X' * len(data)
+    with open(os.path.join(root, rel), 'wb') as f:
+        f.write(data)
+    os.chmod(os.path.join(root, rel), 0o444)
+    manifest = spec['lock']['roles'][role]
+    with open(os.path.join(root, 'closure-lock.json'), 'w') as f:
+        json.dump({'files': []} if mode == 'invalid_lock' else manifest, f)
+    if mode == 'extra_file':
+        open(os.path.join(root, 'extra'), 'w').write('x')
+    if mode == 'grow':
+        open(os.path.join(root, 'big'), 'wb').write(b'x' * 5000)
+        import time; time.sleep(60)
+if mode == 'exit_no_report':
+    sys.exit(0)
+results = [{'role': r, 'root': spec['roots'][r], 'file_count': 1, 'closure_sha256': hashlib.sha256(json.dumps(spec['lock']['roles'][r], sort_keys=True, separators=(',', ':')).encode()).hexdigest()} for r in spec['roots']]
+json.dump({'results': results, 'no_code_executed': True}, open(spec['report'], 'w'))
+'''
+
+
+def _run(wd, tmp_path, mode, attempt, **kw):
+    files, roots, lock, lock_bytes, lock_sha, rec, report = _lockset(tmp_path)
+    spec = {'roots': {r: str(p) for r, p in roots.items()}, 'report': str(report), 'lock': lock,
+            'roles': {r: {'rel': rel, 'hex': b.hex()} for r, (b, rel) in files.items()}}
+    (tmp_path / 'spec.json').write_text(json.dumps(spec))
+    (tmp_path / 'stager.py').write_text(STAGER_SRC)
+    args = dict(role_roots=roots, lock_bytes=lock_bytes, expected_lock_sha256=lock_sha, record_dir=rec, attempt=attempt)
+    args.update(kw)
+    return wd.supervise([PY, str(tmp_path / 'stager.py'), mode, str(tmp_path / 'spec.json')], report, **args), roots, rec, report
 
 
 def test_watchdog_is_held_by_default(tmp_path):
     mod = _wd()
     assert mod.APPROVED_FOR_EXECUTION is False
     with pytest.raises(RuntimeError):
-        mod.supervise(['true'], tmp_path / 'r')
+        mod.supervise(['true'], tmp_path / 'r', role_roots={}, lock_bytes=b'', expected_lock_sha256='', record_dir=tmp_path)
     with pytest.raises(RuntimeError):
         mod.recover(tmp_path, 'x')
     with pytest.raises(SystemExit):
         mod.main()
 
 
-def test_watchdog_kills_hung_child_and_grandchild_and_verifies_group_absence(wd, tmp_path):
-    root, rec, report = _env(tmp_path)
-    code = 'import subprocess,time;subprocess.Popen(["sleep","60"]);time.sleep(60)'
-    r = wd.supervise([PY, '-c', code], report, roots=[root], record_dir=rec, wall=0.5, attempt='a1')
-    assert r['killed_reason'] == 'wall_clock' and r['complete'] is False and r['group_members_remaining'] == []
-    names = sorted(p.name for p in rec.iterdir())
-    assert names == ['stage-watchdog-intent-a1.json', 'stage-watchdog-progress-a1.json', 'stage-watchdog-result-a1.json']
+def test_watchdog_complete_only_with_exact_reviewed_content(wd, tmp_path):
+    r, roots, rec, report = _run(wd, tmp_path, 'ok', 'a1')
+    assert r['complete'] is True and r['absence_verified'] and r['root_dispositions'] == []
+    assert sorted(p.name for p in rec.iterdir()) == ['stage-watchdog-intent-a1.json', 'stage-watchdog-progress-a1.json', 'stage-watchdog-result-a1.json']
 
 
-def test_watchdog_oversize_growth_killed_and_root_quarantined(wd, tmp_path):
-    root, rec, report = _env(tmp_path)
-    code = 'import time,sys;open(sys.argv[1]+"/big","wb").write(b"x"*5000);time.sleep(60)'
-    r = wd.supervise([PY, '-c', code, str(root)], report, roots=[root], record_dir=rec, wall=20, max_bytes=1000, attempt='a2')
-    assert r['killed_reason'].startswith('output_scan') and r['complete'] is False
-    assert r['root_dispositions'][0]['state'] == 'quarantined' and (tmp_path / 'role.failed-a2' / 'big').exists()
+@pytest.mark.parametrize('mode', ['wrong_digest', 'invalid_lock', 'extra_file', 'exit_no_report'])
+def test_watchdog_exit0_with_wrong_content_is_quarantined_after_absence(wd, tmp_path, mode):
+    r, roots, rec, report = _run(wd, tmp_path, mode, 'b1')
+    assert r['exit_code'] == 0 and r['complete'] is False and r['absence_verified'] is True
+    assert r['final_validation_error']
+    assert all(d['state'] == 'quarantined' for d in r['root_dispositions']) and not any(p.exists() for p in roots.values())
 
 
-def test_watchdog_fast_exit0_cannot_bypass_final_scan_or_completion(wd, tmp_path):
-    root, rec, report = _env(tmp_path)
-    code = 'import sys;open(sys.argv[1]+"/big","wb").write(b"x"*5000)'
-    r = wd.supervise([PY, '-c', code, str(root)], report, roots=[root], record_dir=rec, max_bytes=1000, attempt='a3')
-    assert r['exit_code'] == 0 and r['complete'] is False and r['final_scan_error'] and r['root_dispositions'][0]['state'] == 'quarantined'
+def test_watchdog_kills_hung_child_and_grandchild_with_verified_absence(wd, tmp_path):
+    r, roots, rec, report = _run(wd, tmp_path, 'hang', 'c1', wall=0.5)
+    assert r['killed_reason'] == 'wall_clock' and r['complete'] is False and r['absence_verified'] and r['session_members_remaining'] == []
 
 
-def test_watchdog_exit0_without_lock_or_report_is_not_complete(wd, tmp_path):
-    root, rec, report = _env(tmp_path)
-    r = wd.supervise([PY, '-c', 'pass'], report, roots=[root], record_dir=rec, attempt='a4')
-    assert r['exit_code'] == 0 and r['complete'] is False
-    assert r['closure_locks_present'] == {str(root): False} and r['report_file_present'] is False
+def test_watchdog_growth_killed(wd, tmp_path):
+    r, roots, rec, report = _run(wd, tmp_path, 'grow', 'c2', wall=20, max_bytes=1000)
+    assert r['killed_reason'].startswith('output_scan') and r['complete'] is False and r['absence_verified']
 
 
-def test_watchdog_complete_requires_exit0_lock_report_and_clean_scan(wd, tmp_path):
-    root, rec, report = _env(tmp_path)
-    code = 'import sys;open(sys.argv[1]+"/closure-lock.json","w").write("{}");open(sys.argv[2],"w").write("{}")'
-    r = wd.supervise([PY, '-c', code, str(root), str(report)], report, roots=[root], record_dir=rec, attempt='a5')
-    assert r['complete'] is True and r['root_dispositions'] == [] and r['final_scan']['files'] == 1 and root.exists()
+def test_watchdog_refuses_wrong_lock_identity_and_preexisting_outputs(wd, tmp_path):
+    files, roots, lock, lock_bytes, lock_sha, rec, report = _lockset(tmp_path)
+    with pytest.raises(ValueError):
+        wd.supervise(['true'], report, role_roots=roots, lock_bytes=lock_bytes, expected_lock_sha256='0' * 64, record_dir=rec)
+    next(iter(roots.values())).mkdir()
+    with pytest.raises(ValueError):
+        wd.supervise(['true'], report, role_roots=roots, lock_bytes=lock_bytes, expected_lock_sha256=lock_sha, record_dir=rec)
+    assert next(iter(roots.values())).exists() and not list(rec.iterdir())  # not adopted, not quarantined, no effect
+    next(iter(roots.values())).rmdir()
+    report.write_text('{}')
+    with pytest.raises(ValueError):
+        wd.supervise(['true'], report, role_roots=roots, lock_bytes=lock_bytes, expected_lock_sha256=lock_sha, record_dir=rec)
+
+
+def test_watchdog_post_popen_setup_failure_is_stopped_and_recorded(wd, tmp_path, monkeypatch):
+    def boom(pid):
+        raise OSError('pidfd failed')
+    monkeypatch.setattr(wd.os, 'pidfd_open', boom)
+    r, roots, rec, report = _run(wd, tmp_path, 'sleep', 'd1')
+    assert r['setup_error'].startswith('OSError') and r['complete'] is False and r['absence_verified'] is True
+    assert any(p.name == 'stage-watchdog-result-d1.json' for p in rec.iterdir())
+
+
+def test_watchdog_final_validation_is_deadline_bounded(wd, tmp_path):
+    r, roots, rec, report = _run(wd, tmp_path, 'ok', 'e1', final_seconds=-1)
+    assert r['complete'] is False and 'Timeout' in r['final_validation_error']
 
 
 def test_watchdog_cancellation_goes_through_same_kill_path(wd, tmp_path):
     from threading import Event, Timer
-    root, rec, report = _env(tmp_path)
     cancel = Event()
     Timer(0.3, cancel.set).start()
-    r = wd.supervise([PY, '-c', 'import time;time.sleep(60)'], report, roots=[root], record_dir=rec, cancel=cancel, attempt='a6')
-    assert r['killed_reason'] == 'cancelled' and r['complete'] is False
+    r, roots, rec, report = _run(wd, tmp_path, 'hang', 'f1', cancel=cancel)
+    assert r['killed_reason'] == 'cancelled' and r['absence_verified']
 
 
 def test_watchdog_parent_death_kills_child_via_pdeathsig(tmp_path):
     import subprocess as sp
     import time
     pidfile = tmp_path / 'child.pid'
+    files, roots, lock, lock_bytes, lock_sha, rec, report = _lockset(tmp_path)
     (tmp_path / 'sleeper.py').write_text("import os,time,sys\nopen(sys.argv[1],'w').write(str(os.getpid()))\ntime.sleep(60)\n")
+    (tmp_path / 'lock.bin').write_bytes(lock_bytes)
     (tmp_path / 'parent.py').write_text(
         "import sys\nsys.path.insert(0,%r)\nimport staging_watchdog as w\nw.APPROVED_FOR_EXECUTION=True\n"
-        "w.supervise([sys.executable,%r,%r],%r,roots=[],wall=60)\n"
-        % (str(ROOT), str(tmp_path / 'sleeper.py'), str(pidfile), str(tmp_path / 'r.json')))
+        "w.supervise([sys.executable,%r,%r],%r,role_roots={'runtime':%r},lock_bytes=open(%r,'rb').read(),expected_lock_sha256=%r,record_dir=%r,wall=60)\n"
+        % (str(ROOT), str(tmp_path / 'sleeper.py'), str(pidfile), str(report), str(roots['runtime']), str(tmp_path / 'lock.bin'), lock_sha, str(rec)))
     p = sp.Popen([PY, str(tmp_path / 'parent.py')])
     for _ in range(100):
         if pidfile.exists() and pidfile.read_text():
@@ -414,10 +499,10 @@ def test_watchdog_parent_death_kills_child_via_pdeathsig(tmp_path):
     child = int(pidfile.read_text())
     p.kill(); p.wait()
     for _ in range(100):
-        if not (Path('/proc/%d' % child).exists() and wd_state(child) != 'Z'):
+        if wd_state(child) == 'Z':
             break
         time.sleep(0.05)
-    assert not Path('/proc/%d' % child).exists() or wd_state(child) == 'Z'
+    assert wd_state(child) == 'Z'
 
 
 def wd_state(pid):
@@ -427,32 +512,32 @@ def wd_state(pid):
         return 'Z'
 
 
-def test_watchdog_recover_is_identity_bound_unique_and_preserves_originals(wd, tmp_path):
+def test_watchdog_recover_stable_pidfd_unique_and_no_mutation_when_unverified(wd, tmp_path):
     import subprocess as sp
-    root, rec, report = _env(tmp_path)
+    rec = tmp_path / 'rec'
+    rec.mkdir(mode=0o700)
+    root = tmp_path / 'role'
+    root.mkdir()
     (root / 'partial').write_text('x')
     child = sp.Popen([PY, '-c', 'import time;time.sleep(60)'], preexec_fn=os.setsid)
     ident = wd.process_identity(child.pid)
-    (rec / 'stage-watchdog-intent-r1.json').write_text(json.dumps({'roots': [str(root)]}))
-    (rec / 'stage-watchdog-progress-r1.json').write_text(json.dumps({'child_identity': ident, 'pgid': child.pid}))
+    (rec / 'stage-watchdog-intent-r1.json').write_text(json.dumps({'roots': {'runtime': str(root)}}))
+    (rec / 'stage-watchdog-progress-r1.json').write_text(json.dumps({'child_identity': ident, 'sid': ident['sid']}))
     first = wd.recover(rec, 'r1')
     child.wait(timeout=5)
-    assert first['child'] == 'identity_matched_group_killed' and first['group_members_remaining'] == []
-    assert first['root_dispositions'][0]['state'] == 'quarantined'
-    # reuse/stale: identity no longer live -> no signal; second recovery makes a distinct record
-    (root.parent / 'role2').mkdir()
-    (rec / 'stage-watchdog-intent-r2.json').write_text(json.dumps({'roots': [str(root.parent / 'role2')]}))
-    (rec / 'stage-watchdog-progress-r2.json').write_text(json.dumps({'child_identity': ident, 'pgid': child.pid}))
+    assert first['state'] == 'absence_verified' and first['root_dispositions'][0]['state'] == 'quarantined'
+    # no progress record: UNVERIFIED and NO root mutation
+    root2 = tmp_path / 'role2'
+    root2.mkdir()
+    (rec / 'stage-watchdog-intent-r2.json').write_text(json.dumps({'roots': {'runtime': str(root2)}}))
     second = wd.recover(rec, 'r2')
-    assert second['child'] == 'recorded_identity_not_live_no_signal'
-    recs = sorted(p.name for p in rec.iterdir() if 'recovery' in p.name)
-    assert len(recs) == 2 and (rec / 'stage-watchdog-intent-r1.json').exists()
-    # an original result means no action
+    assert second['state'] == 'UNVERIFIED_no_progress_record' and root2.exists()
+    assert len([p for p in rec.iterdir() if 'recovery' in p.name]) == 2 and (rec / 'stage-watchdog-intent-r1.json').exists()
     (rec / 'stage-watchdog-result-r1.json').write_text('{}')
     assert wd.recover(rec, 'r1')['state'] == 'original_result_present_no_action'
 
 
-def test_scan_counts_dirs_refuses_links_and_special_files(wd, tmp_path):
+def test_scan_counts_dirs_refuses_links_special_and_ancestor_symlinks(wd, tmp_path):
     for n in range(4):
         (tmp_path / ('d%d' % n)).mkdir()
     with pytest.raises(ValueError):
@@ -472,23 +557,27 @@ def test_scan_counts_dirs_refuses_links_and_special_files(wd, tmp_path):
     with pytest.raises(TimeoutError):
         wd.scan_roots([tmp_path], deadline=-1.0, clock=lambda: 0.0)
     assert wd.scan_roots([tmp_path / 'missing'])['absent_roots']
+    real = tmp_path / 'real'
+    real.mkdir()
+    os.symlink(real, tmp_path / 'viasym')
+    with pytest.raises(OSError):  # an ancestor component that is a symlink is refused, not followed
+        wd.open_dir(tmp_path / 'viasym')
 
 
-def test_watchdog_quarantines_partial_roots_only(tmp_path):
+def test_watchdog_quarantine_is_anchored_and_never_overwrites(tmp_path):
     wd = _wd()
     partial = tmp_path / 'runtime'
     (partial / 'sub').mkdir(parents=True)
     (partial / 'sub' / 'f').write_text('x')
-    done = tmp_path / 'control'
-    done.mkdir()
-    (done / 'closure-lock.json').write_text('{}')
     link = tmp_path / 'link'
     os.symlink(partial, link)
-    res = wd.quarantine_partial([partial, done, tmp_path / 'absent', link], 'aa')
+    res = wd.quarantine_partial([partial, tmp_path / 'absent', link], 'aa')
     states = {Path(r['root']).name: r['state'] for r in res}
-    assert states == {'runtime': 'quarantined', 'control': 'complete_lock_present_not_moved', 'absent': 'absent',
-                      'link': 'refused_not_owned_directory'}
+    assert states == {'runtime': 'quarantined', 'absent': 'absent', 'link': 'refused_not_owned_directory'}
     assert (tmp_path / 'runtime.failed-aa' / 'sub' / 'f').read_text() == 'x' and not partial.exists()
     again = tmp_path / 'runtime'
     again.mkdir()
     assert wd.quarantine_partial([again], 'aa')[0]['state'] == 'refused_target_exists' and again.exists()
+    other = tmp_path / 'viasym2'
+    os.symlink(tmp_path, other)
+    assert wd.quarantine_partial([other / 'runtime'], 'bb')[0]['state'].startswith('refused_parent')

@@ -67,7 +67,32 @@ def object_rows(manifest,owner):
     return rows
 
 
-def bind_manifest(manifest,stage):
+def _db_status(stage,run):
+    import sqlite3
+    db=sqlite3.connect(':memory:')
+    try:
+        db.deserialize(read(Path(stage)/'control/mobius.db',16*1024**2))
+        row=db.execute('select status from poc_runs where id=?',(run,)).fetchone()
+        return None if row is None else row[0]
+    finally:db.close()
+
+
+def check_status(stage,pub_status):
+    """Staged control/execute/DB status must agree with the root-published status (passed-ness), else fail closed."""
+    stage=Path(stage)
+    want=pub_status=='passed'
+    result=json.loads(read(stage/'control/control-result.json',65536))
+    if result.get('status') is None or (result['status']=='passed')!=want:raise ValueError('staged control status disagrees with published result')
+    if want:
+        execute=json.loads(read(stage/'control/execute-response.json',1048576)).get('body',{})
+        if execute.get('status')!='passed':raise ValueError('execute response status disagrees with published result')
+        if _db_status(stage,result.get('run_id'))!='passed':raise ValueError('DB run status disagrees with published result')
+    else:
+        db_status=_db_status(stage,result.get('run_id')) if (stage/'control/mobius.db').exists() else None
+        if db_status=='passed':raise ValueError('DB run status passed while published result is not passed')
+
+
+def bind_manifest(manifest,stage,pub_status='passed'):
     """Fail closed unless the manifest agrees with the STAGED immutable copies (never source paths)."""
     stage=Path(stage)
     def js(relative,limit=1048576):return json.loads(read(stage/relative,limit))
@@ -78,6 +103,7 @@ def bind_manifest(manifest,stage):
         raise ValueError('manifest differs from control result')
     execute=js('control/execute-response.json').get('body',{})
     if (execute.get('run_id'),execute.get('plan_id'))!=(manifest['product_run_id'],manifest['plan_id']):raise ValueError('manifest differs from execute response')
+    if pub_status!='passed' or execute.get('status')!='passed' or result.get('status')!='passed':raise ValueError('product binding requires a passed run in every record')
     plan=js('control/setup/approved-plan.json')
     if (plan.get('id'),plan.get('investigation_id'),plan.get('target_sha256'))!=(manifest['plan_id'],manifest['investigation_id'],manifest['apk_sha256']):
         raise ValueError('manifest differs from approved plan')
@@ -92,8 +118,8 @@ def bind_manifest(manifest,stage):
     try:
         db.deserialize(read(stage/'control/mobius.db',16*1024**2))
         case,run=manifest['investigation_id'],manifest['product_run_id']
-        row=db.execute('select investigation_id,plan_id from poc_runs where id=?',(run,)).fetchone()
-        if row!=(case,manifest['plan_id']):raise ValueError('manifest run/case differs from DB')
+        row=db.execute('select investigation_id,plan_id,status from poc_runs where id=?',(run,)).fetchone()
+        if row!=(case,manifest['plan_id'],'passed'):raise ValueError('manifest run/case/status differs from DB')
         evidence={r[0]:(r[1],r[2],r[3]) for r in db.execute('select id,sha256,byte_size,object_key from evidence where investigation_id=?',(case,))}
         expected={}
         for sha,size,key in evidence.values():
@@ -111,6 +137,10 @@ def bind_manifest(manifest,stage):
         linked={r[0] for r in db.execute('select evidence_id from poc_run_evidence where investigation_id=? and run_id=?',(case,run))}
         if not linked or not linked<=set(evidence):raise ValueError('run evidence links absent or cross-case')
         readback=js('control/api-readback.json',4*1024**2)
+        if (readback.get('run_id'),readback.get('plan_id'),readback.get('investigation_id'),readback.get('status'))!=(run,manifest['plan_id'],case,'passed'):
+            raise ValueError('readback run/plan/case/status differs from manifest')
+        if set(execute.get('evidence_ids') or ())!=linked or len(execute.get('evidence_ids') or ())!=len(linked):
+            raise ValueError('execute evidence ids differ from DB run links')
         items=readback.get('evidence')
         if not isinstance(items,list) or {i.get('evidence_id') for i in items}!=linked or len(items)!=len(linked):
             raise ValueError('readback evidence links differ from DB run links')
@@ -154,11 +184,17 @@ def export(root,destination,*,owner,absence_checker=check_absent,clock=time.mono
     if not reached:errors.append({'class':'EmptyOrUnreachedRoot','detail':'no role directory or launch intent; nothing to verify'})
     for name in sorted(ROOT_FILES|set(attempt_names(root,ROOT_ATTEMPT))):optional(root/name,'root/'+name,required=name in REQUIRED_ROOT)
     role_absence={}
-    status=None
     control_work=None
-    try:status=json.loads(read(root/'control/work/control-result.json',65536)).get('status')
-    except BaseException:pass
-    passed=status=='passed'  # trusted-stage-derived: full evidence is only demanded of a passed run
+    # Obligations come from the root-published immutable result, never from the payload's own control status.
+    # Unknown/unreadable status fails closed: full evidence is demanded AND an error is recorded.
+    pub_status=None
+    if 'control' in reached:
+        try:
+            value=json.loads(read(root/'control-in/result/result.json',65536)).get('status')
+            pub_status=value if isinstance(value,str) and value else None
+        except BaseException:pass
+        if pub_status is None:errors.append({'class':'PublishedStatusUnknown'})
+    passed=pub_status in (None,'passed')
     stage_record=json.loads(read(root/'runtime-root-stage.json',65536)) if exists(root/'runtime-root-stage.json') else None
     for role in ('runtime','control'):
         output=root/role
@@ -190,18 +226,25 @@ def export(root,destination,*,owner,absence_checker=check_absent,clock=time.mono
     for name in sorted(REQUIRED|DIAGNOSTICS|{'result.json'}):
         optional(root/'control-in/result'/name,'published-result/'+name,
             required='control' in reached and (name=='result.json' or (passed and name in REQUIRED)))
+    if control_work is not None and pub_status is not None:
+        try:check_status(stage,pub_status)
+        except BaseException as error:errors.append({'role':'control','class':type(error).__name__,'stage':'status_binding','detail':str(error)[:120]})
+    binding_verified=False
     if control_work is not None and passed:
         try:
             manifest=json.loads(read(stage/'control/export-manifest.json',1048576))
             rows=object_rows(manifest,owner)
-            bind_manifest(manifest,stage)
+            bind_manifest(manifest,stage,pub_status)
             for row in rows:
                 sha=row['sha256'];key='apk/'+sha[:2]+'/'+sha+'.apk'
                 copy(control_work/'store'/key,'product-store/'+key,4*1024**2,expected=row)
+            binding_verified=pub_status=='passed'
         except BaseException as error:errors.append({'role':'control','class':type(error).__name__,'stage':'exact_product_objects'})
     checkpoint()
     result={'version':'owned-final-export/1','workflow_context':owner['workflow_context'],'infrastructure_run_id':owner['run_id'],
-        'complete':bool(reached) and not errors,'diagnostic_partial_export':bool(errors) or not reached,'errors':errors,'role_absence':role_absence,'inventory':inventory,
+        'complete':bool(reached) and not errors,'complete_diagnostic_export':bool(reached) and not errors,
+        'complete_product_evidence':bool(reached) and not errors and pub_status=='passed' and binding_verified,
+        'published_status':pub_status,'diagnostic_partial_export':bool(errors) or not reached,'errors':errors,'role_absence':role_absence,'inventory':inventory,
         'total_bytes':total,'original_status_not_upgraded':True,'private_candidates_exported':False,
         'cooperative_export_budget_seconds':30,'not_cryptographic_attestation':True}
     json_write(stage/'export-summary.json',result)

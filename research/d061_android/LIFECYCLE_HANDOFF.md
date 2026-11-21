@@ -278,20 +278,26 @@ no staging readiness or hard-ceiling claim is made. Retained session readers fix
 repeated per-member hashing, not all sources of stalled/unbounded runtime.
 
 ## Staging watchdog (held, source only)
-`staging_watchdog.py` supervises `stage_archives.py`. Before any effect it writes a durable private intent
-record (argv, exact role roots, watchdog identity); after spawn it records the child's (pid, start-ticks, pgid).
-The child gets its own session, CPU/file-size/NOFILE/address-space/core rlimits and PDEATHSIG SIGKILL, so a
-dead watchdog does not leave the root stager running. Exit is detected through a pidfd without reaping; the
-child's process group is killed and `/proc` scanned for absence BEFORE the leader is reaped, so a reused PID or
-PGID is never signalled. Cancellation (SIGTERM/SIGINT/SIGHUP) and the wall clock go through the same path. The
-exact owned role roots (not the report file) are scanned by an anchored `dir_fd`/`O_NOFOLLOW` traversal that counts
-directories and files and checks budgets and the deadline between entries, during the run and once more after
-ANY exit, including a fast exit 0. Success requires exit 0, group absence, the final report file, a regular
-`closure-lock.json` in each role root and a clean final scan; otherwise roots without a lock are renamed (never
-deleted) to a private failed name. `recover()` is an independent attributable recovery that signals only if the
-recorded (pid, start-ticks) still matches a live process, preserves the originals and writes a unique recovery record.
+`staging_watchdog.py` supervises `stage_archives.py`. One-shot pre-effect gates: the lock bytes must hash to the
+reviewed lock identity, and every role root and the report path must NOT preexist (never adopted, never
+quarantined). A durable private intent record is written before any effect, then a progress record with the
+child's (pid, start-ticks, sid). The child gets its own session, CPU/file-size/NOFILE/address-space/core rlimits and
+a checked PDEATHSIG SIGKILL. All post-Popen setup is inside the cleanup guard. Processes are stopped by signalling
+each live member of the recorded session through its own pidfd after identity re-verification (no numeric kill),
+verifying absence with a /proc scan, and reaping the leader with a bounded wait. Root mutation (rename to a private
+`.failed-<attempt>`, never delete) happens only after absence is verified; otherwise the record says
+`UNVERIFIED_ABSENCE_NO_ROOT_MUTATION`. Every ancestor in every traversal, record write and quarantine is opened
+component by component with O_NOFOLLOW. After ANY exit, including exit 0, a deadline-bounded final validation
+checks the report content, each role's closure-lock content, the exact reviewed file set (no extras) and every
+file's size, mode and SHA-256 against the reviewed lock; a regular but invalid lock is quarantined too.
+`recover()` is the independent attributable recovery for a dead watchdog with a unique record.
 
-Honest limits: size scans are polling, not a disk quota; descendants are contained by session/process group plus a
-/proc scan, not a PID namespace or cgroup; RLIMIT_NPROC is per-UID and is not claimed; tests use benign child
-processes and tmp directories as source evidence only, not real SDK staging, a root-owned run or kernel limit
-enforcement. `APPROVED_FOR_EXECUTION` is FALSE and the held workflow source gate requires it.
+Honest limits: size scans are polling, not a disk quota; containment is the session plus pidfd signalling, so a
+process that calls setsid escapes it and production still needs a PID namespace or cgroup; RLIMIT_NPROC is per-UID
+and not claimed; tests use benign stager stand-ins and tmp directories as source evidence only, not real SDK
+staging, a root-owned run, kernel limit enforcement or the real fault chain. `APPROVED_FOR_EXECUTION` is FALSE.
+
+## Exporter status trust
+Export obligations come from the root-published `control-in/result/result.json` status, never from the payload's
+own control-result before absence. The staged control, execute and DB statuses must agree with it; unknown or
+disagreeing status is an error. `complete_diagnostic_export` and `complete_product_evidence` are distinct.
