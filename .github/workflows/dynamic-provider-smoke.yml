@@ -24,6 +24,7 @@ on:
     paths:
       - ".github/workflows/dynamic-provider-smoke.yml"
       - "scripts/dynamic_provider_smoke.sh"
+      - "scripts/dynamic_provider_smoke.sh"
 
 jobs:
   dynamic-provider-smoke:
