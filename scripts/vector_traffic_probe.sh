@@ -1,17 +1,24 @@
 #!/usr/bin/env bash
 # VECTOR traffic-capture feasibility probe (D-061 reconciliation):
-# on the ephemeral CI emulator, lock down ALL guest egress with iptables
-# (allowing only the loopback, the host alias 10.0.2.2 so adb keeps working,
-# and DNS via the host resolver), then launch the pinned Allsafe lab APK and
-# record which remote endpoints it attempts from /proc/net/tcp{,6}.
+# on the ephemeral CI emulator, lock down ALL guest egress with iptables,
+# INDEPENDENTLY VERIFY the containment with a canary + exact byte counters,
+# and only then launch the pinned Allsafe lab APK to record which remote
+# endpoints it attempts from /proc/net/tcp{,6}.
 #
-# Isolation contract: no app traffic can reach any third-party endpoint -
-# every outbound connection except the explicit allows is dropped inside the
-# guest before launch. The probe observes connection attempts only; it
-# captures no content and contacts nothing. The emulator is ephemeral.
+# Isolation contract: no app traffic may reach any third-party endpoint.
+# The lockdown allows ONLY loopback and the host alias 10.0.2.2 (which the
+# adb transport needs). No established-flow allowance (pre-existing system
+# connections would leak) and no DNS (queries forwarded by the host resolver
+# would be a third-party route and an exfil channel). Containment is proven
+# before launch, not inferred: a ping canary to a public IP must fail while
+# the host-alias canary succeeds, and exact iptables counters bound every
+# byte that left during the window to the allowed rules. If the canary shows
+# a leak, the app is NEVER launched and the limit is reported.
 #
-# Output: fixed-format PASS/FAIL lines plus parsed endpoint evidence in
-# $OUT. Raw dumps stay in the artifact for analysis.
+# Socket metadata from /proc/net/tcp is attempt evidence only; the zero-
+# egress claim rests on the policy + canary + counters, not on the sockets.
+# The emulator is ephemeral. Output: fixed PASS/FAIL lines; raw dumps stay
+# in the artifact for analysis.
 set -u
 
 WORK="${GITHUB_WORKSPACE:-$(pwd)}"
@@ -22,6 +29,10 @@ fail=0
 
 expect() { # name condition
   if [ "$2" -eq 0 ]; then echo "PASS $1"; else echo "FAIL $1"; fail=1; fi
+}
+
+counters() { # snapshot exact OUTPUT counters to a file
+  adb -s emulator-5554 shell "iptables -L OUTPUT -v -n -x" >"$1" 2>&1
 }
 
 echo "== verify emulator and pinned APK =="
@@ -51,23 +62,19 @@ else
 fi
 
 LOCKDOWN=0
+CONTAINED=0
 if [ "$IPTABLES_OK" -eq 1 ]; then
   echo "== apply egress lockdown (guest-internal, ephemeral) =="
-  # Allows BEFORE the policy drop: loopback, the host alias (adb transport
-  # safety), host-resolver DNS, and already-established flows.
+  # Allows BEFORE the policy drop. No DNS allow, no established/related
+  # allowance: every pre-existing third-party flow must die with the policy.
   adb -s emulator-5554 shell "iptables -A OUTPUT -o lo -j ACCEPT"
   A1=$?
   adb -s emulator-5554 shell "iptables -A OUTPUT -d 10.0.2.2 -j ACCEPT"
   A2=$?
-  adb -s emulator-5554 shell "iptables -A OUTPUT -d 10.0.2.3 -p udp --dport 53 -j ACCEPT"
-  A3=$?
-  adb -s emulator-5554 shell "iptables -A OUTPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT"
-  A4=$?
   adb -s emulator-5554 shell "iptables -P OUTPUT DROP"
-  A5=$?
-  echo "allow-rcs=$A1,$A2,$A3,$A4 policy-rc=$A5"
-  adb -s emulator-5554 shell "iptables -L OUTPUT -n -v" >"$OUT/iptables-final.out" 2>&1
-  if [ "$A1" -eq 0 ] && [ "$A2" -eq 0 ] && [ "$A3" -eq 0 ] && [ "$A4" -eq 0 ] && [ "$A5" -eq 0 ]; then
+  A3=$?
+  echo "allow-rcs=$A1,$A2 policy-rc=$A3"
+  if [ "$A1" -eq 0 ] && [ "$A2" -eq 0 ] && [ "$A3" -eq 0 ]; then
     echo "PASS egress-lockdown-applied"
     LOCKDOWN=1
   else
@@ -76,10 +83,31 @@ if [ "$IPTABLES_OK" -eq 1 ]; then
 fi
 
 if [ "$LOCKDOWN" -eq 1 ]; then
+  echo "== independently verify containment BEFORE any app launch =="
+  # Canary 1: the allowed path must still work (else adb is flying blind).
+  adb -s emulator-5554 shell "ping -c 1 -W 2 10.0.2.2" >"$OUT/canary-host.out" 2>&1
+  HOST_OK=$?
+  # Canary 2: a public-IP ping must fail - 100% loss means the kernel
+  # dropped it. If this succeeds, containment does not hold.
+  adb -s emulator-5554 shell "ping -c 2 -W 2 1.1.1.1" >"$OUT/canary-public.out" 2>&1
+  PUB_RC=$?
+  grep -q "100% packet loss\|100% loss\|0 received" "$OUT/canary-public.out"
+  PUB_BLOCKED=$?
+  echo "host-canary-rc=$HOST_OK public-canary-rc=$PUB_RC public-blocked=$PUB_BLOCKED"
+  counters "$OUT/counters-pre.txt"
+  if [ "$HOST_OK" -eq 0 ] && [ "$PUB_BLOCKED" -eq 0 ]; then
+    echo "PASS containment-verified (host canary ok, public canary dropped)"
+    CONTAINED=1
+  else
+    echo "FAIL containment-verified"
+  fi
+fi
+
+if [ "$CONTAINED" -eq 1 ]; then
   echo "== baseline =="
   adb -s emulator-5554 shell "cat /proc/net/tcp /proc/net/tcp6" >"$OUT/net-baseline.txt" 2>&1
 
-  echo "== install and launch lab app under lockdown =="
+  echo "== install and launch lab app under verified lockdown =="
   timeout 240 adb -s emulator-5554 install -r "$APK" >"$OUT/install.out" 2>&1
   expect "adb-install" $?
   timeout 60 adb -s emulator-5554 shell monkey -p infosecadventures.allsafe \
@@ -94,8 +122,9 @@ if [ "$LOCKDOWN" -eq 1 ]; then
     sleep 3
   done
   adb -s emulator-5554 shell pidof infosecadventures.allsafe >"$OUT/app-pid.out" 2>&1 || true
+  counters "$OUT/counters-post.txt"
 
-  echo "== attempted remote endpoints under lockdown =="
+  echo "== attempted remote endpoints under verified lockdown =="
   python3 - "$OUT/net-samples.txt" >"$OUT/attempts.txt" <<'PYEOF'
 import sys, collections
 attempts = collections.Counter()
@@ -128,10 +157,15 @@ PYEOF
   cat "$OUT/attempts.txt"
   expect "attempts-recorded" $?
 
+  echo "== egress accounting (allowed rules vs dropped policy) =="
+  echo "-- pre-launch counters --"; cat "$OUT/counters-pre.txt"
+  echo "-- post-window counters --"; cat "$OUT/counters-post.txt"
+
   adb -s emulator-5554 shell am force-stop infosecadventures.allsafe >/dev/null 2>&1 || true
 else
-  echo "SKIP app launch: lockdown unavailable - launching without it would"
-  echo "let the lab app reach third-party endpoints, which this probe forbids."
+  echo "SKIP app launch: containment not verified - launching without proven"
+  echo "containment could let the lab app reach third-party endpoints, which"
+  echo "this probe forbids. The missing precondition is the reported limit."
 fi
 
 echo "== summary =="
