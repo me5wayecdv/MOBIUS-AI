@@ -1,77 +1,100 @@
-# D061 native proxy slice: concrete held preparation
+# Held native positive capture/request-replay slice
 
-Status: PREPARATION ONLY. No dependency installation/import, proxy execution,
-origin launch or target launch has occurred for this proposal. The driver has a
-source-code false gate, no environment bypass. This is a separate local fixture,
-not the held full harness or an Allsafe demonstration.
+PREPARATION ONLY. All execution entry points have source-code false gates. None
+of these modules has been imported, installed or launched during preparation.
+AST parsing and wheel hash/download checks are the only validation performed.
+This is a local owned fixture, not the held full harness or product integration.
 
-## Toolchain and resolved lock
+## Concrete components
 
-- Target: CPython 3.12, Linux x86_64 with glibc >=2.28. No ARM, macOS,
-  Windows or musl claim. Exact future runner image/OS digest still needs pinning.
-- Existing pip24.0 under existing Python3.12.16 resolved and downloaded 42 wheels,
-  with binary-only resolution, no source builds and no package installation.
-- `requirements.lock` pins every resolved dependency with one selected wheel
-  SHA256. `wheel-lock.json` includes the filenames, exact observed PyPI URLs,
-  declared requirements and independent PyPI digest matches. No extras enabled.
-- A second no-index wheel-only `pip download --require-hashes` against the local
-  wheelhouse succeeded for all 42 pins. This verifies dependency/hash closure
-  under that resolver/interpreter, not importability or runtime safety.
-- mitmproxy12.3.1 wheel hash:
+- `installer.py`: future ephemeral CI root staging only. Requires CPython3.12,
+  x86_64, glibc>=2.28; verifies all regular wheel files against hashes, creates
+  `/opt/d061-runtime/venv` without pip, uses separately hashed pip24.0 wheel to
+  install the explicit42 package lock with no index/source builds/dependency
+  fetching. Runs pip check. Does not install into product/baseline environment.
+- `wrapper.py`: future ephemeral CI root supervisor only, not a workstation
+  command. Anonymous network/mount/PID namespaces wrap driver, proxy, client and
+  origin from launch. Read-only chroot exposes runtime/library binaries, fixture
+  sources, public CA certs and dedicated random/null devices, not host homes,
+  /run,/var,/tmp,/sys, host service sockets or a shared /dev tree. Fresh tmpfs/tmp,
+  private evidence/work. Only loopback interface is brought up and checked.
+  New proc mount reflects the PID namespace. setpriv drops all bounding,
+  inherited/ambient capabilities, UID/GID65534 and groups, sets no-new-privs;
+  resource limits and FD closure precede fixture execution. Clean environments,
+  absolute executable paths and DEVNULL stdin are explicit. Source/runtime
+  staging must be from reviewed checkout/root-owned inputs on a clean runner.
+- `driver.py`: additionally checks nonroot/no effective or bounding capabilities
+  and no-new-privs. Creates trusted fixed policy/nonce/profile. /proc listener
+  ownership and CA readiness replace TCP probes, so readiness generates no
+  abort/empty connection events. Uses one verified-TLS GET via regular proxy
+  CONNECT, no client retries. Waits boundedly for native request replay.
+- `addon.py`: pinned native FlowWriter -> bounded native FlowReader, rejects HAR,
+  requires one loaded HTTPFlow, revalidates its fixed policy and exact stored
+  request state, calls pinned ClientPlayback.check before enqueue. Explicit
+  enqueue/start/completion/error/terminal evidence. Captured native flow enters
+  replay.client once; no hardcoded request reconstruction or response playback.
+- `origin.py`: separate stdlib HTTPS server writes independent receipt IDs and
+  sequences. `wire.py` shares exact canonical method/path/safe headers/empty body
+  policy across initial native flow, replay native flow and both origin receipts.
+  Raw header pairs are retained. Duplicate headers, credentials, framing headers,
+  wrong Host authority, trailers, WebSocket, other endpoints/methods/body fail.
+
+Only regular mode is enabled. No browser/transparent/local/WireGuard capture or
+DNS proxy/helper mode is requested. Presence of helper distributions/default
+addons is not a claim they execute or send telemetry; their reviewed startup
+behavior remains a technical review item.
+
+## Quiescence and failure semantics
+
+All producers stop before final exact2 receipt/event counts are read. Every
+native/backend canonical request must match; raw evidence remains. Backend
+receipt IDs are unique and sequences1/2, not wallclock-only. Exactly one
+native enqueue/start/completion and a successful addon terminal record are
+required. Positive flow/backend/addon errors and error/exception/traceback log
+markers fail the candidate. There are no negative cases mixed into this first
+positive case. TLS-negative controls remain explicitly UNTESTED.
+
+Driver cleanup is signal-aware, bounded TERM/INT then KILL/wait and atomic
+cleanup evidence. Wrapper has its own ordinary-signal/deadline cleanup, kills
+namespace supervisor/process group and reaps it. PID1 exit kills its namespace
+members including new process groups/nested PID namespaces; the anonymous netns
+has no persistent name. Wrapper removes signing material even if driver died
+before finally. These are unexecuted source intentions, not observed cleanup or
+OS-boundary proof. Review signal/timeout paths before any activation. Host kill
+of the entire CI job remains the platform's final emergency boundary.
+
+No candidate result is a whole-project pass. First real slice, if separately
+reviewed/activated, can establish only positive local capture/request replay
+with positive verified TLS, not TLS rejection controls, Android/Allsafe,
+streaming, HTTP/2, redirects or broad containment/general app coverage.
+
+## Hash-closed toolchain preparation
+
+- `requirements.lock`: all42 resolved runtime packages pinned, one selected wheel
+  SHA256 each. CPython3.12, Linux x86_64, glibc>=2.28 only. No extras.
+- `wheel-lock.json`: exact filenames, observed PyPI URLs, matched wheel SHA256
+  and declared requirements. Downloaded binary-only under existing pip24.0 on
+  existing CPython3.12.16, no installs. A second no-index wheel-only
+  pip download --require-hashes against the local wheelhouse succeeded for42.
+- `bootstrap-lock.json`: separate pip24.0 wheel SHA/URL verified, ZIP only. It is
+  installer tooling, not a new product dependency. Total downloaded wheels43.
+- mitmproxy12.3.1 SHA256:
   `87afb808ac8d55383dbe6aa30eadeb0fedaeffd26210e7e23c25c9cd43bdb36a`.
-- No modifications to product dependencies, no container/image publication,
-  no install into product or current baseline environment. Future installation,
-  if reviewed, must be a throwaway venv using this exact lock and wheels, with
-  `--no-index --require-hashes --only-binary=:all:`. Toolchain review must inspect
-  the full 42-wheel inventory and decide whether automatic default addons and
-  Linux native helper dependency are acceptable for this isolated fixture.
 
-## Exact proposed path
+The installer records actual interpreter, base prefix, glibc/OpenSSL/kernel/OS
+and provider-reported ImageOS/ImageVersion. A hosted runner image digest is not
+invented where unavailable. Current artifact is platform/hash pinned, not a
+claim of an immutable hosted OS image. Future run must record actual supported
+runner version and reject a toolchain mismatch. Runtime wheel download is absent.
 
-1. `driver.py` takes a new private output directory and isolated venv path. It
-   writes a trusted fixed profile, nonce and local-only endpoint policy. Captured
-   flow metadata cannot choose profile, scope, target or endpoint.
-2. Runtime-only OpenSSL generates an ephemeral SAN127.0.0.1 TLS certificate.
-   `origin.py` binds loopback18443; only nonce-bearing GET with empty body passes.
-   The backend writes its own receipts before responding. It is independent of
-   the proxy projection, but shares this explicitly local fixture's policy.
-3. mitmdump binds loopback18080, lazy connection, verified upstream certificate,
-   HTTP/2 off and serial native replay. Addon CONNECT/request policy denies other
-   endpoints/methods/path/headers/body. These checks are fixture guards, NOT an
-   OS network boundary or universal containment. No third-party target is used.
-4. The Python stdlib HTTPS client makes one TLS request through CONNECT and
-   verifies the generated proxy CA. It does not ignore TLS verification. A
-   failed client request stays failed, no application/client retry loop.
-5. `addon.py` writes the actual completed HTTPFlow with FlowWriter, flush/fsync,
-   hashes its native bytes, bounds file size, rejects HAR and loads it with
-   pinned FlowReader. It requires one HTTPFlow and exact request-state equality.
-   Pinned native `replay.client` receives that loaded flow once, not a hardcoded
-   reconstruction, HAR replay, response playback or an invented response.
-6. A second independently recorded backend receipt plus native request-replay
-   completion is required. Exactly two receipts/events, equal native request
-   fingerprints and TLS flags are checked. No model is called. Cleanup sends
-   TERM then bounded KILL/wait, removes private CA/signing keys from artifacts.
+## Remaining exact review gate
 
-## Review gaps before activation
-
-- Review source and fixed options against the selected wheel. Syntax/AST-only
-  checks passed; none of these modules has been imported. Local runtime unknown.
-- Pin runner image and verify glibc/CPython/OpenSSL, owner UID, resource limits,
-  loopback-only sandbox boundary and inherited descriptors before activating.
-- Bounded TCP-only readiness now checks both listeners without successful
-  application probes/retries. Fixed-port collision and process ownership still
-  need runtime sandbox review.
-- Backend/native canonical method/path/headers/body fingerprints and strict
-  backend receipt order now reconcile per event. This comparison is unexecuted.
-- Process exit and private-key absence records now gate final candidate result.
-  Process-group termination is not namespace/cgroup descendant-absence proof.
-  A separately reviewed sandbox boundary remains necessary for that claim.
-- Exercise negative cases with real captured bytes only after review. No more
-  synthetic evidence layers are needed. No target authentication, Android,
-  product integration, request streaming, HTTP/2, redirects or capability-wide
-  native/TLS claim follows from this bounded GET fixture.
-
-
-Installation and execution remain operationally held pending exact toolchain and
-harness review. Preparation adds no spending, account, production, disclosure
-or third-party target authority.
+Review this combined installer/wrapper/driver/addon/wire/origin revision plus
+all43 wheel identities. In particular check the chroot interpreter/library and
+OpenSSL config paths, regular default addons/native helpers, setpriv/unshare
+supported flags, namespace death/wait evidence, signal/deadline/key cleanup,
+resource limits, source staging and inode listener ownership. No runtime has
+validated any of those paths. Do not merge permission with execution approval:
+source gates stay FALSE until exact technical review and a separately bounded
+activation patch. No spending, account, production, secret-disclosure or real
+third-party target authority is added.
