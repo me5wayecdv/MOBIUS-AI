@@ -51,3 +51,20 @@ wrong TLS rejection reason, chain-confounded hostname test and disabled upstream
 verification. Synthetic positive acceptance explicitly returns NOT_ESTABLISHED
 for runtime capability and authenticity. These tests cannot replace eventual
 actual machinery/runtime verification or whole-project acceptance.
+
+## One bounded correction after review
+
+The proposed validator now requires an independently supplied fixture policy
+with nonempty required package/APK set, TLS-profile-to-package map and exact
+allowed URLs. Empty targets and duplicate authorization IDs fail. Flow, replay,
+receipts and TLS profiles carry target/APK/plan binding; digest recomputation
+does not excuse cross-target records. Headers are bounded and limited to x-test
+and accept, credential/cookie headers and nonempty GET bodies are rejected,
+and redirect count must be zero. A self-asserted scope string is insufficient.
+These are proposed narrow fixture constraints, not general GET safety or
+application authentication policy. The independent policy still needs trusted
+runtime provenance. Six tests/25subtests pass; no further synthetic layering.
+
+The concrete next frontier is D061_NATIVE_PROXY_SLICE_DESIGN.md and its actual
+pinned metadata inventory. Transitive lock, dependency disposition and runtime
+boundary remain unresolved; no installs or launches have occurred.

@@ -16,7 +16,7 @@ def fixture():
             'url': 'https://lab.invalid/fixture?nonce='+nonce}
     flow = {'investigation_id': inv, 'nonce': nonce, 'source': 'real_proxy_capture',
             'method': 'GET', 'url': plan['url'], 'headers': {'x-test': nonce},
-            'body_sha256': c.digest(b''), 'response_status': 200}
+            'body_sha256': c.digest(b''), 'response_status': 200, 'redirects_followed':0}
     req_hash = c.digest(c.canonical({k:flow[k] for k in ('method','url','headers','body_sha256')}))
     receipts = [{'receipt_id': str(i), 'sequence': i, 'phase': phase,
                  'investigation_id': inv, 'nonce': nonce, 'method': 'GET',
@@ -39,22 +39,37 @@ def fixture():
               'artifact_sha256':{k:c.digest(v) for k,v in artifacts.items()},
               'targets':targets,'authorizations':[dict(t,id=t['authorization_id'],investigation_id=inv,active=True) for t in targets],
               'replay':{'kind':'request_replay','captured_flow_sha256':c.digest(artifacts['flow']),'request_sha256':req_hash}}
-    return bundle,artifacts
+    profiles={'trusted':'fixture.trusted','untrusted':'fixture.untrusted'}
+    def bind(record,profile='trusted'):
+        pkg=profiles[profile]; target=next(t for t in targets if t['package']==pkg)
+        record.update(package=pkg,apk_sha256=target['apk_sha256'],plan_sha256=c.digest(artifacts['plan']),profile=profile)
+    bind(flow)
+    for receipt in receipts: bind(receipt)
+    for name,check in checks.items(): bind(check,'untrusted' if name=='untrusted_ca' else 'trusted')
+    bind(bundle['replay'])
+    artifacts.update(flow=c.canonical(flow),receipts=c.canonical(receipts),tls_checks=c.canonical(checks))
+    bundle['artifact_sha256']={k:c.digest(v) for k,v in artifacts.items()}
+    bundle['replay']['captured_flow_sha256']=c.digest(artifacts['flow'])
+    policy={'required_targets':{t['package']:t['apk_sha256'] for t in targets},'profiles':profiles,'allowed_urls':{plan['url']}}
+    return bundle,artifacts,policy
 
 
 class ProposedCaptureContractTests(unittest.TestCase):
     def test_structural_acceptance_never_claims_runtime_or_authenticity(self):
-        result = c.validate(*fixture())
+        result = c.validate(fixture()[0],fixture()[1],fixture_policy=fixture()[2])
         self.assertEqual(result['runtime_capability'], 'NOT_ESTABLISHED')
         self.assertEqual(result['authenticity'], 'NOT_ESTABLISHED_BY_HASHES')
 
     def test_missing_capture_receipt_only_is_rejected(self):
-        b,a=fixture(); del a['flow']
-        with self.assertRaises((KeyError,c.ContractRejected)): c.validate(b,a)
+        b,a,policy=fixture(); del a['flow']
+        with self.assertRaises((KeyError,c.ContractRejected)): c.validate(b,a,fixture_policy=policy)
 
     def test_bundle_mutations_rejected(self):
         for mutation in (
             lambda b:b.update(evidence_scope='Allsafe_verified'),
+            lambda b:b.update(targets=[],authorizations=[]),
+            lambda b:b['authorizations'].append(copy.deepcopy(b['authorizations'][0])),
+            lambda b:b['replay'].update(apk_sha256='0'*64),
             lambda b:b['approval'].update(state='pending'),
             lambda b:b['approval'].update(investigation_id='other'),
             lambda b:b['targets'][1].update(authorization_id=b['targets'][0]['authorization_id']),
@@ -62,8 +77,8 @@ class ProposedCaptureContractTests(unittest.TestCase):
             lambda b:b['replay'].update(captured_flow_sha256='0'*64),
             lambda b:b['replay'].update(request_sha256='0'*64),
         ):
-            b,a=fixture();mutation(b)
-            with self.subTest(mutation=mutation),self.assertRaises(c.ContractRejected):c.validate(b,a)
+            b,a,policy=fixture();mutation(b)
+            with self.subTest(mutation=mutation),self.assertRaises(c.ContractRejected):c.validate(b,a,fixture_policy=policy)
 
     def test_receipt_tls_and_flow_mutations_rejected_even_with_new_hash(self):
         cases = [
@@ -73,15 +88,24 @@ class ProposedCaptureContractTests(unittest.TestCase):
             ('receipts', lambda v:v[1].update(nonce='previous-run')),
             ('receipts', lambda v:v[1].update(request_sha256='0'*64)),
             ('tls_checks', lambda v:v['wrong_hostname'].update(reason='untrusted_chain')),
+            ('tls_checks', lambda v:v['untrusted_ca'].update(profile='trusted')),
+            ('tls_checks', lambda v:v['wrong_hostname'].update(apk_sha256='0'*64)),
+            ('receipts', lambda v:v[1].update(plan_sha256='0'*64)),
+            ('flow', lambda v:v.update(headers={'cookie':'secret'})),
+            ('flow', lambda v:v.update(redirects_followed=1)),
             ('tls_checks', lambda v:v['wrong_hostname'].update(chain_trusted=False)),
             ('tls_checks', lambda v:v['upstream_valid'].update(verification_enabled=False)),
             ('flow', lambda v:v.update(method='POST')),
             ('flow', lambda v:v.update(source='receipt_only_guess')),
         ]
         for name,mutate in cases:
-            b,a=fixture();v=json.loads(a[name]);mutate(v);a[name]=c.canonical(v);b['artifact_sha256'][name]=c.digest(a[name])
-            with self.subTest(name=name,mutate=mutate),self.assertRaises(c.ContractRejected):c.validate(b,a)
+            b,a,policy=fixture();v=json.loads(a[name]);mutate(v);a[name]=c.canonical(v);b['artifact_sha256'][name]=c.digest(a[name])
+            with self.subTest(name=name,mutate=mutate),self.assertRaises(c.ContractRejected):c.validate(b,a,fixture_policy=policy)
 
     def test_unbound_changed_artifact_bytes_rejected(self):
-        b,a=fixture();a['flow']+=b' '
-        with self.assertRaises(c.ContractRejected):c.validate(b,a)
+        b,a,policy=fixture();a['flow']+=b' '
+        with self.assertRaises(c.ContractRejected):c.validate(b,a,fixture_policy=policy)
+
+    def test_independent_endpoint_policy_rejects_self_claim(self):
+        b,a,policy=fixture();policy['allowed_urls']={'https://different.invalid/'}
+        with self.assertRaises(c.ContractRejected):c.validate(b,a,fixture_policy=policy)
