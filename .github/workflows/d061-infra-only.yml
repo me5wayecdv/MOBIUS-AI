@@ -1,4 +1,4 @@
-# REVIEW CANDIDATE ONLY. Not under .github/workflows, cannot dispatch.
+# DIAGNOSTIC FIX DRAFT. Manual dispatch remains HELD pending exact fix review.
 # No emulator, proxy, app, dependency install or packet to nonlocal address.
 name: D061 infrastructure-only candidate
 on: workflow_dispatch
@@ -11,7 +11,7 @@ jobs:
       - name: Reviewed infrastructure candidate
         timeout-minutes: 2
         run: |
-          sudo /usr/bin/python3 scripts/d061/infra_netns_check.py --review-authorized --journal-pointer "$RUNNER_TEMP/d061-own-journal"
+          sudo /usr/bin/python3 scripts/d061/infra_netns_check.py --review-authorized --journal-pointer "$RUNNER_TEMP/d061-own-journal" --output-pointer "$RUNNER_TEMP/d061-output-pointer" --collector-gid "$(id -g)"
       - name: Independent cleanup even on prior failure or ordinary cancellation
         if: always()
         timeout-minutes: 4
@@ -26,11 +26,16 @@ jobs:
               raise SystemExit('FAILED unexpected journal path; nothing deleted')
           raise SystemExit(subprocess.run(['/usr/bin/python3', 'scripts/d061/infra_netns_check.py', '--review-authorized', '--cleanup-only', str(journal)], timeout=210).returncode)
           PY
+      - name: Collect only this job evidence with private runner access
+        if: always()
+        run: |
+          sudo /usr/bin/python3 scripts/d061/infra_collect_evidence.py --output-pointer "$RUNNER_TEMP/d061-output-pointer" --destination "$RUNNER_TEMP/d061-evidence" --uid "$(id -u)" --gid "$(id -g)"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: d061-infrastructure-evidence
-          path: /tmp/d061-infra-*/
+          path: ${{ runner.temp }}/d061-evidence/
+          if-no-files-found: error
 # SIGKILL/runner loss may prevent even always() steps. No guarantee then.
 # A SIGKILL between namespace creation and ownership journaling leaves an
 # unverified name: fail/report, never adopt/delete it by guessed prefix.

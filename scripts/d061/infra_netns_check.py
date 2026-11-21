@@ -21,11 +21,16 @@ import re
 import sys
 import time
 import uuid
+import traceback
 
 NS = ""  # Fresh per invocation; cleanup-only mode recovers the recorded name.
 IP = "/usr/sbin/ip"
 SETPRIV = "/usr/bin/setpriv"
 PYTHON = "/usr/bin/python3"
+DIAGNOSTIC_DIR = None
+COMMAND_SEQUENCE = 0
+DIAGNOSTIC_ERRORS = []
+CURRENT_STAGE = "initialization"
 
 WORKLOAD = r'''
 import os, socket, threading
@@ -59,24 +64,88 @@ print('LOOPBACK_ROUNDTRIP_OK', flush=True)
 
 
 def run(argv, *, timeout=3):
-    return subprocess.run(argv, check=True, stdin=subprocess.DEVNULL,
-                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                          text=True, close_fds=True, timeout=timeout,
-                          env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C"})
+    global COMMAND_SEQUENCE
+    COMMAND_SEQUENCE += 1
+    number = COMMAND_SEQUENCE
+    record = {"argv": argv, "sequence": number, "stage": CURRENT_STAGE}
+    try:
+        result = subprocess.run(argv, check=True, stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                text=True, close_fds=True, timeout=timeout,
+                                env={"PATH": "/usr/sbin:/usr/bin:/sbin:/bin", "LC_ALL": "C"})
+        record.update(returncode=result.returncode, stdout=result.stdout, stderr=result.stderr)
+        return result
+    except BaseException as exc:
+        record.update(error_type=type(exc).__name__, error=str(exc),
+                      returncode=getattr(exc, "returncode", None),
+                      stdout=getattr(exc, "stdout", None), stderr=getattr(exc, "stderr", None))
+        raise
+    finally:
+        if DIAGNOSTIC_DIR is not None:
+            # Only this fixed allowlisted infrastructure-command wrapper is
+            # recorded. No environment, credentials, model/app payloads.
+            try:
+                (DIAGNOSTIC_DIR / ("command-%04d.json" % number)).write_text(
+                    json.dumps(record, indent=2, default=str))
+            except BaseException as exc:
+                DIAGNOSTIC_ERRORS.append("command evidence write failed: " + repr(exc))
+
+
+def phase_record(out, phase):
+    """Persist before mutations; an interrupted write is UNKNOWN, never safe ownership."""
+    with (out / "phase.json").open("w") as fh:
+        json.dump({"phase": phase, "name": NS}, fh)
+        fh.flush()
+        os.fsync(fh.fileno())
+    fd = os.open(out, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
+def namespace_names(raw, *, empty_confirmed=False):
+    """iproute2 may print no bytes for an empty netns listing.
+
+    Only whitespace-only output independently confirmed against the namespace
+    handle directory is the empty-list exception. Every nonempty
+    response must be a strict JSON array of objects with valid name fields.
+    JSON null, objects, arbitrary text and malformed/truncated JSON fail.
+    """
+    if not raw.strip():
+        require(empty_confirmed, "empty namespace stdout not independently confirmed")
+        return set()
+    rows = json.loads(raw)
+    require(isinstance(rows, list), "namespace listing is not an array")
+    names = set()
+    for row in rows:
+        require(isinstance(row, dict) and isinstance(row.get("name"), str)
+                and bool(row["name"]) and not any(c.isspace() for c in row["name"]),
+                "invalid namespace listing entry")
+        require(row["name"] not in names, "duplicate namespace listing entry")
+        names.add(row["name"])
+    return names
 
 
 def ip(*args, ns=False):
     return run([IP] + (["-n", NS] if ns else []) + list(args)).stdout
 
 
+def json_rows(raw, label):
+    rows = json.loads(raw)
+    require(isinstance(rows, list) and all(isinstance(row, dict) for row in rows),
+            label + " must be a JSON array of objects")
+    return rows
+
+
 def inventory(ns=False):
     return {
-        "links": json.loads(ip("-j", "link", ns=ns)),
-        "addresses": json.loads(ip("-j", "addr", ns=ns)),
-        "routes4": json.loads(ip("-j", "-4", "route", "show", "table", "all", ns=ns)),
-        "routes6": json.loads(ip("-j", "-6", "route", "show", "table", "all", ns=ns)),
-        "rules4": json.loads(ip("-j", "-4", "rule", "show", ns=ns)),
-        "rules6": json.loads(ip("-j", "-6", "rule", "show", ns=ns)),
+        "links": json_rows(ip("-j", "link", ns=ns), "links"),
+        "addresses": json_rows(ip("-j", "addr", ns=ns), "addresses"),
+        "routes4": json_rows(ip("-j", "-4", "route", "show", "table", "all", ns=ns), "routes4"),
+        "routes6": json_rows(ip("-j", "-6", "route", "show", "table", "all", ns=ns), "routes6"),
+        "rules4": json_rows(ip("-j", "-4", "rule", "show", ns=ns), "rules4"),
+        "rules6": json_rows(ip("-j", "-6", "rule", "show", ns=ns), "rules6"),
     }
 
 
@@ -220,10 +289,12 @@ def cleanup(out, ownership):
 
 
 def main():
-    global NS
+    global NS, DIAGNOSTIC_DIR, COMMAND_SEQUENCE, CURRENT_STAGE
     parser = argparse.ArgumentParser()
     parser.add_argument("--review-authorized", action="store_true")
     parser.add_argument("--cleanup-only", type=Path, help="exact ownership journal from this job")
+    parser.add_argument("--collector-gid", type=int, help="uploader primary group, private evidence read access")
+    parser.add_argument("--output-pointer", type=Path, help="fresh job-local evidence pointer, not ownership authorization")
     parser.add_argument("--journal-pointer", type=Path, help="fresh job-local pointer for independent CI cleanup")
     args = parser.parse_args()
     require(not sys.flags.optimize, "Python optimization forbidden: safety assertions must remain enabled")
@@ -233,6 +304,8 @@ def main():
         signal.signal(sig, signal_failure)
     if args.cleanup_only:
         out = args.cleanup_only.resolve().parent
+        DIAGNOSTIC_DIR = out
+        COMMAND_SEQUENCE = max([int(p.stem.split("-")[1]) for p in out.glob("command-[0-9][0-9][0-9][0-9].json")] or [0])
         ownership = json.loads(args.cleanup_only.read_text())
         NS = ownership["name"]
         errors = []
@@ -240,6 +313,7 @@ def main():
             signal.signal(sig, signal.SIG_IGN)
         try:
             errors = cleanup(out, ownership)
+            errors.extend(DIAGNOSTIC_ERRORS)
         except BaseException as exc:
             errors.append("cleanup failure: " + repr(exc))
         finally:
@@ -247,7 +321,15 @@ def main():
             print(json.dumps({"cleanup_only": True, "failed": bool(errors), "errors": errors}), flush=True)
         return 1 if errors else 0
 
+    require(args.collector_gid is not None and args.collector_gid > 0, "non-root uploader group required")
+    os.umask(0o027)
     out = Path(tempfile.mkdtemp(prefix="d061-infra-", dir="/tmp"))
+    os.chown(out, 0, args.collector_gid)
+    out.chmod(0o2750)  # job-specific uploader group only, no world access; children inherit group
+    DIAGNOSTIC_DIR = out
+    if args.output_pointer:
+        with args.output_pointer.open("x") as pointer:
+            pointer.write(str(out))
     # External CI can recover this exact journal path. A missing journal must
     # never be converted into permission to delete a guessed namespace name.
     print("artifacts=" + str(out), flush=True)
@@ -258,27 +340,38 @@ def main():
     ownership = {"name": NS, "created": False, "inode": None}
     original_errors, cleanup_errors = [], []
     try:
+        phase_record(out, "NOT_CREATED")
+        CURRENT_STAGE = "host-before snapshot"
         before = host_snapshot()
         (out / "host-before.json").write_text(json.dumps(before, indent=2))
-        names = {row["name"] for row in json.loads(ip("-j", "netns", "list"))}
+        CURRENT_STAGE = "pre-create namespace listing"
+        raw_names = ip("-j", "netns", "list")
+        nsdir = Path("/var/run/netns")
+        empty_confirmed = not nsdir.exists() or not any(nsdir.iterdir())
+        names = namespace_names(raw_names, empty_confirmed=empty_confirmed)
         require(NS not in names, "refuse existing namespace")
         # Normal termination is deferred across create+identity journal.
         # SIGKILL here is unhandleable: without a successful-create journal,
         # fallback must leave the name untouched and fail, not guess ownership.
         oldmask = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGTERM, signal.SIGHUP, signal.SIGINT})
         try:
+            CURRENT_STAGE = "namespace create, ownership not yet journaled"
+            phase_record(out, "UNKNOWN_CREATE_WINDOW")
             ip("netns", "add", NS)
             ownership["created"] = True
             ownership["inode"] = Path("/var/run/netns", NS).stat().st_ino
             (out / "ownership.json").write_text(json.dumps(ownership))
             if args.journal_pointer:
                 args.journal_pointer.write_text(str(out / "ownership.json"))
+            phase_record(out, "CREATED_JOURNALED")
         finally:
             signal.pthread_sigmask(signal.SIG_SETMASK, oldmask)
+        CURRENT_STAGE = "namespace setup and validation"
         ip("link", "set", "lo", "up", ns=True)
         state = inventory(ns=True)
         (out / "namespace.json").write_text(json.dumps(state, indent=2))
         validate(state)
+        CURRENT_STAGE = "IPv4 loopback workload"
         who = pwd.getpwnam("nobody")
         with (out / "workload.log").open("w") as log:
             subprocess.run(
@@ -295,16 +388,22 @@ def main():
         validate(final)
     except BaseException as exc:
         original_errors.append(type(exc).__name__ + ": " + str(exc))
+        try:
+            (out / "original-traceback.txt").write_text(traceback.format_exc())
+        except BaseException as evidence_exc:
+            DIAGNOSTIC_ERRORS.append("traceback evidence write failed: " + repr(evidence_exc))
     finally:
         # Protect finite cleanup steps from ordinary CI termination signals.
         # SIGKILL/host loss remains outside process control; CI fallback needed.
         for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
             signal.signal(sig, signal.SIG_IGN)
         try:
+            CURRENT_STAGE = "protected cleanup and after snapshot"
             cleanup_errors = cleanup(out, ownership)
         except BaseException as exc:
             cleanup_errors.append("unexpected cleanup failure: " + repr(exc))
         finally:
+            cleanup_errors.extend(DIAGNOSTIC_ERRORS)
             summary = {"failed": bool(original_errors or cleanup_errors),
                        "original_errors": original_errors, "cleanup_errors": cleanup_errors,
                        "IPv4_loopback": "tested only if workload marker exists",
