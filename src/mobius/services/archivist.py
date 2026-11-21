@@ -441,15 +441,19 @@ class ArchivistService:
             if model_rows
             else "The deterministic path is reproducible from the APK bytes and authorisation."
         )
-        has_native=any((r.input_json or {}).get("target_kind")=="native_local_fixture" for r in
-            self._session.execute(select(PoCRunRow).where(PoCRunRow.investigation_id==row.id)).scalars())
+        runtime_runs=list(self._session.execute(select(PoCRunRow).where(PoCRunRow.investigation_id==row.id)).scalars())
+        has_native=any((r.input_json or {}).get("target_kind")=="native_local_fixture" for r in runtime_runs)
+        emulator_runs=[r for r in runtime_runs if (r.input_json or {}).get("target_kind")=="emulator"]
         limitations=_LIMITATIONS
-        if has_native:
+        if has_native or emulator_runs:
+            actual=("Persisted emulator/Frida run records are present; their exact actions, status and evidence "
+                    "bound the runtime claims. Static findings are not thereby confirmed. " if emulator_runs else "")
+            if has_native:
+                actual+="Controlled native local fixture traffic is separate from APK traffic and confirms no target finding."
             limitations=limitations.replace(
                 "- **Static only.** Nothing was executed. No finding was confirmed by observing the target at\n"
                 "runtime, and no dynamic-analysis capability exists in this build.",
-                "- **APK analysis remains static.** Controlled local native fixture runs are listed separately. "
-                "Their traffic is not APK runtime evidence and confirms no target finding.")
+                "- **Evidence-scoped runtime.** "+actual)
         return "\n".join(
             [
                 "## 6. Method and limitations",

@@ -40,6 +40,8 @@ class PreparedCIHost:
         child=None
         original=None
         command={'argv':argv,'rc':None,'errors':[]}
+        def interrupted(signum,frame):raise SystemExit(128+signum)
+        old_handlers={sig:signal.signal(sig,interrupted) for sig in (signal.SIGINT,signal.SIGTERM,signal.SIGHUP)}
         try:
             with (raw/'fixture.log').open('xb') as log:
                 child=subprocess.Popen(argv,env=env,stdin=subprocess.DEVNULL,stdout=log,
@@ -59,15 +61,17 @@ class PreparedCIHost:
                         attempt(command['errors'],'reap',lambda:child.wait(timeout=8))
                 command['rc']=None if child is None else child.poll()
                 if original is not None:command['original_error']=type(original).__name__
-                atomic_json(raw/'workflow-command.json',command)
-                # Exact existing emergency path, not broad process discovery.
-                emergency=subprocess.run([sys.executable,'/opt/d061-reviewed-source/emergency.py',str(raw)],
-                    env=env,stdin=subprocess.DEVNULL,close_fds=True,timeout=30)
-                if emergency.returncode:command['errors'].append('emergency_failed')
+                def emergency_cleanup():
+                    emergency=subprocess.run([sys.executable,'/opt/d061-reviewed-source/emergency.py',str(raw)],
+                        env=env,stdin=subprocess.DEVNULL,close_fds=True,timeout=30)
+                    if emergency.returncode:raise RuntimeError('emergency_failed')
+                attempt(command['errors'],'emergency',emergency_cleanup)
+                attempt(command['errors'],'command_summary',lambda:atomic_json(raw/'workflow-command.json',command))
+            for sig,handler in old_handlers.items():signal.signal(sig,handler)
         if original is not None:raise original
         if command['errors']:raise RuntimeError('product host cleanup failed')
         # Only reviewed named original blobs cross the typed host seam.
-        names=('initial.native','capture-digest.json','backend-receipts.json','native-events.json',
+        names=('native-proof.json','initial.native','capture-digest.json','backend-receipts.json','native-events.json',
                'replay-enqueued.json','replay-started.json','replay-completed.json','addon-final.json',
                'driver-cleanup.json','binding.json','policy.json','proxy.log','origin.log')
         artifacts={name:lexical(raw/'fixture/evidence'/name).read_bytes() for name in names}

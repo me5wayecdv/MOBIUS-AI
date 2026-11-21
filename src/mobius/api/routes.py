@@ -1772,7 +1772,8 @@ def readback_poc_run(scan_id: str, run_id: str, session=SessionDep, who: str = D
     _require_scan_owner(session, scan_id, who)
     ctx=get_context()
     service=PoCExecutionService(session,ctx.store)
-    row=service.get(run_id)
+    try:row=service.get(run_id)
+    except LookupError as exc:raise HTTPException(status_code=404,detail="PoC run not found") from exc
     if row.investigation_id!=scan_id:raise HTTPException(status_code=404,detail="PoC run not found")
     return service.readback(run_id,investigation_id=scan_id)
 

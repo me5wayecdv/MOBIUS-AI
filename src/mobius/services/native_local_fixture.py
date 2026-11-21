@@ -18,7 +18,7 @@ from .poc_runner import PoCAdapterUnavailable, PoCExecutionError
 PROFILE = 'trusted-local-positive-v1'
 TRAFFIC_SOURCE = 'owned-stdlib-loopback-client-not-apk'
 REQUIRED = frozenset({
-    'initial.native','capture-digest.json','backend-receipts.json','native-events.json',
+    'native-proof.json','initial.native','capture-digest.json','backend-receipts.json','native-events.json',
     'replay-enqueued.json','replay-started.json','replay-completed.json','addon-final.json',
     'driver-cleanup.json','wrapper-cleanup.json','emergency-cleanup.json','collector-summary.json',
     'binding.json',
@@ -123,3 +123,13 @@ class NativeLocalFixtureAdapter:
                 raise PoCExecutionError('native original artifact was not copied/hash-verified')
         if collector.get('binding')!=binding or collector.get('mode')!='product_positive_fixture':
             raise PoCExecutionError('native collector product binding mismatch')
+        # Actual native decoding is owned by the exact trusted host/addon,
+        # not this stdlib JSON/blob validator. Require its pinned extractor
+        # provenance bound to original native bytes and cross-check projections.
+        proof=read('native-proof.json')
+        if (proof['extractor']!='mitmproxy.io.FlowReader' or proof['version']!='12.3.1'
+            or proof['wheel_sha256']!='87afb808ac8d55383dbe6aa30eadeb0fedaeffd26210e7e23c25c9cd43bdb36a'
+            or proof['capture_sha256']!=digest or proof['flow_count']!=1
+            or proof['flow_id']!=events[0]['flow_id'] or proof['canonical']!=canonical
+            or not proof['loaded_request_state_equal'] or not proof['raw_content_present']):
+            raise PoCExecutionError('trusted host native extractor provenance mismatch')

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any
 from threading import Event, Lock
 
@@ -71,6 +71,26 @@ class PoCExecutionService:
             with _CANCEL_LOCK:
                 _CANCEL_EVENTS.pop(plan.id, None)
         input_json = plan.model_dump(mode="json")
+        evidence = EvidenceService(self.session, self.artifact_store)
+        native_evidence = []
+        native_mapping = []
+        if native_output is not None:
+            for name, content in sorted(native_output.artifacts.items()):
+                item = evidence.record(
+                    investigation_id=plan.investigation_id,
+                    kind=EvidenceKind.HTTP if name == "initial.native" else EvidenceKind.TOOL_OUTPUT,
+                    content=content,
+                    summary=(f"Native local fixture {name}; plan {plan.id}; anchor {plan.target_sha256}; "
+                             "stdlib-loopback traffic, NOT APK traffic"),
+                    produced_by="NATIVE_LOCAL",
+                )
+                native_evidence.append(item)
+                native_mapping.append({"name":name,"evidence_id":item.id,"sha256":item.sha256,"bytes":item.byte_size})
+            result=replace(result, output_json={**result.output_json,"native_artifacts":native_mapping})
+            approved_total=sum(len(value) for value in native_output.artifacts.values())
+            metadata_size=len(json.dumps(asdict(result),sort_keys=True,separators=(",",":"),default=str).encode())
+            if approved_total+metadata_size>plan.max_output_bytes:
+                raise ValueError("total native artifacts plus result metadata exceed approved output budget")
         output_json = asdict(result)
         input_bytes = json.dumps(input_json, sort_keys=True, separators=(",", ":")).encode()
         output_bytes = json.dumps(output_json, sort_keys=True, separators=(",", ":"), default=str).encode()
@@ -104,17 +124,6 @@ class PoCExecutionService:
             summary=f"PoC execution log {plan.id}",
             produced_by="POC",
         )
-        native_evidence = []
-        if native_output is not None:
-            for name, content in sorted(native_output.artifacts.items()):
-                native_evidence.append(evidence.record(
-                    investigation_id=plan.investigation_id,
-                    kind=EvidenceKind.HTTP if name == "initial.native" else EvidenceKind.TOOL_OUTPUT,
-                    content=content,
-                    summary=(f"Native local fixture {name}; plan {plan.id}; anchor {plan.target_sha256}; "
-                             "stdlib-loopback traffic, NOT APK traffic"),
-                    produced_by="NATIVE_LOCAL",
-                ))
         run_id = new_id(IdPrefix.POC_RUN)
         row = PoCRunRow(
             id=run_id,
@@ -198,7 +207,11 @@ class PoCExecutionService:
         output = self.native_adapter.execute(request)
         # Revalidate authority after the bounded external leg before accepting
         # evidence. Expired/revoked/rebound cases cannot be promoted into pass.
-        SafePoCRunner(self.session).validate_authority(plan)
+        # Independent session/transaction avoids stale identity-map objects and
+        # long-lived read snapshots. Caller must have committed authority before
+        # execution; this seam never creates/auto-grants it.
+        with Session(bind=self.session.get_bind()) as fresh_authority:
+            SafePoCRunner(fresh_authority).validate_authority(plan)
         NativeLocalFixtureAdapter.validate(request, output)
         duration = max(0,int((time.monotonic()-clock)*1000))
         if cancel_event.is_set() or duration > request.budget_seconds*1000:
@@ -210,6 +223,8 @@ class PoCExecutionService:
                    "anchor_is_not_traffic_source":True,"native_artifacts":manifest,
                    "tls_negative_controls":"UNTESTED","simulation_only":False,
                    "apk_execution":False,"profile":request.profile}
+        if sum(len(value) for value in output.artifacts.values())>plan.max_output_bytes:
+            raise PoCExecutionError("native original artifacts exceed approved total output budget")
         encoded=json.dumps(payload,sort_keys=True).encode()
         if len(encoded)>plan.max_output_bytes:raise PoCExecutionError("native result metadata exceeds budget")
         step=PoCStepResult(0,"capture_native_local_fixture_v1",request.profile,
@@ -250,6 +265,43 @@ class PoCExecutionService:
             raise ValueError("persisted input hash mismatch")
         if hashlib.sha256(encoded(row.output_json)).hexdigest()!=row.output_sha256:
             raise ValueError("persisted output hash mismatch")
+        by_kind={item["kind"]:item for item in references if item["kind"] in {"plan","result","log"}}
+        if set(by_kind)!={"plan","result","log"}:raise ValueError("required PoC plan/result/log links absent")
+        def linked_bytes(item):
+            return self.artifact_store.get(self.session.get(EvidenceRow,item["evidence_id"]).object_key)
+        if hashlib.sha256(linked_bytes(by_kind["plan"])).hexdigest()!=row.input_sha256:
+            raise ValueError("linked plan bytes differ from run input")
+        if hashlib.sha256(linked_bytes(by_kind["result"])).hexdigest()!=row.output_sha256:
+            raise ValueError("linked result bytes differ from run output")
+        if (row.input_json.get("id")!=row.plan_id or row.input_json.get("investigation_id")!=investigation_id
+            or row.input_json.get("target_sha256")!=row.target_sha256
+            or row.input_json.get("authorization_id")!=row.authorization_id
+            or row.input_json.get("approval_id")!=row.approval_id):
+            raise ValueError("run/plan/case/target binding mismatch")
+        if row.input_json.get("target_kind")=="native_local_fixture":
+            from .native_local_fixture import REQUIRED, NativeFixtureRequest, NativeFixtureOutput, NativeLocalFixtureAdapter
+            payload=row.output_json["output_json"]
+            manifest=payload["native_artifacts"]
+            if len({x["name"] for x in manifest})!=len(manifest):raise ValueError("duplicate native artifact name")
+            mapping={x["name"]:x for x in manifest}
+            if not REQUIRED<=mapping.keys():raise ValueError("required native artifact mapping missing")
+            native_refs={x["evidence_id"]:x for x in references if x["kind"]=="native-local"}
+            if {x["evidence_id"] for x in manifest}!=set(native_refs):raise ValueError("native links incomplete/substituted")
+            files={}
+            for name,item in mapping.items():
+                ref=native_refs[item["evidence_id"]]
+                if ref["sha256"]!=item["sha256"] or ref["bytes"]!=item["bytes"]:
+                    raise ValueError("native artifact evidence mapping changed")
+                files[name]=linked_bytes(ref)
+            request=NativeFixtureRequest(**payload["binding"])
+            if (request.plan_id!=row.plan_id or request.investigation_id!=investigation_id
+                or request.authorization_id!=row.authorization_id or request.approval_id!=row.approval_id
+                or request.anchor_apk_sha256!=row.target_sha256
+                or request.anchor_package!=row.input_json["target_package"]):
+                raise ValueError("native host binding differs from persisted plan/run")
+            expected_plan=hashlib.sha256(encoded({k:v for k,v in row.input_json.items() if k!="approval_id"})).hexdigest()
+            if request.plan_sha256!=expected_plan:raise ValueError("native approved plan digest mismatch")
+            NativeLocalFixtureAdapter.validate(request,NativeFixtureOutput(request,files,tuple(row.tool_versions)))
         return {"run_id":row.id,"plan_id":row.plan_id,"investigation_id":investigation_id,
                 "authorization_id":row.authorization_id,"approval_id":row.approval_id,
                 "anchor_apk_sha256":row.target_sha256,"status":row.status,

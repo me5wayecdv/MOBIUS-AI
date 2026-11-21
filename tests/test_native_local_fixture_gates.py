@@ -62,3 +62,35 @@ def test_existing_run_readback_rehashes_original_persisted_bytes(session,store,f
     result=service.readback(run.run_id,investigation_id=scan.id)
     assert result['input_sha256']==run.input_sha256 and len(result['evidence'])==3
     with pytest.raises(LookupError):service.readback(run.run_id,investigation_id='another-case')
+
+
+def test_second_session_revocation_seen_after_pending_host(session,store,future_iso):
+    from sqlalchemy.orm import Session
+    from mobius.adapters.models import AuthorizationRow
+    plan=grant(session,native_plan(session,store,future_iso),future_iso)
+    session.commit()
+    # Prime the first identity map before an independently committed revocation.
+    cached=session.get(AuthorizationRow,plan.authorization_id)
+    assert cached.revoked_at is None
+    class PendingHost:
+        VERSION='unit-refusal-only'
+        def execute(self,request):
+            with Session(bind=session.get_bind()) as other:
+                row=other.get(AuthorizationRow,plan.authorization_id)
+                row.revoked_at='2026-01-01T00:00:00Z'
+                other.commit()
+            return None  # Deliberately no fabricated native evidence/result.
+    with pytest.raises(PoCScopeRejected):
+        PoCExecutionService(session,store,native_adapter=PendingHost()).execute_and_persist(plan)
+
+
+def test_missing_or_substituted_plan_result_links_fail_readback(session,store,future_iso):
+    from mobius.adapters.models import PoCRunEvidenceRow
+    scan,plan=_context(session,store,future_iso)
+    service=PoCExecutionService(session,store)
+    run=service.execute_and_persist(plan)
+    link=session.query(PoCRunEvidenceRow).filter_by(run_id=run.run_id,kind='plan').one()
+    session.delete(link)
+    session.flush()
+    with pytest.raises(ValueError,match='plan/result/log'):
+        service.readback(run.run_id,investigation_id=scan.id)

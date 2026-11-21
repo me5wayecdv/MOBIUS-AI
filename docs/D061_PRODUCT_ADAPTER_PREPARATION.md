@@ -108,3 +108,36 @@ negative cases above are specified but not yet added to executable fixed driver.
 These are honest remaining preparation gaps, not a completed product milestone.
 Existing four new regression tests cover rejection/default-off/readback only;
 there is no fabricated positive host result or synthetic success test.
+
+## Draft review corrections
+
+Post-host authority now uses an independent Session/transaction, not cached ORM
+objects from the long host leg. A second-session committed revocation regression
+proves no pass is accepted when the earlier session's object is stale. Readback
+requires plan/result/log links and their original blob hashes, exact per-name
+native evidenceID/hash/size manifest, complete required set/same-run links and
+case/plan/authorization/approval/APKanchor/approved-plan digest bindings. It then
+revalidates original capture digest/projection/collector relationships. Removed
+or substituted links cannot silently disappear. Total original native bytes
+plus full result metadata, not only a compact manifest, count against approved
+max_output_bytes; overbudget output is refused.
+
+Native decoding remains the trusted exact host/addon's responsibility. Product
+stdlib validation does not parse arbitrary native bytes and cannot authenticate
+a malicious host. New required native-proof.json records the actual pinned
+FlowReader12.3.1/wheel digest, singleflowID, loaded request-state equality and
+canonical fields tied to the original capture hash. Product crosschecks this
+host-owned provenance with native events and independent receipts; it is not a
+claim of independent product-native parsing or cryptographic host attestation.
+
+ARCHIVIST now checks real persisted emulator runs as well as local fixture runs
+before composing runtime limitations. It never replaces actual emulator/Frida
+evidence with a blanket APK-static statement merely because a local fixture is
+present. Missing run readback maps404. Existing static findings stay unconfirmed.
+
+Product host ordinary signal handling and independently guarded emergency/
+summary were tightened; new local TLS untrusted-proxy control source is FALSE
+and requires post-quiescence receipt delta0 before any passed rejection result.
+Other negative cases remain specified, not implemented/executed. Operational vs
+teardown time budgeting and failed-host persistent records remain held design
+work, no runtime activation allowed by these draft corrections.
