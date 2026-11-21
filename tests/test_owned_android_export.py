@@ -928,11 +928,11 @@ NONCE = 'a' * 32
 APP = {'pid': 10, 'uid': 20}
 
 
-def _log(*kinds, pid=10, uid=20, fail='SSLHandshakeException', nonce=NONCE, tag='MobiusOwnedFixture', lpid=None):
+def _log(*kinds, pid=10, uid=20, fail='SSLHandshakeException', nonce=NONCE, tag='MobiusOwnedFixture', lpid=None, ts='11-21 13:00:00.123'):
     lines = []
     for k in kinds:
         extra = ' class=%s' % fail if k == 'FAILED' else ''
-        lines.append('11-21 13:00:00.123  %d  %d I %s: OWNED_FIXTURE_%s nonce=%s pid=%d uid=%d%s' % (lpid or pid, pid, tag, k, nonce, pid, uid, extra))
+        lines.append('%s  %d  %d I %s: OWNED_FIXTURE_%s nonce=%s pid=%d uid=%d%s' % (ts, lpid or pid, pid, tag, k, nonce, pid, uid, extra))
     return '\n'.join(lines)
 
 
@@ -943,12 +943,15 @@ def _nv():
     return importlib.import_module('negative_verdict')
 
 
+import calendar as _cal
+E0 = _cal.timegm((2026, 11, 21, 13, 0, 0)) * 1000 + 123
 RUN = 'run-1'
-WIN = {'start': 2, 'end': 8}
+WIN = {'start': E0 - 1000, 'end': E0 + 5000}
+CAP = {'year': 2026, 'tz_offset_minutes': 0, 'device_clock_offset_ms': 0}
 _CERTS = {}
 
 
-def _mk(name, issuer=None, sans=None, key=None, ca=True):
+def _mk(name, issuer=None, sans=None, key=None, ca=True, nokcs=False, noeku=False, expired=False):
     import datetime
     import ipaddress
     from cryptography import x509
@@ -960,8 +963,13 @@ def _mk(name, issuer=None, sans=None, key=None, ca=True):
     ik, ic = issuer if issuer else (key, None)
     b = (x509.CertificateBuilder().subject_name(subj).issuer_name(ic.subject if ic else subj).public_key(key.public_key())
          .serial_number(x509.random_serial_number()).not_valid_before(datetime.datetime(2026, 1, 1))
-         .not_valid_after(datetime.datetime(2030, 1, 1))
-         .add_extension(x509.BasicConstraints(ca=ca, path_length=None), critical=True))
+         .not_valid_after(datetime.datetime(2026, 6, 1) if expired else datetime.datetime(2030, 1, 1))
+         .add_extension(x509.BasicConstraints(ca=ca, path_length=None), critical=True)
+         .add_extension(x509.KeyUsage(digital_signature=not ca, content_commitment=False, key_encipherment=False, data_encipherment=False,
+                                      key_agreement=False, key_cert_sign=ca and not nokcs, crl_sign=False, encipher_only=False,
+                                      decipher_only=False), critical=True))
+    if not ca and not noeku:
+        b = b.add_extension(x509.ExtendedKeyUsage([x509.oid.ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
     if sans is not None:
         b = b.add_extension(x509.SubjectAlternativeName(sans), critical=False)
     cert = b.sign(ik, hashes.SHA256())
@@ -983,7 +991,9 @@ def _pki():
         _CERTS.update(a=a, b=b, leaf_a=_mk('leaf', issuer=a, sans=loop, ca=False), leaf_b=_mk('leaf', issuer=b, sans=loop, ca=False),
                       wild=_mk('leaf', issuer=a, sans=[x509.DNSName('*.invalid')], ca=False),
                       dns=_mk('leaf', issuer=a, sans=[x509.DNSName('owned-name-mismatch.invalid')], ca=False),
-                      reissued_b=_mk('Anchor B reissued', key=b[0]))
+                      reissued_b=_mk('Anchor B reissued', key=b[0]),
+                      expired=_mk('leaf', issuer=a, sans=loop, ca=False, expired=True), noeku=_mk('leaf', issuer=a, sans=loop, ca=False, noeku=True),
+                      nokcs=_mk('Anchor NoKCS', nokcs=True))
     return _CERTS
 
 
@@ -992,7 +1002,7 @@ def _sha(b):
 
 
 def _led(sc, count=0, **over):
-    d = {'run_id': RUN, 'scenario': sc, 'nonce': NONCE, 'window_start': 1, 'window_end': 9, 'complete': True, 'count': count}
+    d = {'run_id': RUN, 'scenario': sc, 'nonce': NONCE, 'window_start': E0 - 5000, 'window_end': E0 + 9000, 'complete': True, 'count': count}
     d.update(over)
     return d
 
@@ -1015,13 +1025,13 @@ def _build(sc):
 
 def _refusal(sc, **over):
     d = {'run_id': RUN, 'scenario': sc, 'nonce': NONCE, 'upstream': '127.0.0.1:18443',
-         'upstream_leaf_sha256': _sha(_der(_pki()['leaf_b'][1])), 'reason': 'certificate_verify_failed', 'observed_at': 5, 'count': 1}
+         'upstream_leaf_sha256': _sha(_der(_pki()['leaf_b'][1])), 'reason': 'certificate_verify_failed', 'observed_at': E0 + 1000, 'count': 1}
     d.update(over)
     return d
 
 
 def _ev(sc, text, **kw):
-    base = dict(nonce=NONCE, run_id=RUN, app_window=dict(WIN), expected_app=dict(APP), build_record=_build(sc),
+    base = dict(nonce=NONCE, run_id=RUN, app_window=dict(WIN), capture=dict(CAP), expected_app=dict(APP), build_record=_build(sc),
                 premises=_prem(sc), native_ledger=_led(sc), origin_ledger=_led(sc), proxy_refusal=_refusal(sc),
                 teardown_absence_verified=True)
     base.update(kw)
@@ -1041,7 +1051,7 @@ def test_negative_verdict_untrusted_origin_requires_refusal_and_no_tls():
     ok = _log('PREPARED', 'SOCKET', 'FAILED', fail='IOException')
     assert _ev('untrusted-origin', ok)['passed'] is True
     assert not _ev('untrusted-origin', ok, proxy_refusal=None)['passed']
-    for bad in ({'nonce': 'c' * 32}, {'upstream': '10.0.0.1:443'}, {'upstream_leaf_sha256': 'e' * 64}, {'observed_at': 50}, {'run_id': 'other'}, {'reason': 'x'}):
+    for bad in ({'nonce': 'c' * 32}, {'upstream': '10.0.0.1:443'}, {'upstream_leaf_sha256': 'e' * 64}, {'observed_at': E0 + 99999}, {'run_id': 'other'}, {'reason': 'x'}):
         assert not _ev('untrusted-origin', ok, proxy_refusal=_refusal('untrusted-origin', **bad))['passed'], bad
     assert not _ev('untrusted-origin', _log(*KINDS, fail='IOException'))['passed']
 
@@ -1068,7 +1078,7 @@ def _mutated(mutate):
     elif mutate == 'ledger_wrong_nonce':
         kw['native_ledger'] = _led(sc, 0, nonce='c' * 32)
     elif mutate == 'ledger_bad_window':
-        kw['origin_ledger'] = _led(sc, 0, window_start=9, window_end=1)
+        kw['origin_ledger'] = _led(sc, 0, window_start=E0 + 9, window_end=E0 - 1)
     elif mutate == 'wrong_nonce':
         text = _log(*KINDS, nonce='c' * 32)
     elif mutate == 'mixed_pid':
@@ -1115,15 +1125,36 @@ def _mutated(mutate):
     elif mutate == 'anchor_not_bound_to_build':
         kw['build_record'] = dict(_build(sc), embedded_anchor_sha256='9' * 64)
     elif mutate == 'ledger_disjoint_window':
-        kw['native_ledger'] = _led(sc, 0, window_start=100, window_end=200)
+        kw['native_ledger'] = _led(sc, 0, window_start=E0 + 100000, window_end=E0 + 200000)
     elif mutate == 'ledger_ends_before_app':
-        kw['origin_ledger'] = _led(sc, 0, window_start=1, window_end=3)
+        kw['origin_ledger'] = _led(sc, 0, window_start=E0 - 5000, window_end=E0 - 3000)
     elif mutate == 'ledger_wrong_run':
         kw['native_ledger'] = _led(sc, 0, run_id='other')
     elif mutate == 'build_wrong_run':
         kw['build_record'] = dict(_build(sc), run_id='other')
     elif mutate == 'no_app_window':
         kw['app_window'] = None
+    elif mutate == 'stale_markers':
+        text = _log(*KINDS, ts='11-20 09:00:00.000')
+    elif mutate == 'wrong_year_mapping':
+        kw['capture'] = dict(CAP, year=2025)
+    elif mutate == 'decreasing_timestamps':
+        text = _log('PREPARED', 'SOCKET', ts='11-21 13:00:02.000') + '\n' + _log('TLS_BEGIN', 'FAILED', ts='11-21 13:00:01.000')
+    elif mutate == 'no_clock_mapping':
+        kw['capture'] = None
+    elif mutate == 'none_run_id':
+        kw['run_id'] = None
+        kw['build_record'] = dict(_build(sc), run_id=None)
+        kw['native_ledger'] = _led(sc, 0, run_id=None)
+        kw['origin_ledger'] = _led(sc, 0, run_id=None)
+    elif mutate == 'bad_form_run_id':
+        kw['run_id'] = 'a b/c'
+    elif mutate == 'expired_leaf':
+        k = _pki()
+        kw['premises'] = {'trust_anchor_der': _der(k['a'][1]), 'presented_chain_der': [_der(k['expired'][1]), _der(k['a'][1])]}
+    elif mutate == 'leaf_without_serverauth':
+        k = _pki()
+        kw['premises'] = {'trust_anchor_der': _der(k['a'][1]), 'presented_chain_der': [_der(k['noeku'][1]), _der(k['a'][1])]}
     return _ev(sc, text, **kw)
 
 
@@ -1133,7 +1164,8 @@ def _mutated(mutate):
                                     'not_threadtime', 'duplicate_key', 'refused_marker', 'bad_class', 'missing_begin', 'order', 'no_teardown',
                                     'teardown_truthy', 'apk_arbitrary_equal', 'apk_not_installed', 'apk_other_scenario', 'same_anchor',
                                     'same_key_reissued_anchor', 'anchor_not_bound_to_build', 'ledger_disjoint_window', 'ledger_ends_before_app',
-                                    'ledger_wrong_run', 'build_wrong_run', 'no_app_window'])
+                                    'ledger_wrong_run', 'build_wrong_run', 'no_app_window', 'stale_markers', 'wrong_year_mapping',
+                                    'decreasing_timestamps', 'no_clock_mapping', 'none_run_id', 'bad_form_run_id'])
 def test_negative_verdict_fails_closed(mutate):
     res = _mutated(mutate)
     assert res['passed'] is False and res['reasons'], mutate
@@ -1179,3 +1211,20 @@ def test_external_handle_holder_is_reported_never_signalled(wd, monkeypatch):
         for p in (holder, member):
             p.kill()
             p.wait()
+
+
+@pytest.mark.parametrize('leaf', ['expired', 'noeku'])
+def test_wrong_hostname_refuses_when_another_certificate_defect_could_cause_the_refusal(leaf):
+    k = _pki()
+    prem = dict(_prem('wrong-hostname'), presented_chain_der=[_der(k[leaf][1]), _der(k['a'][1])])
+    res = _ev('wrong-hostname', _log(*KINDS), premises=prem)
+    assert res['passed'] is False and any('pinned certificate profile' in r for r in res['reasons'])
+
+
+def test_wrong_hostname_refuses_non_keycertsign_anchor_and_profile_checks_apply_to_untrusted_chains():
+    k = _pki()
+    ca = k['nokcs']
+    assert not _ev('wrong-hostname', _log(*KINDS), premises=dict(_prem('wrong-hostname'), trust_anchor_der=_der(ca[1])))['passed']
+    prem = dict(_prem('untrusted-ca'))
+    prem['presented_chain_der'] = [_der(k['leaf_b'][1]), _der(k['b'][1])]
+    assert _ev('untrusted-ca', _log(*KINDS), premises=prem)['passed'] is True

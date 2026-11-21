@@ -15,7 +15,7 @@ TAG = 'MobiusOwnedFixture'
 HEX64 = re.compile('[0-9a-f]{64}')
 NONCE = re.compile('[0-9a-f]{32}')
 # adb logcat -v threadtime:  MM-DD HH:MM:SS.mmm  PID  TID L Tag: message
-THREADTIME = re.compile(r'^\d\d-\d\d \d\d:\d\d:\d\d\.\d{3}\s+(\d+)\s+(\d+)\s+([VDIWEF])\s+(\S+?)\s*: (.*)$')
+THREADTIME = re.compile(r'^(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d)\.(\d{3})\s+(\d+)\s+(\d+)\s+([VDIWEF])\s+(\S+?)\s*: (.*)$')
 MARKER = re.compile(r'^(OWNED_FIXTURE_[A-Z_]+|REFUSED)\b(.*)$')
 KV = re.compile(r'(\w+)=(\S+)')
 CLASSES = {'untrusted-ca': {'SSLHandshakeException', 'SSLPeerUnverifiedException'},
@@ -34,7 +34,14 @@ def _hex(v, rx=HEX64):
     return isinstance(v, str) and rx.fullmatch(v) is not None
 
 
-def parse(text, expected_pid, expected_uid):
+def _host_ms(parts, capture):
+    import calendar
+    mo, dd, hh, mi, ss, ms = (int(x) for x in parts)
+    secs = calendar.timegm((capture['year'], mo, dd, hh, mi, ss)) - capture['tz_offset_minutes'] * 60
+    return secs * 1000 + ms - capture['device_clock_offset_ms']
+
+
+def parse(text, expected_pid, expected_uid, capture):
     """Strict parse. Returns (rows, problems). Any marker text outside the exact app tag, any marker line without numeric
     nonce/pid/uid matching the externally observed app identity, duplicate keys, or REFUSED lines are problems."""
     rows, problems = [], []
@@ -45,7 +52,7 @@ def parse(text, expected_pid, expected_uid):
         if not m:
             problems.append('marker text in a line that is not threadtime-formatted')
             continue
-        lpid, _tid, _lvl, tag, msg = m.groups()
+        mo, dd, hh, mi, ss, ms, lpid, _tid, _lvl, tag, msg = m.groups()
         if tag != TAG:
             problems.append('marker text under a different log tag')
             continue
@@ -68,12 +75,20 @@ def parse(text, expected_pid, expected_uid):
         if int(kv['pid']) != expected_pid or int(kv['uid']) != expected_uid or int(lpid) != expected_pid:
             problems.append('%s marker identity differs from the independently observed app' % kind)
             continue
+        try:
+            kv = dict(kv, _host_ms=_host_ms((mo, dd, hh, mi, ss, ms), capture))
+        except (ValueError, OverflowError):
+            problems.append('marker timestamp invalid')
+            continue
         rows.append((kind, kv))
     return rows, problems
 
 
 EXPECTED_UPSTREAM = '127.0.0.1:18443'  # reviewed fixed origin from README; the proxy refusal record must name exactly this
 REFUSAL_REASONS = {'certificate_verify_failed'}
+
+
+RUN_ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9._-]{0,63}')
 
 
 def _certs(blobs, minimum=1):
@@ -97,6 +112,58 @@ def _der():
 def _spki(cert):
     from cryptography.hazmat.primitives.serialization import PublicFormat
     return cert.public_key().public_bytes(_der(), PublicFormat.SubjectPublicKeyInfo)
+
+
+def _profile_problem(cert, *, ca, at):
+    """Pinned fixture profile for ONE certificate at the witnessed time. Not a general path validator."""
+    import datetime
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec, rsa
+    when = datetime.datetime.fromtimestamp(at / 1000, datetime.timezone.utc)
+    if not (cert.not_valid_before_utc <= when <= cert.not_valid_after_utc):
+        return 'certificate not valid at the witnessed time'
+    known = {x509.BasicConstraints, x509.KeyUsage, x509.ExtendedKeyUsage, x509.SubjectAlternativeName,
+             x509.SubjectKeyIdentifier, x509.AuthorityKeyIdentifier}
+    for ext in cert.extensions:
+        if ext.critical and type(ext.value) not in known:
+            return 'unsupported critical extension'
+    try:
+        bc = cert.extensions.get_extension_for_class(x509.BasicConstraints).value
+    except x509.ExtensionNotFound:
+        return 'basicConstraints required'
+    if bc.ca is not ca:
+        return 'CA/leaf role mismatch'
+    try:
+        ku = cert.extensions.get_extension_for_class(x509.KeyUsage).value
+    except x509.ExtensionNotFound:
+        return 'keyUsage required'
+    if ca and not ku.key_cert_sign:
+        return 'CA lacks keyCertSign'
+    if not ca:
+        if not ku.digital_signature:
+            return 'leaf lacks digitalSignature'
+        try:
+            eku = cert.extensions.get_extension_for_class(x509.ExtendedKeyUsage).value
+        except x509.ExtensionNotFound:
+            return 'leaf serverAuth EKU required'
+        if x509.oid.ExtendedKeyUsageOID.SERVER_AUTH not in eku:
+            return 'leaf serverAuth EKU required'
+    if not isinstance(cert.signature_hash_algorithm, hashes.SHA256) and not isinstance(cert.signature_hash_algorithm, hashes.SHA384):
+        return 'signature algorithm outside the pinned profile'
+    key = cert.public_key()
+    if not (isinstance(key, ec.EllipticCurvePublicKey) or (isinstance(key, rsa.RSAPublicKey) and key.key_size >= 2048)):
+        return 'public key outside the pinned profile'
+    return None
+
+
+def _chain_profile_problem(chain, anchor, at):
+    """chain[0] is the leaf; every later member and the anchor are CAs."""
+    for index, cert in enumerate(chain):
+        why = _profile_problem(cert, ca=index > 0, at=at)
+        if why:
+            return why
+    return _profile_problem(anchor, ca=True, at=at)
 
 
 def _issued_by(child, parent):
@@ -127,7 +194,7 @@ def _ca_ok(cert):
         return False
 
 
-def _premises_problem(scenario, p, build):
+def _premises_problem(scenario, p, build, at):
     """Validates ACTUAL canonical DER certificates and chain relations, not unrelated digest strings."""
     from cryptography import x509
     import ipaddress
@@ -141,8 +208,11 @@ def _premises_problem(scenario, p, build):
                 return 'premises malformed'
             anchor = _certs([p['trust_anchor_der']])[0]
             chain = _certs(p['presented_chain_der'])
-            if not _ca_ok(anchor) or not _chain_consistent(chain):
-                return 'anchor must be a CA and the presented chain internally consistent'
+            if not _chain_consistent(chain):
+                return 'presented chain internally inconsistent'
+            why = _chain_profile_problem(chain, anchor, at)
+            if why:
+                return 'pinned certificate profile: ' + why
             if _anchored_by(chain, anchor):
                 return 'presented chain is anchored by the trust anchor, so refusal would not be an untrusted-chain case'
             bound = build.get('embedded_anchor_sha256') if scenario == 'untrusted-ca' else build.get('proxy_upstream_trust_sha256')
@@ -153,8 +223,11 @@ def _premises_problem(scenario, p, build):
                 return 'wrong-hostname premises malformed'
             anchor = _certs([p['trust_anchor_der']])[0]
             chain = _certs(p['presented_chain_der'])
-            if not _ca_ok(anchor) or not _chain_consistent(chain) or not _anchored_by(chain, anchor):
-                return 'wrong-hostname requires a consistent chain TRUSTED by the embedded anchor'
+            if not _chain_consistent(chain) or not _anchored_by(chain, anchor):
+                return 'wrong-hostname requires a chain signature-linked to the embedded anchor'
+            why = _chain_profile_problem(chain, anchor, at)
+            if why:
+                return 'pinned certificate profile: ' + why
             if build.get('embedded_anchor_sha256') != hashlib.sha256(p['trust_anchor_der']).hexdigest():
                 return 'trust anchor is not the one bound to the build record'
             if p['peer_name'] != WRONG_PEER.split('"')[1]:
@@ -180,13 +253,21 @@ def _ledger(rec, scenario, nonce, run_id, app):
             and rec['window_start'] <= app['start'] and rec['window_end'] >= app['end'])
 
 
-def evaluate(scenario, logcat_text, *, nonce, run_id, app_window, expected_app, build_record, premises, native_ledger, origin_ledger,
+def evaluate(scenario, logcat_text, *, nonce, run_id, app_window, capture, expected_app, build_record, premises, native_ledger, origin_ledger,
              proxy_refusal=None, teardown_absence_verified=None):
     if scenario not in CLASSES:
         raise ValueError('closed negative scenario required')
     reasons = []
     if not _hex(nonce, NONCE):
         reasons.append('nonce form')
+    if not (isinstance(run_id, str) and RUN_ID.fullmatch(run_id)):
+        reasons.append('canonical run id required')
+        return {'passed': False, 'reasons': reasons, 'scenario': scenario, 'not_attestation': True}
+    if not (isinstance(capture, dict) and set(capture) == {'year', 'tz_offset_minutes', 'device_clock_offset_ms'}
+            and all(type(v) is int for v in capture.values()) and 2000 <= capture['year'] <= 2100
+            and abs(capture['tz_offset_minutes']) <= 14 * 60 and abs(capture['device_clock_offset_ms']) <= 2000):
+        reasons.append('bounded logcat-to-host clock mapping required')
+        return {'passed': False, 'reasons': reasons, 'scenario': scenario, 'not_attestation': True}
     if not (isinstance(expected_app, dict) and set(expected_app) == {'pid', 'uid'} and _int(expected_app['pid']) and _int(expected_app['uid'])):
         reasons.append('independently observed app pid/uid required')
         return {'passed': False, 'reasons': reasons, 'scenario': scenario, 'not_attestation': True}
@@ -201,12 +282,17 @@ def evaluate(scenario, logcat_text, *, nonce, run_id, app_window, expected_app, 
             and _hex(build_record['embedded_anchor_sha256']) and _hex(build_record['proxy_upstream_trust_sha256'])):
         reasons.append('same-run scenario-bound fresh APK/trust identity (built == installed, exact sha256) required')
         build_record = build_record if isinstance(build_record, dict) else {}
-    problem = _premises_problem(scenario, premises, build_record)
+    problem = _premises_problem(scenario, premises, build_record, app_window['start'])
     if problem:
         reasons.append(problem)
-    rows, problems = parse(logcat_text, expected_app['pid'], expected_app['uid'])
+    rows, problems = parse(logcat_text, expected_app['pid'], expected_app['uid'], capture)
     reasons += problems
     kinds = [k for k, _ in rows]
+    stamps = [kv['_host_ms'] for _, kv in rows]
+    if any(t < app_window['start'] or t > app_window['end'] for t in stamps):
+        reasons.append('app marker outside the witnessed app window (stale or unmapped log lines)')
+    if stamps != sorted(stamps):
+        reasons.append('marker timestamps not monotonic')
     if any(kv['nonce'] != nonce for _, kv in rows):
         reasons.append('marker for a different nonce present')
     for need in MUST[scenario]:
@@ -244,4 +330,4 @@ def evaluate(scenario, logcat_text, *, nonce, run_id, app_window, expected_app, 
     if teardown_absence_verified is not True:
         reasons.append('independent teardown absence not verified')
     return {'passed': not reasons, 'reasons': reasons, 'scenario': scenario, 'refusal_reason_established': False,
-            'claim': 'generic refusal under the bound premises; the app logs only an exception class', 'not_attestation': True}
+            'claim': 'generic refusal with signature-linked chains under a pinned fixture certificate profile at the witnessed time; reason not isolated, not a general path validation', 'not_attestation': True}
