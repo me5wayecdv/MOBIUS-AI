@@ -1863,3 +1863,52 @@ def test_host_capability_workflow_exit_semantics_with_stubbed_sudo(tmp_path):
     assert rc(STUB_CHOWN_FAIL=1)==1                      # original success, restore failed
     assert rc(STUB_RM_FAIL=1)==1                         # original success, temp removal failed
     assert rc(STUB_PROBE_FAIL=1,STUB_CHOWN_FAIL=1,STUB_RM_FAIL=1)==1
+
+
+def _dl(monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1]/'research'/'d061_android'))
+    import docker_lifecycle as dl
+    return dl
+
+
+def test_docker_lifecycle_spec_validator_fail_closed(monkeypatch):
+    import copy
+    dl=_dl(monkeypatch)
+    assert dl.APPROVED_FOR_EXECUTION is False
+    run='a'*32;img='registry.invalid/x@sha256:'+'b'*64
+    for role in ('runtime','control'):
+        src='/opt/d061-owned-android-run-%s/%s-work'%(run,role)
+        kw=dict(mem_mb=2048,pids=256,cpus=2,work_src=src)
+        argv=dl.create_argv(role,run,img,**kw)
+        s=' '.join(argv)
+        assert '--network none' in s and '--cap-drop ALL' in s and '--read-only' in s and '--pull never' in s
+        assert '--privileged' not in s and '--pid ' not in s and '--pid=' not in s and 'docker.sock' not in s
+        assert ('--device /dev/kvm' in s)==(role=='runtime')
+        mem=2048*1048576
+        rec={'Id':'c'*64,'Name':'/'+dl.container_name(role,run),'Image':'sha256:'+'d'*64,
+             'HostConfig':{'NetworkMode':'none','Privileged':False,'PidMode':'','IpcMode':'none','UsernsMode':'','CapDrop':['ALL'],
+                 'CapAdd':None,'SecurityOpt':['no-new-privileges'],'ReadonlyRootfs':True,'Memory':mem,'MemorySwap':mem,'PidsLimit':256,
+                 'NanoCpus':2*10**9,'Devices':[{'PathOnHost':'/dev/kvm'}] if role=='runtime' else [],'Binds':None},
+             'Config':{'User':'65534:65534','Image':img,'Labels':{'d061.run_id':run,'d061.role':role}},
+             'Mounts':[{'Type':'bind','Source':src,'Destination':'/work'}],'State':{'Status':'created'}}
+        assert dl.validate_inspect(rec,role,run,img,**kw)['daemon_enforcement_verified'] is False
+        def mut(f):
+            r=copy.deepcopy(rec);f(r);return r
+        for f in (lambda r:r['HostConfig'].update(NetworkMode='host'),lambda r:r['HostConfig'].update(Privileged=True),
+                  lambda r:r['HostConfig'].update(PidMode='host'),lambda r:r['HostConfig'].update(CapAdd=['SYS_ADMIN']),
+                  lambda r:r['HostConfig'].update(PidsLimit=0),lambda r:r['HostConfig'].update(Memory=0),
+                  lambda r:r['HostConfig'].update(ReadonlyRootfs=False),lambda r:r['HostConfig'].update(Devices=[{'PathOnHost':'/dev/kvm'},{'PathOnHost':'/dev/fuse'}]),
+                  lambda r:r['Mounts'].append({'Type':'bind','Source':'/','Destination':'/host'}),
+                  lambda r:r['Mounts'][0].update(Source='/var/run/docker.sock'),lambda r:r['Config'].update(User='0:0'),
+                  lambda r:r['Config'].update(Image='x:latest'),lambda r:r.pop('HostConfig')):
+            with pytest.raises(dl.SpecError):dl.validate_inspect(mut(f),role,run,img,**kw)
+    ctrl=dl.create_argv('control',run,img,mem_mb=512,pids=64,cpus=1,work_src='/opt/d061-owned-android-run-%s/control-work'%run)
+    assert '/dev/kvm' not in ' '.join(ctrl)
+    for bad in (dict(role='runtime',work_src='/opt/d061-owned-android-run-%s/control-work'%run),dict(role='x'),dict(image='x:latest'),
+                dict(mem_mb=10),dict(run_id='A'*32),dict(work_src='/')):
+        a=dict(role='runtime',run_id=run,image=img,mem_mb=2048,pids=256,cpus=2,work_src='/opt/d061-owned-android-run-%s/runtime-work'%run);a.update(bad)
+        with pytest.raises(dl.SpecError):dl.create_argv(a.pop('role'),a.pop('run_id'),a.pop('image'),**a)
+    assert dl.absence_verdict({'inspect_not_found':True,'cgroup_unpopulated_or_gone':True})=='VERIFIED_ABSENT_RECORD'
+    assert dl.absence_verdict({'inspect_not_found':True})=='UNVERIFIED'
+    assert dl.absence_verdict({'inspect_not_found':True,'cgroup_unpopulated_or_gone':False})=='PRESENT'
+    assert dl.absence_verdict(None)=='UNVERIFIED'
