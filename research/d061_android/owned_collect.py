@@ -10,9 +10,11 @@ from owned_absence import inspect
 APPROVED_FOR_EXECUTION = False
 
 
-def collect(runtime,request,destination,*,command_rc):
+def collect(runtime,request,destination,*,command_rc,root_stage=None,deadline=None):
     if not APPROVED_FOR_EXECUTION:raise RuntimeError('owned runtime collector HELD')
-    runtime=Path(runtime);destination=Path(destination);destination.mkdir(mode=0o755,exist_ok=False)
+    import time
+    if deadline is not None and time.monotonic()>deadline:raise TimeoutError("collection deadline before staging")
+    runtime=Path(runtime);destination=Path(destination);destination.mkdir(mode=0o700,exist_ok=False)
     files={};errors=[];inventory=[];total=0
     for name in sorted((REQUIRED|DIAGNOSTICS)-{'collector-summary.json','wrapper-cleanup.json','independent-absence.json'}):
         source=runtime/'work/evidence'/name
@@ -22,7 +24,7 @@ def collect(runtime,request,destination,*,command_rc):
             total+=len(content);files[name]=content
         except BaseException as error:errors.append({'stage':name,'class':type(error).__name__})
     for name,content in [('wrapper-cleanup.json',read(runtime/'wrapper-cleanup.json',65536)),
-        ('independent-absence.json',json.dumps(inspect(runtime),sort_keys=True,separators=(',',':')).encode())]:
+        ('independent-absence.json',json.dumps(inspect(runtime,root_stage=root_stage),sort_keys=True,separators=(',',':')).encode())]:
         total+=len(content);files[name]=content
     if not json.loads(files['independent-absence.json'])['complete']:errors.append({'stage':'absence','class':'Incomplete'})
     if command_rc!=0:errors.append({'stage':'runtime_command','class':'NonzeroExit'})
@@ -50,9 +52,14 @@ def collect(runtime,request,destination,*,command_rc):
             'host-failure.json':json.dumps({'code':'host_collection_failed','error_class':type(error).__name__,
                 'original_inventory':inventory,'not_a_capture_or_cleanup_proof':True},sort_keys=True).encode()}
         status='failed'
-    for name,data in files.items():write(destination/name,data)
+    if deadline is not None and time.monotonic()>deadline:raise TimeoutError('collection deadline before immutable staging')
+    for name,data in files.items():
+        if deadline is not None and time.monotonic()>deadline:raise TimeoutError('private collection staging deadline')
+        write(destination/name,data)
     result={'status':status,'failure_code':None if status=='passed' else 'host_collection_failed',
         'tool_versions':list(output.tool_versions),'request':asdict(request),
         'files':[{'name':name,'sha256':digest(data),'bytes':len(data)} for name,data in sorted(files.items())]}
+    if deadline is not None and time.monotonic()>deadline:raise TimeoutError('collection deadline, private stage not released')
     json_write(destination/'result.json',result)
+    destination.chmod(0o755)
     return result

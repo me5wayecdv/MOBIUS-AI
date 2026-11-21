@@ -5,6 +5,7 @@ can publish /control/commit.json. Root owns that read-only mount. This source
 cannot grant permission or supply the still-unresolved toolchain/runtime closure.
 """
 import json
+import ctypes
 import os
 from pathlib import Path
 import re
@@ -26,10 +27,15 @@ NATIVE=Path('/fixture/native')
 
 class Producers:
     def __init__(self,env):self.env=env;self.rows=[]
-    def start(self,argv,name,out):
+    def start(self,argv,name,out,*,bind_parent=False):
         log=(out/(name+'.log')).open('xb')
+        owner=os.getpid()
+        def parent_death():
+            libc=ctypes.CDLL(None,use_errno=True)
+            if libc.prctl(1,signal.SIGKILL,0,0,0)!=0:os._exit(126)
+            if os.getppid()!=owner:os._exit(125)
         child=subprocess.Popen(list(map(str,argv)),env=self.env,stdin=subprocess.DEVNULL,stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,close_fds=True,start_new_session=True)
+            stderr=subprocess.STDOUT,close_fds=True,start_new_session=True,preexec_fn=parent_death if bind_parent else None)
         os.set_blocking(child.stdout.fileno(),False)
         self.rows.append({'name':name,'child':child,'log':log,'bytes':0});return child
     def pump(self):
@@ -131,6 +137,9 @@ def main():
         apk=read(work/'build/owned-fixture.apk',4*1024**2)
         adb_home=Path('/home/fixture/adb-home');adb_home.mkdir(mode=0o700)
         adb=FixedPrivateADB('/opt/android/platform-tools/adb',None,private_home=adb_home,output=out,host_netns=ctx['host_netns'])
+        json_write(work/'emulator-stage-request.json',{'version':'owned-emulator-stage/1','run_id':ctx['run_id']})
+        ack=json.loads(wait('/control/emulator-stage-ack.json',deadline=provision_deadline,pump=pump))
+        if ack!={'version':'owned-emulator-stage/1','run_id':ctx['run_id']}:raise ValueError('fixed emulator stage ack')
         emulator=PrivateEmulator(out,host_netns=ctx['host_netns']);emulator.boot(adb)
         if time.monotonic()>provision_deadline:raise TimeoutError('fixed whole provisioning deadline')
         existing=adb.command(['shell','pm','path',PACKAGE],check=False)

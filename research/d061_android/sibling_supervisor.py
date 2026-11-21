@@ -15,7 +15,7 @@ import sys
 import tempfile
 import time
 
-from handoff_io import read,write,json_write,wait,digest
+from handoff_io import read,write,json_write,wait,digest,exists,publish_directory
 from handoff_protocol import ExpectedContext,LifecycleState,validate_provisioned,canonical
 from emulator_scope import process_identity
 from contained_driver import Producers
@@ -42,7 +42,7 @@ def verify_root_inputs():
     if lock.get('status')!='EXACT_REVIEWED_SIBLING_SOURCE_LOCK':raise ValueError('source lock unresolved')
     required={'sibling_supervisor.py','namespace_supervisor.py','contained_driver.py','control_driver.py',
         'handoff_protocol.py','handoff_io.py','owned_collect.py','owned_absence.py','owned_product_setup.py',
-        'adb_scope.py','emulator_scope.py','build_owned.py','profile.py','product_contract.py'}
+        'adb_scope.py','emulator_scope.py','build_owned.py','profile.py','product_contract.py','outer_owner.py'}
     rows=lock.get('files',[])
     if len(rows)!=len(required) or {row['path'] for row in rows}!=required:raise ValueError('fixed complete relay source set required')
     for row in rows:
@@ -52,7 +52,7 @@ def verify_root_inputs():
         'source_manifest_sha256':digest(source)}
 
 
-def check_absent(output):
+def check_absent(output,root_stage=None,record_name="trusted-final-absence.json",recover_missing_wrapper=False):
     # Distinct runtime and control namespace claims. Root holds no namespace FDs;
     # record scanning all visible process memberships AND open namespace handles.
     setup=json.loads(read(Path(output)/'namespace-setup.json',1048576))
@@ -73,44 +73,109 @@ def check_absent(output):
                 except PermissionError:errors.append('namespace_handle_unreadable')
         except FileNotFoundError:pass
         except PermissionError:errors.append('fd_directory_unreadable')
-    wrapper=json.loads(read(Path(output)/'wrapper-cleanup.json',65536))
-    if wrapper.get('errors') or not wrapper.get('jail_absent'):errors.append('wrapper_cleanup_incomplete')
-    state={'complete':not remaining and not errors,'errors':errors,'remaining_namespace_members_or_handles':remaining,
+    wrapper_path=Path(output)/'wrapper-cleanup.json'
+    original_cleanup_present=exists(wrapper_path)
+    if original_cleanup_present:
+        wrapper=json.loads(read(wrapper_path,65536))
+        if wrapper.get('errors') or not wrapper.get('jail_absent'):errors.append('wrapper_cleanup_incomplete')
+    elif not recover_missing_wrapper:errors.append('wrapper_cleanup_missing_unverified')
+    if recover_missing_wrapper and not remaining and not errors:
+        # Independent recovery uses an exact trusted pre-effect jail locator,
+        # never reconstructs/replaces the missing original wrapper report.
+        from handoff_io import remove
+        intent=json.loads(read(Path(output)/'root-jail-intent.json',65536))
+        jail=Path(intent['jail'])
+        if (intent.get('root_owned') is not True or jail.parent!=Path('/opt')
+            or not jail.name.startswith('d061-owned-android-jail-')):
+            raise ValueError('trusted exact jail intent missing')
+        for relative in ('work/evidence/home','work/evidence/origin.key','work/build/private-build-home'):
+            try:remove(Path(output)/relative)
+            except FileNotFoundError:pass
+        try:remove(jail)
+        except FileNotFoundError:pass
+        if exists(jail):errors.append('recovery_jail_remains')
+    runtime_inspection=None
+    if Path(output).name=='runtime' and not recover_missing_wrapper:
+        from owned_absence import inspect
+        runtime_inspection=inspect(output,root_stage=root_stage)
+        if not runtime_inspection['complete']:errors.append('runtime_stage_absence_unverified')
+    state={'original_wrapper_cleanup_present':original_cleanup_present,
+        'recovery_only_not_original_cleanup_proof':recover_missing_wrapper,
+        'runtime_stage_absence':runtime_inspection,'complete':not remaining and not errors,'errors':errors,'remaining_namespace_members_or_handles':remaining,
         'scope':Path(output).name,'trusted_relay_namespace_handles_open':False}
-    json_write(Path(output)/'trusted-final-absence.json',state)
+    json_write(Path(output)/record_name,state)
     if not state['complete']:raise RuntimeError('sibling final absence incomplete')
     return state
+
+
+def publish_accepted(staged,destination,*,state,collection_started,deadline,clock=time.monotonic):
+    # The only visibility transition. Staging is private and may contain a failed
+    # result, but no passed result is visible before full validation/deadline.
+    now=clock()
+    if now>deadline:
+        state.fail('TimeoutError');raise TimeoutError('root collection deadline before publication')
+    state.advance('collected',seconds=now-collection_started)
+    if clock()>deadline:
+        state.fail('TimeoutError');raise TimeoutError('root collection deadline at publication')
+    publish_directory(staged,destination)
 
 
 def main():
     if not APPROVED_FOR_EXECUTION:raise SystemExit('HELD complete exact sibling relay/closure/lifecycle review required')
     if os.geteuid()!=0:raise RuntimeError('trusted disposable CI root supervisor only')
     os.umask(0o077)
-    inputs=verify_root_inputs();run_id=secrets.token_hex(16);provisioning_id=secrets.token_hex(16)
-    root=Path('/opt')/('d061-owned-android-run-'+run_id);root.mkdir(mode=0o700,exist_ok=False)
+    import argparse
+    parser=argparse.ArgumentParser();parser.add_argument('--owned-root',type=Path,required=True);args=parser.parse_args()
+    root=args.owned_root
+    if root.parent!=Path('/opt') or not root.name.startswith('d061-owned-android-run-'):
+        raise ValueError('outer owner exact root required')
+    owner=json.loads(root_file(root/'outer-owner-intent.json',65536))
+    run_id=owner['run_id'];provisioning_id=owner['provisioning_id']
+    if root.name!='d061-owned-android-run-'+run_id:raise ValueError('outer root identity differs')
+    inputs=verify_root_inputs()
     expected=ExpectedContext(run_id=run_id,provisioning_id=provisioning_id,
         closure_sha256=inputs['closure_sha256'],source_manifest_sha256=inputs['source_manifest_sha256'])
     ctx={**inputs,'run_id':run_id,'provisioning_id':provisioning_id,'host_netns':os.readlink('/proc/self/ns/net')}
     for role in ('runtime','control'):
         inbox=root/(role+'-in');inbox.mkdir(mode=0o755);json_write(inbox/'context.json',ctx)
-    json_write(root/'trusted-run-intent.json',{'context':ctx,'root_identity':process_identity(os.getpid()),
-        'fixed_roles':['runtime','control'],'launches':0,'owner_approval':False})
+    run_intent={'context':ctx,'root_identity':process_identity(os.getpid()),
+        'fixed_roles':['runtime','control'],'launches':0,'owner_approval':False}
+    json_write(root/'trusted-run-intent.json',run_intent)
     state=LifecycleState();children={};producer=Producers(CLEAN);failure=None;errors=[];request=None;result_delivered=False
+    root_stage={'runtime_launched':False,'emulator_expected':False,'app_expected':False}
+    launch_count=0
     old_handlers={}
     def interrupted(sig,frame):raise SystemExit(128+sig)
     for sig in (signal.SIGTERM,signal.SIGINT,signal.SIGHUP):old_handlers[sig]=signal.signal(sig,interrupted)
     def launch(role):
+        nonlocal launch_count
         if role in children:raise RuntimeError('fixed sibling launch already consumed')
         closure='/opt/d061-android-closure' if role=='runtime' else '/opt/d061-control-closure'
+        launch_count+=1
+        run_intent['launches']=launch_count
+        json_write(root/'trusted-run-intent.json',run_intent,replace=True)
+        json_write(root/(role+'-launch-intent.json'),{'role':role,'exact_output':str(root/role),
+            'root_owned':True,'stage':'before_launch','launch_count':launch_count})
+        json_write(root/'trusted-run-progress.json',{'launches':launch_count,'role':role,'stage':'before_launch'},replace=True)
         child=producer.start([sys.executable,SOURCE/'namespace_supervisor.py','--role',role,
-            '--closure-root',closure,'--closure-lock',closure+'/closure-lock.json','--output',root/role],role,root)
+            '--closure-root',closure,'--closure-lock',closure+'/closure-lock.json','--output',root/role],role,root,bind_parent=True)
         children[role]=child
+        if role=='runtime':root_stage['runtime_launched']=True
         json_write(root/(role+'-launch.json'),{'role':role,'identity':process_identity(child.pid),
             'started_monotonic':time.monotonic(),'root_owned_lifecycle':True})
+        json_write(root/'trusted-run-progress.json',{'launches':launch_count,'role':role,'stage':'child_started',
+            'identity':process_identity(child.pid)},replace=True)
         return child
     def pump():
         producer.pump()
-        if 'control' in children and (root/'control/work/cancel.json').exists():
+        stage_request=root/'runtime/work/emulator-stage-request.json'
+        if not root_stage['emulator_expected'] and exists(stage_request):
+            record=json.loads(read(stage_request,65536))
+            if record!={'version':'owned-emulator-stage/1','run_id':run_id}:raise ValueError('fixed emulator stage intent')
+            root_stage['emulator_expected']=True
+            json_write(root/'runtime-root-stage.json',root_stage,replace=True)
+            json_write(root/'runtime-in/emulator-stage-ack.json',record)
+        if 'control' in children and exists(root/'control/work/cancel.json'):
             raise RuntimeError('fixed one-shot control cancellation')
     try:
         started=time.monotonic();runtime=launch('runtime')
@@ -140,7 +205,9 @@ def main():
         state.advance('committed',seconds=time.monotonic()-ready_at)
         # Trusted root validates fixed format/snapshot identity only. It does not
         # claim to authenticate the API grant; product owns committed checks.
-        operation_started=time.monotonic();json_write(root/'runtime-in/commit.json',commit)
+        operation_started=time.monotonic()
+        root_stage['app_expected']=True;json_write(root/'runtime-root-stage.json',root_stage,replace=True)
+        json_write(root/'runtime-in/commit.json',commit)
         operation_path=root/'runtime/work/evidence/operation-returned.json'
         operation=json.loads(wait(operation_path,deadline=operation_started+60,child=runtime,pump=pump))
         if operation.get('request')!=asdict(request) or operation.get('operation_completed') is not True:
@@ -156,12 +223,13 @@ def main():
             pump()
             if time.monotonic()-teardown_started>60:raise TimeoutError('root-monotonic runtime teardown ceiling')
             time.sleep(.05)
-        runtime.wait();check_absent(root/'runtime')
+        runtime.wait();check_absent(root/'runtime',root_stage)
         state.advance('runtime_absent',seconds=time.monotonic()-teardown_started)
         collection_started=time.monotonic()
-        collect(root/'runtime',request,root/'control-in/result',command_rc=runtime.returncode)
+        staged=root/'private-collected-result'
+        collect(root/'runtime',request,staged,command_rc=runtime.returncode,root_stage=root_stage,deadline=collection_started+10)
+        publish_accepted(staged,root/'control-in/result',state=state,collection_started=collection_started,deadline=collection_started+10)
         result_delivered=True
-        state.advance('collected',seconds=time.monotonic()-collection_started)
         while control.poll() is None:
             pump()
             if time.monotonic()-collection_started>30:raise TimeoutError('fixed control persistence/report ceiling')
@@ -183,7 +251,7 @@ def main():
                     try:runtime.wait(timeout=45)
                     except subprocess.TimeoutExpired:os.killpg(runtime.pid,signal.SIGKILL);runtime.wait(timeout=5)
                 if runtime is not None:
-                    try:check_absent(root/'runtime')
+                    try:check_absent(root/'runtime',root_stage)
                     except BaseException as error:errors.append({'stage':'failed_runtime_absence','class':type(error).__name__})
                 result_root=root/'control-in/result'
                 if result_root.exists():
@@ -214,12 +282,12 @@ def main():
                 # Original failures stay failures even when final namespace
                 # recovery succeeds. Never re-launch or replay a consumed commit.
                 final=root/role/'trusted-final-absence.json'
-                if not final.exists():check_absent(root/role)
+                if not exists(final):check_absent(root/role,root_stage if role=='runtime' else None)
             except BaseException as error:errors.append({'stage':role+'_final_absence','class':type(error).__name__})
         json_write(root/'trusted-relay-result.json',{'complete':failure is None and not errors,
             'errors':errors,'original_error':None if failure is None else type(failure).__name__,
             'state':state.stage,'state_failure':state.failure,'phase_records':state.records,
-            'commit_consumed':expected.used,'context_failed':expected.failed,'root':str(root)})
+            'launch_count':launch_count,'root_stage':root_stage,'commit_consumed':expected.used,'context_failed':expected.failed,'root':str(root)})
         for sig,handler in old_handlers.items():signal.signal(sig,handler)
     if failure:raise failure
     if errors:raise RuntimeError('sibling relay cleanup incomplete')

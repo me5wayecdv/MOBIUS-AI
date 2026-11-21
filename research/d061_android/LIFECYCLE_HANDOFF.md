@@ -122,3 +122,38 @@ simulation for each privileged setup/relay/cleanup phase; runtime signal/cancel/
 forced-timeout evidence; isolated app TLS negative controls; and independent
 review of this entire source candidate. Source syntax/pure tests do not prove
 any namespace, KVM, Java/APK build, TLS app action or runtime absence occurred.
+
+## Consolidated61c5323 source review corrections
+
+Root input acquisition/publication/removal now uses directory descriptors and
+openat traversal, with O_DIRECTORY|O_NOFOLLOW on every ancestor and bounded
+regular-file reads. Live payload directory renames cannot retarget root reads.
+Tests swap an ancestor to an unrelated tree after its descriptor is opened and
+verify only original bytes are read. Immutable public snapshot remains a second,
+separate protection, not a substitute for safe source acquisition.
+
+The outer workflow entrypoint is now held outer_owner.py. It writes an exact
+external locator and root/relay launch intent before effects, records relay and
+role identities, arms race-checked PDEATHSIG on outer->relay->wrapper->unshare,
+and attempts exact identity/pidfd recovery. Role launch intent/count is durable
+before Popen and updated after identity capture; missing expected identities
+remain unverified. The independent outer recovery never overwrites missing
+original wrapper cleanup with a fake success record. A trusted root-jail intent
+exists before closure copy or namespace launch. Namespace/member/handle absence
+precedes anchored private-material/jail recovery. Real kill/cancel proofs remain
+held, not inferred from these source paths.
+
+Collector output is staged in a private root-only directory. It cannot be seen
+by control until commandRC, runtime absence, original validation, and the root's
+remaining10s collection budget have been accepted. One atomic directory publish
+exposes the already-staged terminal result only after those gates. An overrun
+leaves the passed candidate private; later failure cannot race an already-passed
+product row. Tests cover expired collection publication without native execution.
+
+Root observed stage authorization is explicit before emulator boot and before
+app commit. The independent inspector accepts only a closed root-owned expected
+stage, marks truly unreached app/emulator obligations as not_reached, and leaves
+missing expected records unverified. It never makes launch/ADB records to pass
+a positive validator. A pre-emulator failure and an app-expected missing record
+have distinct pure regression cases. Control final absence remains separate
+outer completion after product persistence, not part of runtime proof.

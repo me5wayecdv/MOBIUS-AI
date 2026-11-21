@@ -18,6 +18,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from handoff_io import remove as anchored_remove
 
 APPROVED_FOR_EXECUTION = False
 CLEAN = {'PATH':'/usr/sbin:/usr/bin:/sbin:/bin','LANG':'C.UTF-8','HOME':'/nonexistent'}
@@ -198,6 +199,8 @@ def main():
             raise ValueError('reviewable root-owned KVM group/permissions required, no mutation')
     root=Path(tempfile.mkdtemp(prefix='d061-owned-android-jail-',dir='/opt'));child=None;failed=None
     cleanup={'complete':False,'errors':[],'jail':str(root)}
+    atomic_json(output/'root-jail-intent.json',{'jail':str(root),'role':role,
+        'state':'before_closure_copy_or_namespace_launch','root_owned':True})
     def interrupt(sig,frame):raise SystemExit(128+sig)
     for sig in (signal.SIGTERM,signal.SIGINT,signal.SIGHUP):signal.signal(sig,interrupt)
     try:
@@ -259,12 +262,10 @@ def main():
             for relative in ('work/evidence/home','work/evidence/origin.key','work/build/private-build-home'):
                 target=output/relative
                 try:
-                    lexical(target)
-                    if target.is_dir():shutil.rmtree(target)
-                    else:target.unlink(missing_ok=True)
+                    anchored_remove(target)
                     cleanup['private_material_removed'].append(relative)
                 except BaseException as error:cleanup['errors'].append('private_material_'+type(error).__name__)
-            try:shutil.rmtree(root)
+            try:anchored_remove(root)
             except BaseException as error:cleanup['errors'].append(type(error).__name__)
         cleanup['jail_absent']=not root.exists()
         cleanup['complete']=failed is None and not cleanup['errors'] and cleanup['jail_absent']

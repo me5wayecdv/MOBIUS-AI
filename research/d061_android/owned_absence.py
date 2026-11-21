@@ -8,25 +8,23 @@ import json
 import os
 from pathlib import Path
 import stat
+from handoff_io import read as anchored_read,exists as anchored_exists
 
 APPROVED_FOR_EXECUTION = False
 
 
 def bounded_json(path):
-    if path.is_symlink():raise ValueError('linked lifecycle record')
-    meta=path.stat()
-    if not stat.S_ISREG(meta.st_mode) or meta.st_size>1048576:raise ValueError('lifecycle record type/size')
-    return json.loads(path.read_bytes())
+    return json.loads(anchored_read(path,1048576))
 
 
-def inspect(root,*,require_launched=True,proc=Path('/proc')):
+def inspect(root,*,require_launched=True,proc=Path('/proc'),root_stage=None):
     root=Path(root)
     state={'complete':False,'errors':[],'missing_records':[],'remaining_namespace_members':[],
         'remaining_namespace_handles':[],'private_material_absent':False,'stage_required_records_complete':False,
         'reverse_mappings':None,'not_an_app_execution_or_capture_proof':True}
     def load(name):
         path=root/name
-        if not path.exists():state['missing_records'].append(name);return None
+        if not anchored_exists(path):state['missing_records'].append(name);return None
         try:return bounded_json(path)
         except (OSError,ValueError,TypeError) as error:
             state['errors'].append({'stage':name,'class':type(error).__name__});return None
@@ -36,11 +34,22 @@ def inspect(root,*,require_launched=True,proc=Path('/proc')):
         return state
     if root.is_symlink():state['errors'].append({'stage':'root','class':'symlink'});return state
     setup=load('namespace-setup.json');wrapper=load('wrapper-cleanup.json')
-    launched=(root/'work/evidence/owned-app-launch.json').exists()
+    if root_stage is not None:
+        if set(root_stage)!={'runtime_launched','emulator_expected','app_expected'} or any(type(v) is not bool for v in root_stage.values()):
+            raise ValueError('closed root-owned expected stage required')
+        if root_stage['app_expected'] and not root_stage['emulator_expected']:raise ValueError('invalid root stage order')
+    emulator_expected=True if root_stage is None else root_stage['emulator_expected']
+    app_expected=require_launched if root_stage is None else root_stage['app_expected']
+    state['obligations']={'emulator':'expected' if emulator_expected else 'not_reached',
+        'app':'expected' if app_expected else 'not_reached','source':'independent_root_stage' if root_stage is not None else 'conservative_unspecified'}
+    launched=anchored_exists(root/'work/evidence/owned-app-launch.json')
     # Infrastructure creation itself creates keys/AVD/process obligations even
     # when an app never launched. Every required record must be explicit.
-    records={name:load('work/evidence/'+name) for name in ('driver-cleanup.json','emulator-cleanup.json','adb-cleanup.json')}
-    if require_launched and not launched:state['missing_records'].append('work/evidence/owned-app-launch.json')
+    required=['driver-cleanup.json']
+    if emulator_expected:required.append('emulator-cleanup.json')
+    if app_expected:required.append('adb-cleanup.json')
+    records={name:load('work/evidence/'+name) for name in required}
+    if app_expected and not launched:state['missing_records'].append('work/evidence/owned-app-launch.json')
     if setup:
         namespaces=setup.get('namespaces',{})
         expected={namespaces.get(kind) for kind in ('net','mnt','pid')}
@@ -62,7 +71,7 @@ def inspect(root,*,require_launched=True,proc=Path('/proc')):
                 except FileNotFoundError:pass
                 except PermissionError:state['errors'].append({'stage':'namespace_fd_directory','class':'unreadable'})
     if wrapper:
-        if wrapper.get('complete') is not True or wrapper.get('errors')!=[] or wrapper.get('jail_absent') is not True:
+        if wrapper.get('errors')!=[] or wrapper.get('jail_absent') is not True:
             state['errors'].append({'stage':'wrapper','class':'incomplete'})
         jail=wrapper.get('jail')
         if not isinstance(jail,str) or not Path(jail).name.startswith('d061-owned-android-jail-') or Path(jail).parent!=Path('/opt'):
@@ -70,13 +79,17 @@ def inspect(root,*,require_launched=True,proc=Path('/proc')):
         elif Path(jail).exists():state['errors'].append({'stage':'jail','class':'still_exists'})
         else:
             sensitive=('work/build/private-build-home','work/evidence/origin.key','work/evidence/home','work/home','work/build/disposable-signing.p12')
-            remaining=[name for name in sensitive if (root/name).exists() or (root/name).is_symlink()]
+            remaining=[name for name in sensitive if anchored_exists(root/name)]
             state['private_material_absent']=not remaining
             if remaining:state['errors'].append({'stage':'private_material','remaining':remaining})
     for name,record in records.items():
         if record is not None and (record.get('complete') is not True or record.get('errors')!=[]):
             state['errors'].append({'stage':name,'class':'incomplete'})
     adb=records.get('adb-cleanup.json')
+    if not app_expected:
+        state['reverse_mappings']=[]
+        state['reverse_status']='not_reached_from_independent_root_stage'
+    else:state['reverse_status']='expected_requires_original_readback'
     if adb:
         state['reverse_mappings']=adb.get('reverse_after')
         if adb.get('reverse_after')!=[] or adb.get('package_absent') is not True or adb.get('app_pid_absent') is not True:

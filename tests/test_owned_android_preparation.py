@@ -10,7 +10,7 @@ ROOT=Path(__file__).parents[1]/'research/d061_android'
 
 def test_owned_source_and_build_are_held_without_workflow():
     for name,flags in [('profile.py',['APPROVED_FOR_BUILD','APPROVED_FOR_EXECUTION']),('build_owned.py',['APPROVED_FOR_BUILD']),('namespace_supervisor.py',['APPROVED_FOR_EXECUTION']),('emulator_scope.py',['APPROVED_FOR_EXECUTION']),('owned_product_setup.py',['APPROVED_FOR_EXECUTION']),('owned_absence.py',['APPROVED_FOR_EXECUTION']),('contained_driver.py',['APPROVED_FOR_EXECUTION']),
-        ('control_driver.py',['APPROVED_FOR_EXECUTION']),('sibling_supervisor.py',['APPROVED_FOR_EXECUTION']),('owned_collect.py',['APPROVED_FOR_EXECUTION'])]:
+        ('control_driver.py',['APPROVED_FOR_EXECUTION']),('sibling_supervisor.py',['APPROVED_FOR_EXECUTION']),('owned_collect.py',['APPROVED_FOR_EXECUTION']),('outer_owner.py',['APPROVED_FOR_EXECUTION'])]:
         tree=ast.parse((ROOT/name).read_text())
         values={target.id:node.value.value for node in tree.body if isinstance(node,ast.Assign) and isinstance(node.value,ast.Constant)
             for target in node.targets if isinstance(target,ast.Name)}
@@ -265,3 +265,77 @@ def test_collector_missing_postlaunch_evidence_stays_failed_not_absence(tmp_path
     # The retained independent inspector result is explicitly incomplete.
     absence=json.loads((tmp_path/'result/independent-absence.json').read_text())
     assert absence['complete'] is False and absence['missing_records']
+
+
+def test_root_source_read_stays_anchored_when_live_ancestor_is_swapped(tmp_path,monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT))
+    import os
+    import handoff_io as io
+    work=tmp_path/'work';(work/'provision').mkdir(parents=True)
+    (work/'provision/file').write_bytes(b'actual original bytes')
+    outside=tmp_path/'outside';(outside/'provision').mkdir(parents=True)
+    (outside/'provision/file').write_bytes(b'unrelated secret must not be read')
+    original_open=os.open;swapped=[]
+    def race(path,flags,*args,**kwargs):
+        if path=='provision' and kwargs.get('dir_fd') is not None and not swapped:
+            work.rename(tmp_path/'old-work');work.symlink_to(outside,target_is_directory=True);swapped.append(True)
+        return original_open(path,flags,*args,**kwargs)
+    monkeypatch.setattr(io.os,'open',race)
+    assert io.read(work/'provision/file')==b'actual original bytes'
+    assert swapped
+
+
+def test_private_collector_result_cannot_publish_after_ten_seconds(tmp_path,monkeypatch):
+    import pytest
+    monkeypatch.syspath_prepend(str(ROOT))
+    from sibling_supervisor import publish_accepted
+    from handoff_protocol import LifecycleState
+    from handoff_io import json_write
+    state=LifecycleState()
+    for event in ('provisioned','committed','operation_returned','runtime_absent'):state.advance(event,seconds=1)
+    stage=tmp_path/'private';stage.mkdir();json_write(stage/'result.json',{'status':'passed','UNIT_NOT_RUNTIME':True})
+    destination=tmp_path/'visible'
+    with pytest.raises(TimeoutError):publish_accepted(stage,destination,state=state,collection_started=100,deadline=110,clock=lambda:111)
+    assert not destination.exists() and (stage/'result.json').exists() and state.failure
+    with pytest.raises(ValueError):state.advance('collected',seconds=1)
+
+
+def test_first_root_to_wrapper_edge_arms_parent_death_before_exec(tmp_path,monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT))
+    import contained_driver as driver
+    calls=[]
+    class Pipe:
+        def fileno(self):return 999
+    class Child:
+        stdout=Pipe()
+    def popen(*args,**kwargs):calls.append(kwargs);return Child()
+    monkeypatch.setattr(driver.subprocess,'Popen',popen)
+    monkeypatch.setattr(driver.os,'set_blocking',lambda *a:None)
+    producers=driver.Producers({});producers.start(['fixed-not-executed'],'runtime',tmp_path,bind_parent=True)
+    assert calls[0]['close_fds'] and calls[0]['start_new_session']
+    assert callable(calls[0]['preexec_fn'])
+    class Lib:
+        def prctl(self,*args):calls.append(args);return 0
+    monkeypatch.setattr(driver.ctypes,'CDLL',lambda *a,**k:Lib())
+    parent=driver.os.getpid();monkeypatch.setattr(driver.os,'getppid',lambda:parent)
+    calls[0]['preexec_fn']()
+    assert calls[-1][0]==1
+    for row in producers.rows:row['log'].close()
+
+
+def test_absence_obligations_follow_root_stages_not_fake_app_records(tmp_path,monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT))
+    import owned_absence
+    root=tmp_path/'runtime';out=root/'work/evidence';out.mkdir(parents=True)
+    (root/'namespace-setup.json').write_text(json.dumps({'namespaces':{'net':'net:[111]','mnt':'mnt:[222]','pid':'pid:[333]'}}))
+    (root/'wrapper-cleanup.json').write_text(json.dumps({'complete':False,'errors':[],'jail_absent':True,
+        'jail':'/opt/d061-owned-android-jail-unit-not-created'}))
+    (out/'driver-cleanup.json').write_text(json.dumps({'complete':True,'errors':[]}))
+    stage={'runtime_launched':True,'emulator_expected':False,'app_expected':False}
+    result=owned_absence.inspect(root,root_stage=stage,proc=tmp_path/'no-proc')
+    assert result['complete'] and result['obligations']['app']=='not_reached'
+    assert not (out/'owned-app-launch.json').exists() and not (out/'adb-cleanup.json').exists()
+    stage['emulator_expected']=True;stage['app_expected']=True
+    result=owned_absence.inspect(root,root_stage=stage,proc=tmp_path/'no-proc')
+    assert not result['complete'] and 'work/evidence/adb-cleanup.json' in result['missing_records']
+    assert 'work/evidence/owned-app-launch.json' in result['missing_records']
