@@ -17,7 +17,7 @@ allowed=(
  'outer-child.json','emergency-cleanup.json','install.log','fixture.log',
  'runtime-record.json','staging-manifest.json','fixture/host-before.json','fixture/host-after.json',
  'fixture/namespace-setup.json','fixture/namespace-supervisor.json','fixture/wrapper-lifecycle.json','fixture/wrapper-cleanup.json',
- 'fixture/evidence/policy.json','fixture/evidence/owned-listeners.json','fixture/evidence/initial.native',
+ 'fixture/evidence/binding.json','fixture/evidence/policy.json','fixture/evidence/owned-listeners.json','fixture/evidence/initial.native',
  'fixture/evidence/capture-digest.json','fixture/evidence/backend-receipts.json','fixture/evidence/native-events.json',
  'fixture/evidence/replay-enqueued.json','fixture/evidence/replay-started.json','fixture/evidence/replay-completed.json',
  'fixture/evidence/addon-final.json','fixture/evidence/addon-failures.json','fixture/evidence/backend-failures.json',

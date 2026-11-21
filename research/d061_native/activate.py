@@ -28,7 +28,7 @@ def main():
     stage.mkdir(mode=0o755,exist_ok=False)
     manifest=[]
     names=('installer.py','wrapper.py','driver.py','origin.py','addon.py','wire.py','cleanup.py',
-           'lifecycle.py','wheel-lock.json','requirements.lock','bootstrap-lock.json')
+           'lifecycle.py','emergency.py','wheel-lock.json','requirements.lock','bootstrap-lock.json')
     for name in names:
         content=(source/name).read_bytes()
         manifest.append({'path':name,'sha256':hashlib.sha256(content).hexdigest()})

@@ -35,6 +35,16 @@ def main():
     policy = {'output':str(out),'origin_port':18443,'proxy_port':18080,
               'nonce':secrets.token_hex(16),'profile':'trusted-local-positive-v1',
               'target':'owned-loopback-fixture'}
+    product_binding=Path('/work/binding.json')
+    if product_binding.exists():
+        binding=json.loads(product_binding.read_text())
+        if (binding.get('profile')!=policy['profile']
+            or binding.get('traffic_source')!='owned-stdlib-loopback-client-not-apk'
+            or not re.fullmatch('[0-9a-f]{32}',binding.get('nonce',''))):
+            raise RuntimeError('trusted product binding mismatch')
+        policy['nonce']=binding['nonce']
+        policy['product_binding']=binding
+        atomic_json(out/'binding.json',binding)
     policy_path = out/'policy.json'
     atomic_json(policy_path,policy)
     env = {'PATH':str(venv/'bin')+':/usr/bin:/bin','LANG':'C.UTF-8',

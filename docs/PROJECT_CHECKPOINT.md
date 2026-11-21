@@ -1,9 +1,10 @@
-# Mobius project checkpoint, 2026-11-21 09:48 EET
+# Mobius project checkpoint, 2026-11-21 10:11 EET
 
 This checkpoint supersedes the earlier 20627843 snapshot. It records evidence
 limits, not whole-project completion. Merged main inspected at
-`4f3f85762ff8364137116b8d2e2c6a00b4454ea3`; latest baseline CI was still pending
-when written. Research PR117 is separate, disabled preparation.
+`9f8ede5c6e08efae4c94d76becdaec2de9181558`. PR117 merged after all5 normal
+checks green at exactaa5f7ae. One separately reviewed local positive experiment
+passed. It is not product integration or fullD061 acceptance.
 
 ## Landed work versus demonstrated work
 
@@ -16,10 +17,11 @@ when written. Research PR117 is separate, disabled preparation.
 | Narrow chain-counter comparator and evidence persistence correction (#115) | d712b86a | Approved source branch had five normal checks green; offline actual snapshots compare equal; original run still FAILED |
 | PROPOSED offline evidence contract (#116) | 4f3f8576 | Six synthetic unit tests/25 subtests define structural consistency only, no capture/replay/TLS runtime proof |
 
-The 42-wheel native proxy closure and disabled standalone code are proposed at
-https://github.com/me5wayecdv/MOBIUS-AI/pull/117 . No installation/import/launch
-has been performed for that slice. See `research/d061_native/README.md` in that
-PR for exact source and remaining technical review, not an activation plan.
+The42-wheel native proxy closure plus hashed pip bootstrap and separately
+reviewed activation merged in https://github.com/me5wayecdv/MOBIUS-AI/pull/117 .
+One positive local experiment at9f8ede5 passed, with original source gates FALSE
+and runtime copies activated through the exact orchestrator. See
+`docs/D061_NATIVE_POSITIVE_RESULT.md` for provenance, actual evidence and limits.
 
 ## Connected journey, still incomplete at the original acceptance bar
 
@@ -66,18 +68,20 @@ held and incomplete: https://github.com/me5wayecdv/MOBIUS-AI/pull/112 .
 
 ## Native capture/replay/TLS frontier
 
-- D061 remains NOT ESTABLISHED. Actual native request-flow capture and replay,
-  independently received request, and appropriate positive/negative TLS tests
-  have not been demonstrated by the proposed contract or dependency lock.
-- A digest binds bytes, not occurrence, authorship or authorization. Synthetic
-  fixture consistency is not evidence of actual capture or TLS capability.
-- PR117's concrete local-only native proposal uses trusted harness profile
-  attribution and pinned actual FlowWriter/FlowReader/client replay API, not a
-  flow-selected profile or hardcoded request reconstruction. It is still
-  disabled and unexecuted, with operational installation/execution hold.
-- Its dependency lock is wheel-only/hash-closed for CPython3.12, Linuxx86_64,
-  glibc>=2.28. Exact runner image/runtime remains unpinned. Dependency resolution
-  and download are not imports, runtime validation or a safety certificate.
+- One real native local capture/request-replay experiment succeeded:
+  https://github.com/me5wayecdv/MOBIUS-AI/actions/runs/44883271361 . Native3201byte
+  flow plus two independent TLSv1.3 backend receipts, matched fingerprints,
+  native replay lifecycle, normal cleanup and all31 copied hashes reviewed.
+- FullD061 remains NOT ESTABLISHED. Product authorization/run/evidence/report
+  wiring, APK traffic and TLS rejection controls were not exercised. Positive
+  stdlib-client loopback traffic is not Android/Allsafe or cert-pinning evidence.
+- Namespace snapshot is root supervisor pre-drop, not per-child privilege proof.
+  Driver guard passed; separate child privilege/FD snapshots were not retained.
+  Normal cleanup succeeded, signal/timeout/emergency kill paths unexercised.
+- No repeated local run is planned merely for another pass. Next smallest slice
+  is explicit product provenance/persistence wiring with the same fixed fixture,
+  preserving existing authorization gates and investigation-anchor versus actual
+  traffic-source identity. Its execution awaits focused exact scope review.
 
 ## Unchanged limits and unfinished decisions
 

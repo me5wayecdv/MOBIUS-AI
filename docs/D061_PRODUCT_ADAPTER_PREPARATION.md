@@ -1,0 +1,110 @@
+# Proposed product-native local fixture adapter
+
+PREPARATION ONLY. No adapter execution or new experiment is authorized by this
+proposal. The first real native local result is recorded separately in
+D061_NATIVE_POSITIVE_RESULT.md. This slice connects that fixed fixture to Mobius
+case/authorization/plan/run/evidence/report paths rather than claiming an APK
+capture capability.
+
+## Closed scope
+
+A distinct `native_local_fixture` target and `capture_native_local_fixture_v1`
+action must not reuse the deterministic `local_harness` simulation label. The
+investigation APK/package/digest is an authorization anchor, NOT the traffic
+source. Actual source is the fixed stdlib client, proxy and local TLS origin.
+All three identities must be shown in persisted output and report. An APK result
+must never be inferred from this local fixture.
+
+Existing investigation ownership, active matching APK authorization, intensity,
+existing hypothesis membership and exact unexpired hash-bound PoC approval stay
+required. No synthetic approval/model hypothesis is manufactured for execution.
+A missing genuine hypothesis or approval stops that leg. The fixed profile and
+fixture source identity are in the hashed approved plan, not self-selected by a
+returned flow or arbitrary API URL. Product default remains unavailable.
+
+The API process cannot elevate or sudo. The trusted ephemeral CI host owns the
+reviewed namespace wrapper and isolated toolchain. A typed host seam passes only
+case/plan/authorization/anchor/profile/nonce identity and fixed budgets, never
+arbitrary shell/argv/URLs, paths from a request or proxy script. Every result is
+validated against independently retained request identity before persistence.
+
+## Evidence preservation/readback acceptance
+
+Actual native capture bytes and original independent backend receipts are
+immutable EvidenceService blobs, not just summaries or reserialized projections.
+PoCRun input/output hashes, authorization/approval/plan/target and hypothesis
+references must persist with same-investigation PoCRunEvidence links. Native
+bytes, capture digest, both receipts, native events, enqueue/start/completion,
+addon terminal, driver/wrapper/emergency cleanup and collector manifest are
+required for a successful bounded positive result. Missing/hash-mismatched or
+cross-case artifacts fail, never repaired into success.
+
+After transaction commit, a fresh session rereads run, links and artifact bytes,
+rehashes each original blob, and checks the same plan/target identity. ARCHIVIST
+includes explicit run/plan/evidence references with fixture-only limits. Stored
+report evidence is then reread and rehashed too. No generated report claim may
+contradict the actual local source or say no dynamic evidence exists when these
+fixture rows exist. Existing static findings remain static.
+
+## Local TLS rejection controls, prepared only
+
+Keep separate cases and ledgers. Do not treat a negative-case TLS exception as a
+positive error or an HTTP200 as a rejection. Fixed addresses/keys remain local
+and generated per namespace, no third-party endpoints.
+
+1. Positive chain+hostname: existing trusted loopback SAN127.0.0.1 origin and
+   client-generated proxyCA trust, native initial+request replay receipts.
+2. Untrusted proxy chain: fresh client trust store excludes generated proxyCA;
+   request must fail with certificate verification before any origin HTTP
+   receipt, no verification-disabled fallback. Exact verification exception and
+   backend ledger delta0 are required, not exception text alone.
+3. Hostname mismatch at proxy->origin: separately generated origin certificate
+   trusted by proxy but SAN not127.0.0.1, verification remains enabled. Client
+   must receive bounded proxy failure and backend ledger delta0. Capture proxy
+   TLS verification failure independently, no raw private keys retained.
+4. Untrusted origin chain: origin certificate signed by distinct untrusted local
+   CA while proxy retains only approved positive trust. Require verification
+   failure plus origin HTTP ledger delta0. Distinguish TCP/TLS handshake from
+   successful HTTP receipt.
+
+Each negative case needs actual case ID, nonce, trust-profile digest, expected
+TLS failure stage, backend receipt baseline/final and cleanup. Peer/chain/hostname
+rejection is a separate result, never certificate pinning. No TLS-negative
+execution has happened. Any added native harness controls and exact product
+adapter source will receive focused scope review before an execution decision.
+
+## Concrete preparation sources and review frontier
+
+- Domain adds a closed native_local_fixture/action/cleanup combination with a
+  fixed profile, no input_values or expected_value knob and non-destructive
+  exact approval requirement. Existing simulation/emulator behavior unchanged.
+- PoCExecutionService branches only this explicit type, calls extracted shared
+  existing authority validation before and after the host leg, defaults adapter
+  unavailable. The API AppContext has trusted injection defaultNone, no env or
+  request-controlled command/path configuration. Raw native/tool blobs persist
+  as existing EvidenceService rows+same-case run links, digest manifest in result.
+- New PoC readback rehashes stored originals and input/output rows; owner-scoped
+  endpoint exposes refs/hashes. ARCHIVIST adds controlled-local run/plan/evidence
+  references and does not describe its traffic as APK runtime. No findings or
+  hypotheses are supported/promoted by this fixture evidence.
+- `product_host.py` is a FALSE-gated concrete CI host implementation of the typed
+  seam, invokes the same fixed wrapper with independently generated binding,
+  same parent-death/owned teardown, named-copy manifest, no API sudo/elevation.
+  Wrapper optionally copies trusted product binding and driver uses its nonce
+  and persists binding; proxy flow cannot choose case/profile/target metadata.
+- `product_journey.py` is FALSE-gated service-level end-to-end preparation. It
+  accepts an already persisted same-case authorized/granted plan, creates no
+  schema/cases/authorizations/hypotheses/approvals, executes same service path,
+  commits, opens fresh sessions, rehashes run/evidence, writes then rereads stored
+  ARCHIVIST report and checks every run/plan/evidence reference. No API/browser
+  end-to-end or real runtime result is claimed from this unexecuted source.
+
+Runtime gate remains CLOSED. No integration workflow activation is supplied:
+first focused review must settle exact CI fixture authority provisioning without
+seeded model hypotheses, elapsed operation versus teardown budget semantics,
+product-host emergency failure behavior and failed-host evidence/run persistence
+(the current service raises instead of creating a passed row). The local TLS
+negative cases above are specified but not yet added to executable fixed driver.
+These are honest remaining preparation gaps, not a completed product milestone.
+Existing four new regression tests cover rejection/default-off/readback only;
+there is no fabricated positive host result or synthetic success test.

@@ -38,6 +38,8 @@ from ..adapters.models import (
     FrontierEntryRow,
     InvestigationRow,
     ObservationRow,
+    PoCRunRow,
+    PoCRunEvidenceRow,
     VerdictRow,
 )
 from ..core.enums import EvidenceKind, FindingStatus
@@ -99,6 +101,7 @@ class ArchivistService:
             self._confirmed(row),
             self._rejected(row),
             self._undetermined(row),
+            self._native_local_runs(row),
             self._method(row),
             self._evidence(row),
             self._events(row),
@@ -399,6 +402,26 @@ class ArchivistService:
             lines.append("")
         return "\n".join(lines) + "\n"
 
+    def _native_local_runs(self, row: InvestigationRow) -> str:
+        runs=self._session.execute(select(PoCRunRow).where(
+            PoCRunRow.investigation_id==row.id).order_by(PoCRunRow.created_at)).scalars()
+        lines=[]
+        for run in runs:
+            if (run.input_json or {}).get("target_kind")!="native_local_fixture":continue
+            if not lines:
+                lines=["## Controlled native local fixture runs", "",
+                    "These runs use a fixed stdlib loopback client, not the investigation APK. "
+                    "APK/package/digest are authorization anchors only. No Android/Allsafe, "
+                    "certificate pinning, TLS rejection or general target-traffic claim follows.", ""]
+            links=self._session.execute(select(PoCRunEvidenceRow).where(
+                PoCRunEvidenceRow.investigation_id==row.id,PoCRunEvidenceRow.run_id==run.id)).scalars()
+            refs=", ".join(f"`{link.evidence_id}`" for link in links)
+            lines.append(f"- Run `{run.id}`, plan `{run.plan_id}`, status `{run.status}`, "
+                f"authorization `{run.authorization_id}`, anchor `{run.target_sha256}`, "
+                f"input SHA256 `{run.input_sha256}`, output SHA256 `{run.output_sha256}`. "
+                f"Evidence: {refs}.")
+        return "\n".join(lines)+"\n" if lines else ""
+
     def _method(self, row: InvestigationRow) -> str:
         model_rows = self._session.execute(
             select(DecisionRow).where(
@@ -418,6 +441,15 @@ class ArchivistService:
             if model_rows
             else "The deterministic path is reproducible from the APK bytes and authorisation."
         )
+        has_native=any((r.input_json or {}).get("target_kind")=="native_local_fixture" for r in
+            self._session.execute(select(PoCRunRow).where(PoCRunRow.investigation_id==row.id)).scalars())
+        limitations=_LIMITATIONS
+        if has_native:
+            limitations=limitations.replace(
+                "- **Static only.** Nothing was executed. No finding was confirmed by observing the target at\n"
+                "runtime, and no dynamic-analysis capability exists in this build.",
+                "- **APK analysis remains static.** Controlled local native fixture runs are listed separately. "
+                "Their traffic is not APK runtime evidence and confirms no target finding.")
         return "\n".join(
             [
                 "## 6. Method and limitations",
@@ -428,7 +460,7 @@ class ArchivistService:
                 "",
                 reproducibility_statement + " What it costs is stated below, and it is not small.",
                 "",
-                _LIMITATIONS,
+                limitations,
                 f"Investigation intensity was {row.intensity}; with a passive grant nothing in "
                 "this build could execute the target even if an execution host existed.",
             ]

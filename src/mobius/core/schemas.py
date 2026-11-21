@@ -68,6 +68,7 @@ class PoCStep(_Model):
         "assert_emulator_package_present",
         "assert_emulator_provider_rows",
         "assert_emulator_frida_classes",
+        "capture_native_local_fixture_v1",
     ]
     target_ref: str = Field(min_length=1, max_length=500)
     expected_value: str | bool | int | None = None
@@ -101,7 +102,7 @@ class PoCStep(_Model):
 
 
 class PoCCleanupStep(_Model):
-    action: Literal["remove_temporary_workspace", "reset_local_harness", "stop_emulator_instrumentation"]
+    action: Literal["remove_temporary_workspace", "reset_local_harness", "stop_emulator_instrumentation", "stop_native_local_fixture"]
     target_ref: str = Field(min_length=1, max_length=300)
     timeout_seconds: int = Field(default=15, ge=1, le=60)
 
@@ -117,7 +118,7 @@ class PoCTestPlan(_Model):
     authorization_id: str = Field(min_length=1)
     target_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     target_package: str = Field(min_length=1, max_length=255)
-    target_kind: Literal["lab_apk", "local_harness", "emulator"]
+    target_kind: Literal["lab_apk", "local_harness", "emulator", "native_local_fixture"]
     hypothesis_ids: tuple[str, ...] = Field(min_length=1, max_length=20)
     prerequisites: tuple[str, ...] = Field(default=(), max_length=30)
     steps: tuple[PoCStep, ...] = Field(min_length=1, max_length=20)
@@ -131,6 +132,21 @@ class PoCTestPlan(_Model):
 
     @model_validator(mode="after")
     def _bounded_and_approved(self) -> PoCTestPlan:
+        if self.target_kind == "native_local_fixture":
+            if (self.safety_class != "non_destructive" or not self.requires_approval
+                or len(self.steps) != 1
+                or self.steps[0].action != "capture_native_local_fixture_v1"
+                or self.steps[0].target_ref != "trusted-local-positive-v1"
+                or self.steps[0].expected_value is not None
+                or self.steps[0].input_values
+                or len(self.cleanup_steps) != 1
+                or self.cleanup_steps[0].action != "stop_native_local_fixture"
+                or self.cleanup_steps[0].target_ref != "trusted-local-positive-v1"):
+                raise ValueError("native local fixture requires its fixed approved profile/action/cleanup")
+        elif any(s.action == "capture_native_local_fixture_v1" for s in self.steps) or any(
+            c.action == "stop_native_local_fixture" for c in self.cleanup_steps
+        ):
+            raise ValueError("native fixture actions require the explicit native_local_fixture target")
         total_timeout = sum(step.timeout_seconds for step in self.steps)
         if total_timeout > self.max_duration_seconds:
             raise ValueError("sum of step timeouts exceeds max_duration_seconds")
