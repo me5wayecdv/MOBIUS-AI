@@ -13,15 +13,6 @@ name: PHANTOM API smoke
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/phantom-api-smoke.yml"
-      - "scripts/phantom_api_smoke.py"
-      - "scripts/phantom_api_smoke.sh"
-      - "src/mobius/services/phantom.py"
-      - "src/mobius/services/poc_runner.py"
-      - "src/mobius/services/poc_execution.py"
 
 concurrency:
   group: phantom-api-smoke-${{ github.ref }}
