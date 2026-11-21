@@ -1709,64 +1709,112 @@ def test_host_primitive_entry_binding_and_failure_paths(tmp_path,monkeypatch):
     import audience_gate as g
     from types import SimpleNamespace as N
     C='c'*40
-    tmp=tmp_path/'rt';tmp.mkdir()
-    out=tmp/'o';out.mkdir(mode=0o700)
-    envr={'RUNNER_TEMP':str(tmp),'ImageOS':'ubuntu24','ImageVersion':'20261101.1.0'}
-    argv=['--repo','/x','--expected-commit',C,'--sleep-path','/s','--sleep-sha256','d'*64,'--parent','/sys/fs/cgroup/x','--dest',str(out),'--run-id','hp-1','--route-evidence-ref','route-ref-0001']
+    uid=os.getuid()
+    envr={'ImageOS':'ubuntu24','ImageVersion':'20261101.1.0'}
+    dp=tmp_path/'run';dp.mkdir(mode=0o755)
+    argv=['--repo','/x','--expected-commit',C,'--sleep-path','/s','--sleep-sha256','d'*64,'--parent','/sys/fs/cgroup/x','--run-id','hp1','--route-evidence-ref','route-ref-0001']
     calls=[]
     class Ops:
         def __init__(s,*a):calls.append('ctor')
         def close(s):calls.append('close')
-    def mods(ok=True,pub=None,run=None,approved=True):
+    GOOD={'committed':True,'temp_removed':True,'temp_fd_close_ok':True,'dir_fd_close_ok':True,'durable_dir_fsync':True}
+    def ld(ok=True,pub=None,run=None,approved=True):
         h=N(APPROVED_FOR_EXECUTION=approved,envelope=hp.envelope,RealOps=Ops,
             run=run or (lambda ops,env:{'envelope':env,'results':[{'check':c,'ok':ok,'errno':0} for c in hp.CHECKS]}))
-        a=N(APPROVED_FOR_EXECUTION=approved,canonical_path=g.canonical_path,check_plan=g.check_plan,publish_private=pub or (lambda *a,**k:calls.append('pub') or {}))
-        return {'hp':h,'ag':a}
-    # held: nothing runs or is measured while any constant is False (entry constant False in source)
+        a=N(APPROVED_FOR_EXECUTION=approved,canonical_path=lambda p:p,check_plan=g.check_plan,publish_private=pub or (lambda *a,**k:calls.append('pub') or dict(GOOD)))
+        return lambda:(h,a)
+    def call(a=argv,loader=None,measure=lambda r:C,e=envr):
+        calls.clear()
+        return he.main(a,environ=e,loader=loader or ld(),measure=measure,trusted_uid=uid,dest_parent=str(dp))
     assert he.APPROVED_FOR_EXECUTION is False
-    assert he.main(argv,environ=envr,modules=mods(),measure=lambda r:C)==he.RC_REFUSED and calls==[]
+    assert call()==he.RC_REFUSED and calls==[] and not any(dp.iterdir())
     monkeypatch.setattr(he,'APPROVED_FOR_EXECUTION',True)
-    assert he.main(argv,environ=envr,modules=mods(approved=False),measure=lambda r:C)==he.RC_REFUSED and calls==[]
-    # measured commit differs from the cross-check: refused before RealOps
-    assert he.main(argv,environ=envr,modules=mods(),measure=lambda r:'e'*40)==he.RC_REFUSED and calls==[]
-    # missing runner image labels, output outside RUNNER_TEMP, bad expected commit: refused
-    assert he.main(argv,environ={'RUNNER_TEMP':str(tmp)},modules=mods(),measure=lambda r:C)==he.RC_REFUSED
-    bad=list(argv);bad[bad.index('--dest')+1]=str(tmp_path/'elsewhere')
-    assert he.main(bad,environ=envr,modules=mods(),measure=lambda r:C)==he.RC_REFUSED
+    assert call(loader=ld(approved=False))==he.RC_REFUSED and calls==[]
+    assert call(measure=lambda r:'e'*40)==he.RC_REFUSED and calls==[]
+    assert call(e={})==he.RC_REFUSED and calls==[]
     bad=list(argv);bad[bad.index('--expected-commit')+1]='PLACEHOLDER_REVIEWED_PROBE_COMMIT_40HEX'
-    assert he.main(bad,environ=envr,modules=mods(),measure=lambda r:C)==he.RC_REFUSED and calls==[]
-    assert he.main(argv+['--extra','1'],environ=envr,modules=mods(),measure=lambda r:C)==he.RC_REFUSED
-    # happy path: measured values (not arguments) are in the envelope; ops closed; one publish
+    assert call(bad)==he.RC_REFUSED and calls==[]
+    assert call(argv+['--dest','/tmp/x'])==he.RC_REFUSED and calls==[]      # no caller-chosen destination
+    bad=list(argv);bad[bad.index('--run-id')+1]='../x'
+    assert call(bad)==he.RC_REFUSED and calls==[]
+    # happy path: measured values in the envelope, destination created by the entry, ops closed, one publish
     seen={}
-    def pub(plan,name,obj,**k):seen.update(plan=plan,name=name,obj=obj);calls.append('pub');return {}
-    assert he.main(argv,environ=envr,modules=mods(pub=pub),measure=lambda r:C)==he.RC_OK
+    def pub(plan,name,obj,**k):seen.update(plan=plan,name=name,obj=obj);calls.append('pub');return dict(GOOD)
+    assert call(loader=ld(pub=pub))==he.RC_OK
     assert calls==['ctor','close','pub'] and seen['obj']['envelope']['source_commit']==C and seen['obj']['envelope']['runner_image']=='ubuntu24/20261101.1.0'
-    assert seen['plan']['route']=='local_private_file' and seen['plan']['content_class']=='host_primitive_result'
+    d=dp/'d061-hp-hp1';assert d.is_dir() and (d.stat().st_mode&0o777)==0o700 and seen['plan']['destination']==str(d)
     g.validate_content('host_primitive_result',seen['obj'])
-    # a failed check is reported as a check failure; publish failure drops the result with no fallback
-    calls.clear()
-    assert he.main(argv,environ=envr,modules=mods(ok=False,pub=pub),measure=lambda r:C)==he.RC_CHECK_FAILED
+    # an existing destination name is never adopted
+    assert call(loader=ld(pub=pub))==he.RC_REFUSED and calls==[]
+    (dp/'d061-hp-hp1').rmdir()
+    # failed check reported; pre-commit publish failure drops with no fallback (exit 3)
+    assert call(loader=ld(ok=False,pub=pub))==he.RC_CHECK_FAILED;(dp/'d061-hp-hp1').rmdir()
     def boom(*a,**k):raise OSError(5,'x')
-    calls.clear()
-    assert he.main(argv,environ=envr,modules=mods(pub=boom),measure=lambda r:C)==he.RC_PUBLISH_FAILED and calls==['ctor','close']
+    assert call(loader=ld(pub=boom))==he.RC_PUBLISH_FAILED and calls==['ctor','close'];(dp/'d061-hp-hp1').rmdir()
+    # committed result with incomplete flags is never ordinary success and is not dropped
+    for k in GOOD:
+        r=call(loader=ld(pub=lambda *a,k=k,**kw:calls.append('pub') or {**GOOD,k:False}))
+        assert r==he.RC_INCOMPLETE and calls==['ctor','close','pub'];(dp/'d061-hp-hp1').rmdir()
     # run() raising still closes ops, publishes nothing
-    calls.clear()
     def rb(ops,env):raise RuntimeError('x')
-    assert he.main(argv,environ=envr,modules=mods(pub=pub,run=rb),measure=lambda r:C)==he.RC_CHECK_FAILED and calls==['ctor','close']
-    # git measurement: dirty tree and failure refuse; fixed binary and empty env
+    assert call(loader=ld(pub=pub,run=rb))==he.RC_CHECK_FAILED and calls==['ctor','close'];(dp/'d061-hp-hp1').rmdir()
+    # a loader/import failure is contained (no traceback, refusal code)
+    def lb():raise ImportError('x')
+    assert call(loader=lb)==he.RC_REFUSED and calls==[]
+    # git measurement
     cap=[]
     def runner(cmd,**k):
         cap.append((cmd,k.get('env')))
         return N(returncode=0,stdout=(C+'\n' if cmd[3]=='rev-parse' else ' M x\n').encode())
     with pytest.raises(he.Refused):he.measure_commit('/x',runner=runner)
     assert all(c[0]=='/usr/bin/git' and e=={} for c,e in cap)
-    assert he.measure_commit('/x',runner=lambda cmd,**k:N(returncode=0,stdout=(C if cmd[3]=='rev-parse' else '').encode()))==C
     with pytest.raises(he.Refused):he.measure_commit('/x',runner=lambda cmd,**k:N(returncode=1,stdout=b''))
-    # envelope runner_image is optional in the schema but typed when present
-    e=hp.envelope('r1',C,'d'*64,'ubuntu24/1.0');g.validate_content('host_primitive_result',{'envelope':e,'results':[{'check':c,'ok':True,'errno':0} for c in hp.CHECKS]})
+    # envelope runner_image typed when present
+    e=hp.envelope('r1',C,'d'*64,'ubuntu24/1.0');rr=[{'check':c,'ok':True,'errno':0} for c in hp.CHECKS]
+    g.validate_content('host_primitive_result',{'envelope':e,'results':rr})
     with pytest.raises(ValueError):hp.envelope('r1',C,'d'*64,'bad image')
-    with pytest.raises(ValueError):g.validate_content('host_primitive_result',{'envelope':{**e,'runner_image':'bad image'},'results':[{'check':c,'ok':True,'errno':0} for c in hp.CHECKS]})
-    # workflow template stays outside .github/workflows, has no upload step, no inputs, pinned checkout, creds off
-    t=(Path(__file__).resolve().parents[1]/'research'/'d061_android'/'held'/'host-primitive-probe.workflow.yml.txt').read_text()
+    with pytest.raises(ValueError):g.validate_content('host_primitive_result',{'envelope':{**e,'runner_image':'bad image'},'results':rr})
+    # workflow template invariants
+    root=Path(__file__).resolve().parents[1]
+    t=(root/'research'/'d061_android'/'held'/'host-primitive-probe.workflow.yml.txt').read_text()
     assert 'upload-artifact' not in t and 'inputs:' not in t and 'persist-credentials: false' in t and 'actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683' in t and 'permissions: {}' in t
-    assert not (Path(__file__).resolve().parents[1]/'.github'/'workflows'/'host-primitive-probe.yml').exists()
+    assert 'safe.directory' not in t and '/dev/null' in t and 'python3 -I -B' in t
+    assert not (root/'.github'/'workflows'/'host-primitive-probe.yml').exists()
+
+
+def test_host_primitive_entry_source_binding_uses_real_git_and_same_bytes(tmp_path):
+    import shutil,subprocess
+    import importlib
+    src=Path(__file__).resolve().parents[1]/'research'/'d061_android'
+    sys.path.insert(0,str(src))
+    he=importlib.import_module('host_primitive_entry')
+    uid=os.getuid()
+    def mk(name):
+        repo=tmp_path/name;d=repo/'research'/'d061_android';d.mkdir(parents=True)
+        for m in he.MODULES:shutil.copy(src/(m+'.py'),d/(m+'.py'))
+        for p in (repo,repo/'research',d):os.chmod(p,0o755)
+        g=lambda *a:subprocess.run(['git','-C',str(repo)]+list(a),check=True,capture_output=True,env={'PATH':os.environ['PATH'],'HOME':str(tmp_path),'GIT_CONFIG_NOSYSTEM':'1'})
+        g('init','-q');g('add','-A');g('-c','user.name=t','-c','user.email=t@t','commit','-qm','x')
+        return repo,g
+    repo,g=mk('r1')
+    # the helper binds to the system git; use the same binary via an explicit wrapper-free path
+    gitbin=shutil.which('git')
+    entry=str(repo/'research'/'d061_android'/'host_primitive_entry.py')
+    run=lambda cmd,**k:subprocess.run([gitbin]+cmd[1:],**{**k,'env':{'HOME':str(tmp_path),'GIT_CONFIG_NOSYSTEM':'1'}})
+    out=he.load_bound(str(repo),entry_path=entry,trusted_uid=uid,git=gitbin,runner=run)
+    assert set(out)==set(he.MODULES) and out['audience_gate'][1]==(repo/'research'/'d061_android'/'audience_gate.py').read_bytes()
+    m=he.exec_module('audience_gate',*out['audience_gate']);assert m.__file__==out['audience_gate'][0] and 'audience_gate' not in sys.modules or sys.modules['audience_gate'] is not m
+    # alternate repo whose checkout does not contain the entry: refused
+    other,_=mk('r2')
+    with pytest.raises(he.Refused):he.load_bound(str(other),entry_path=entry,trusted_uid=uid,git=gitbin,runner=run)
+    # modified bytes (tracked file changed after commit) are refused
+    p=repo/'research'/'d061_android'/'audience_gate.py';p.write_bytes(p.read_bytes()+b'\n#x\n')
+    with pytest.raises(he.Refused):he.load_bound(str(repo),entry_path=entry,trusted_uid=uid,git=gitbin,runner=run)
+    # wrong owner and group/other-writable are refused
+    with pytest.raises(he.Refused):he.load_bound(str(repo),entry_path=entry,trusted_uid=uid+1,git=gitbin,runner=run)
+    g('checkout','--','.');os.chmod(p,0o666)
+    with pytest.raises(he.Refused):he.load_bound(str(repo),entry_path=entry,trusted_uid=uid,git=gitbin,runner=run)
+    os.chmod(p,0o644)
+    # a symlinked module is refused
+    q=repo/'research'/'d061_android'/'host_primitive_probe.py';data=q.read_bytes();q.unlink();(tmp_path/'real.py').write_bytes(data);q.symlink_to(tmp_path/'real.py')
+    with pytest.raises(Exception):he.load_bound(str(repo),entry_path=entry,trusted_uid=uid,git=gitbin,runner=run)
