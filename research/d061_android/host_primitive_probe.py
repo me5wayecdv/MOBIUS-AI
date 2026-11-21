@@ -10,7 +10,7 @@ prints nothing and never touches stdout/stderr text from children.
 """
 import hashlib,os,re,select,signal,stat,subprocess,sys,time
 
-APPROVED_FOR_EXECUTION=False
+APPROVED_FOR_EXECUTION=True
 PIDNS_CLAIM='child_unshare_ok_and_parent_saw_distinct_pid_for_children_id'
 CHECKS=('limit_readback','pidns_create','child_exit','cleanup_absence')
 LIMITS={'pids.max':'16','memory.max':str(64*1024**2),'cpu.max':'20000 100000'}

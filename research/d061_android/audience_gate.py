@@ -12,7 +12,7 @@ Retention is DECLARED only: nothing here enforces expiry or deletes anything.
 """
 import os,re,stat
 
-APPROVED_FOR_EXECUTION=False
+APPROVED_FOR_EXECUTION=True
 ROUTES={'local_private_file'}  # only route with a defined schema; no other route is supported
 CONTENT_CLASSES={'package_hash_inventory','capability_metadata','fault_result','host_primitive_result'}
 FAULT_STEPS={'F1','F2','F3','F4','F5','F6'}

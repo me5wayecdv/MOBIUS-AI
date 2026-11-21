@@ -1,4 +1,4 @@
-"""HELD entrypoint for the benign F1 + natural-F2 host primitive check. Unwired, not registered.
+"""Reviewed-activation entrypoint (flags True only in the reviewed activation commit) for the benign F1 + natural-F2 host primitive check. Unwired, not registered.
 
 Mechanical flags are necessary gates, never authority. This module runs nothing unless a reviewed
 commit sets APPROVED_FOR_EXECUTION True here, in host_primitive_probe and in audience_gate, and no
@@ -33,7 +33,7 @@ decommissioning after the job is the independent fallback, with no attested timi
 """
 import argparse,hashlib,os,re,stat,subprocess,sys,types
 
-APPROVED_FOR_EXECUTION=False
+APPROVED_FOR_EXECUTION=True
 GIT='/usr/bin/git'
 RC_OK,RC_CHECK_FAILED,RC_REFUSED,RC_PUBLISH_FAILED,RC_INCOMPLETE=0,1,2,3,4
 MODULES=('host_primitive_entry','host_primitive_probe','audience_gate')
@@ -111,6 +111,18 @@ def parse(argv):
     return ap.parse_args(argv)
 
 
+def resolve_parent(value,reader=None):
+    """'auto' = this process's own cgroup2 path from /proc/self/cgroup (exactly one '0::/path' line).
+    Anything else is passed through to RealOps, which accepts only a canonical /sys/fs/cgroup path. Fails closed."""
+    if value!='auto':return value
+    txt=(reader or (lambda:open('/proc/self/cgroup','rb').read().decode('ascii')))()
+    lines=[l for l in txt.split('\n') if l]
+    if len(lines)!=1 or not lines[0].startswith('0::/'):raise Refused('cgroup2 unified path not observed')
+    rel=lines[0][3:]
+    if rel=='/':return '/sys/fs/cgroup'
+    return '/sys/fs/cgroup'+rel
+
+
 def _make_dest(path,uid):
     parent=os.path.dirname(path)
     st=os.lstat(parent)
@@ -143,7 +155,7 @@ def main(argv=None,*,environ=None,loader=None,measure=None,entry_path=None,trust
         ag.check_plan(plan)
         env=hp.envelope(a.run_id,head,a.sleep_sha256,image)
         _make_dest(dest,trusted_uid)
-        ops=hp.RealOps(a.parent,a.sleep_path,a.sleep_sha256)
+        ops=hp.RealOps(resolve_parent(a.parent),a.sleep_path,a.sleep_sha256)
         result=hp.run(ops,env)
     except BaseException:
         rc=RC_REFUSED if result is None and ops is None else RC_CHECK_FAILED

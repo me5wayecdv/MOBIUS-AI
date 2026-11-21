@@ -1389,7 +1389,7 @@ def test_audience_gate_is_plan_validation_only(monkeypatch,tmp_path):
     import os,json
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1]/'research'/'d061_android'))
     import audience_gate as g
-    assert g.APPROVED_FOR_EXECUTION is False
+    assert g.APPROVED_FOR_EXECUTION is True   # reviewed activation commit only; the flag is a gate, not authority
     ok={'route':'local_private_file','destination':'/var/private/inv','content_class':'package_hash_inventory','declared_retention_days':7,'route_evidence_ref':'main-route-0001'}
     assert g.check_plan(ok)=={'validated_plan_only':True,'retention_enforced':False,'route_verified':False}
     for mut in ({'route':'private_agent_channel'},{'route':'workflow_log'},{'route':['a']},{'content_class':'device_logs'},{'content_class':['x']},
@@ -1460,8 +1460,10 @@ def test_host_primitive_probe_sequence_with_fake_ops_and_closed_result(monkeypat
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1]/'research'/'d061_android'))
     import host_primitive_probe as hp
     import audience_gate as g
-    assert hp.APPROVED_FOR_EXECUTION is False
+    assert hp.APPROVED_FOR_EXECUTION is True   # reviewed activation commit only; the flag is a gate, not authority
+    monkeypatch.setattr(hp,'APPROVED_FOR_EXECUTION',False)
     with pytest.raises(SystemExit):hp.main()
+    monkeypatch.setattr(hp,'APPROVED_FOR_EXECUTION',True)
     env=hp.envelope('run-1','a'*40,'b'*64)
     for bad in (('x y','a'*40,'b'*64),(5,'a'*40,'b'*64),('r','zz','b'*64),('r','a'*40,'B'*64)):
         with pytest.raises(ValueError):hp.envelope(*bad)
@@ -1730,7 +1732,8 @@ def test_host_primitive_entry_binding_and_failure_paths(tmp_path,monkeypatch):
     def call(a=argv,loader=None,measure=lambda r:C,e=envr):
         calls.clear()
         return he.main(a,environ=e,loader=loader or ld(),measure=measure,trusted_uid=uid,dest_parent=str(dp))
-    assert he.APPROVED_FOR_EXECUTION is False
+    assert he.APPROVED_FOR_EXECUTION is True   # reviewed activation commit only; the flag is a gate, not authority
+    monkeypatch.setattr(he,'APPROVED_FOR_EXECUTION',False)
     assert call()==he.RC_REFUSED and calls==[] and not any(dp.iterdir())
     monkeypatch.setattr(he,'APPROVED_FOR_EXECUTION',True)
     assert call(loader=ld(approved=False))==he.RC_REFUSED and calls==[]
@@ -1822,3 +1825,14 @@ def test_host_primitive_entry_source_binding_uses_real_git_and_same_bytes(tmp_pa
     # a symlinked module is refused
     q=repo/'research'/'d061_android'/'host_primitive_probe.py';data=q.read_bytes();q.unlink();(tmp_path/'real.py').write_bytes(data);q.symlink_to(tmp_path/'real.py')
     with pytest.raises(Exception):he.load_bound(str(repo),entry_path=entry,trusted_uid=uid,git=gitbin,runner=run)
+
+
+def test_host_entry_parent_auto_resolution_fails_closed(monkeypatch):
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1]/'research'/'d061_android'))
+    import host_primitive_entry as he
+    r=he.resolve_parent
+    assert r('/sys/fs/cgroup/x.slice',reader=lambda:'') == '/sys/fs/cgroup/x.slice'
+    assert r('auto',reader=lambda:'0::/system.slice/a.service\n') == '/sys/fs/cgroup/system.slice/a.service'
+    assert r('auto',reader=lambda:'0::/\n') == '/sys/fs/cgroup'
+    for bad in ('','12:memory:/x\n0::/y\n','1:name=systemd:/x\n','0::relative\n'):
+        with pytest.raises(he.Refused):r('auto',reader=lambda b=bad:b)
