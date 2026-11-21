@@ -21,7 +21,7 @@ jobs:
       D061_REVIEWED_SHA: ${{ inputs.reviewed_sha }}
       PRODUCT_ROOT: /opt/d061-product-${{ github.run_id }}-${{ github.run_attempt }}
       TLS_ROOT: /opt/d061-tls-${{ github.run_id }}-${{ github.run_attempt }}
-      CONTROL: ${{ runner.temp }}/d061-product-control
+      CONTROL: ${{ github.workspace }}/.d061-product-control
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
