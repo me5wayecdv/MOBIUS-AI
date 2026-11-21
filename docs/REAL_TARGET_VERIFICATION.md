@@ -70,9 +70,17 @@ slice, not the full PHANTOM adapter.
   (`services/phantom.py`): env-gated adb probes (package presence,
   provider row counts) wired into the D-041 runner for `emulator` plans,
   with qemu-only device verification and same-package target binding.
-  Emulator orchestration inside Mobius and Frida instrumentation remain
-  unimplemented; end-to-end execution of an emulator plan through the
-  API on CI infrastructure is the next integration step.
+  End-to-end execution of a `read_only` emulator plan through the API is
+  CI-verified (`phantom-api-smoke` workflow, first run 44842949369 on a
+  hardware-accelerated emulator: upload -> authorization -> scan ->
+  RECON -> `poc/execute` -> persisted poc-plan/poc-result/poc-log
+  evidence, provider rows actual=4, PHANTOM_API_SMOKE: ALL_PASS).
+  Limitation of that slice: the plan's referenced hypothesis is seeded
+  directly in sqlite as documented test setup, because hypothesis
+  creation through the API is model-gated (NEXUS consent) and the
+  journey is intentionally no-model; every step under test goes through
+  the API. Mobius-managed emulator orchestration and Frida
+  instrumentation remain unimplemented.
 - JADX OCI image: unpublished by design; the queue returns 503 until an
   approved immutable digest is configured. RECON/DEX/provider OCI worker
   transport is CI-verified (worker pipeline smoke, provider runtime
@@ -80,5 +88,6 @@ slice, not the full PHANTOM adapter.
 - Deployed worker host: unverified (demo-first deferral).
 - Detection breadth: catalogue-bounded (provider operations, hardcoded keys,
   secrets); the broader catalogue (D-063) is deferred.
-- Dynamic analysis: standalone smoke plus read-only Mobius probes; no
-  mitmproxy, no Frida hooks, no persistent emulator infrastructure.
+- Dynamic analysis: standalone smoke plus API-integrated read-only
+  Mobius probes; no mitmproxy, no Frida hooks, no persistent emulator
+  infrastructure.
