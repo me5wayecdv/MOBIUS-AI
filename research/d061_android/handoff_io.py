@@ -122,3 +122,15 @@ def wait(path,*,deadline,child=None,pump=None,limit=65536):
 
 
 def digest(data):return hashlib.sha256(data).hexdigest()
+
+
+def public_directory(path):
+    # Deliberately traversable root-owned RO inbox subtree. chmod is explicit
+    # because outer umask077 must not turn the mounted subtree into0700.
+    mkdir(path,mode=0o700)
+    with parent_fd(path) as (directory,name):
+        fd=os.open(name,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=directory)
+        try:
+            if os.fstat(fd).st_uid!=os.geteuid():raise ValueError('public subtree owner differs')
+            os.fchmod(fd,0o755)
+        finally:os.close(fd)

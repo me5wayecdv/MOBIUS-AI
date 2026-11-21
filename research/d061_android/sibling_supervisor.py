@@ -15,7 +15,7 @@ import sys
 import tempfile
 import time
 
-from handoff_io import read,write,json_write,wait,digest,exists,publish_directory
+from handoff_io import read,write,json_write,wait,digest,exists,publish_directory,public_directory
 from handoff_protocol import ExpectedContext,LifecycleState,validate_provisioned,canonical
 from emulator_scope import process_identity
 from contained_driver import Producers
@@ -137,7 +137,7 @@ def main():
         closure_sha256=inputs['closure_sha256'],source_manifest_sha256=inputs['source_manifest_sha256'])
     ctx={**inputs,'run_id':run_id,'provisioning_id':provisioning_id,'host_netns':os.readlink('/proc/self/ns/net')}
     for role in ('runtime','control'):
-        inbox=root/(role+'-in');inbox.mkdir(mode=0o755);json_write(inbox/'context.json',ctx)
+        inbox=root/(role+'-in');public_directory(inbox);json_write(inbox/'context.json',ctx)
     run_intent={'context':ctx,'root_identity':process_identity(os.getpid()),
         'fixed_roles':['runtime','control'],'launches':0,'owner_approval':False}
     json_write(root/'trusted-run-intent.json',run_intent)
@@ -194,7 +194,7 @@ def main():
             expected_source_manifest_sha256=inputs['source_manifest_sha256'])
         state.advance('provisioned',seconds=time.monotonic()-started,
             originals=ready['original_count'],receipts=ready['origin_receipt_count'])
-        snapshot=root/'control-in/snapshot';snapshot.mkdir(mode=0o755)
+        snapshot=root/'control-in/snapshot';public_directory(snapshot)
         # Child never receives these root-owned samefiles. All bytes copied from
         # already bounded reads. Publish ready LAST after immutable public files.
         write(snapshot/'owned-fixture.apk',apk);write(snapshot/'public-ca.der',ca)
@@ -259,7 +259,7 @@ def main():
                     # or upgraded. Keep it and stop rather than retry collection.
                     if not (result_root/'result.json').exists():raise RuntimeError('partial immutable result publication')
                 else:
-                    result_root.mkdir(mode=0o755)
+                    public_directory(result_root)
                     binding=canonical(asdict(request))
                     diagnostic=canonical({'code':'host_failed','original_error':None if failure is None else type(failure).__name__,
                         'binding_json_source':'trusted_relay_expected_request_not_original_host_proof',

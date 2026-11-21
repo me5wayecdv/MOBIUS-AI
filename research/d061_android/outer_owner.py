@@ -55,7 +55,6 @@ def recover(root):
             state['termination']=terminate(identity)
             # Parent-death closes unshare PID1. Membership/FD absence is checked
             # independently; a missing setup record remains unverified, not clean.
-            from handoff_io import parent_fd
             wrapper=root/role/'wrapper-cleanup.json'
             state['absence']=check_absent(root/role,stage if role=='runtime' else None,record_name='outer-independent-absence.json',recover_missing_wrapper=True)
             state['state']='verified_absent'
@@ -71,6 +70,18 @@ def recover(root):
 def main():
     if not APPROVED_FOR_EXECUTION:raise SystemExit('HELD exact complete outer/relay/closure review required')
     if os.geteuid()!=0:raise RuntimeError('disposable CI root owner only')
+    import argparse
+    parser=argparse.ArgumentParser();parser.add_argument('--recover-only',action='store_true');args=parser.parse_args()
+    if args.recover_only:
+        owner=json.loads(read(LOCATOR,65536))
+        root=Path(owner['root'])
+        if root.parent!=Path('/opt') or root.name!='d061-owned-android-run-'+owner['run_id']:
+            raise ValueError('exact independent recovery locator differs')
+        record=owner.get('relay_identity')
+        if record is not None:terminate(record)
+        result=recover(root)
+        if not result['complete']:raise RuntimeError('independent outer recovery incomplete')
+        return
     os.umask(0o077);run_id=secrets.token_hex(16);provisioning_id=secrets.token_hex(16)
     root=Path('/opt')/('d061-owned-android-run-'+run_id)
     owner={'version':'owned-android-owner/1','run_id':run_id,'provisioning_id':provisioning_id,
@@ -87,20 +98,22 @@ def main():
     try:
         owner.update(stage='before_relay_launch',relay_launch_expected=True)
         json_write(LOCATOR,owner,replace=True);json_write(root/'outer-owner-progress.json',owner,replace=True)
-        parent=os.getpid()
-        def pdeath():
-            libc=ctypes.CDLL(None,use_errno=True)
-            if libc.prctl(1,signal.SIGKILL,0,0,0)!=0:os._exit(126)
-            if os.getppid()!=parent:os._exit(125)
-        with (root/'relay.log').open('xb') as log:
-            child=subprocess.Popen([sys.executable,str(SOURCE/'sibling_supervisor.py'),'--owned-root',str(root)],
-                env=CLEAN,stdin=subprocess.DEVNULL,stdout=log,stderr=subprocess.STDOUT,close_fds=True,
-                start_new_session=True,preexec_fn=pdeath)
+        from contained_driver import Producers
+        logs=Producers(CLEAN)
+        try:
+            child=logs.start([sys.executable,str(SOURCE/'sibling_supervisor.py'),'--owned-root',str(root)],
+                'relay',root,bind_parent=True)
             owner.update(stage='relay_started',relay_identity=process_identity(child.pid))
             json_write(LOCATOR,owner,replace=True);json_write(root/'outer-owner-progress.json',owner,replace=True)
-            rc=child.wait(timeout=540)
+            until=time.monotonic()+540
+            while child.poll() is None:
+                logs.pump()
+                if time.monotonic()>until:raise TimeoutError('fixed outer relay ceiling')
+                time.sleep(.05)
+            logs.pump();rc=child.wait()
             owner.update(stage='relay_returned',relay_rc=rc)
             if rc:raise RuntimeError('owned sibling relay failed')
+        finally:logs.stop()
     except BaseException as error:failure=error
     finally:
         for sig in (signal.SIGTERM,signal.SIGINT,signal.SIGHUP):signal.signal(sig,signal.SIG_IGN)

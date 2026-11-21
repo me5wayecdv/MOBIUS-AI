@@ -157,3 +157,19 @@ missing expected records unverified. It never makes launch/ADB records to pass
 a positive validator. A pre-emulator failure and an app-expected missing record
 have distinct pure regression cases. Control final absence remains separate
 outer completion after product persistence, not part of runtime proof.
+
+## Read-only mounted public subtree permissions
+
+Public inbox/snapshot/failure-result directories use anchored public_directory:
+create0700 then explicit descriptor fchmod0755, retaining publisher ownership
+and no payload write access under umask077. Public snapshot files stay0444.
+Outer run root and private collector staging remain0700. Regression creates the
+actual paths under real umask077 and checks resulting mode/traversal/read bits,
+not only mkdir arguments. UID65534 jail execution itself remains untested.
+
+Outer relay logging now uses the same bounded pipe pump64KiB ceiling as other
+supervisors. outer_owner has a held --recover-only entrypoint using only the
+external exact locator and identity-bound recovery. This is NOT an always-run
+recovery service: no workflow/always-run invocation is registered, and an
+outer-owner SIGKILL has no living code to invoke recovery by itself. External
+workflow ownership and actual fault evidence remain required before activation.

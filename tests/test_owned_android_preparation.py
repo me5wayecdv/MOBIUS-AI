@@ -339,3 +339,31 @@ def test_absence_obligations_follow_root_stages_not_fake_app_records(tmp_path,mo
     result=owned_absence.inspect(root,root_stage=stage,proc=tmp_path/'no-proc')
     assert not result['complete'] and 'work/evidence/adb-cleanup.json' in result['missing_records']
     assert 'work/evidence/owned-app-launch.json' in result['missing_records']
+
+
+def test_readonly_public_inbox_modes_survive_real_umask077(tmp_path,monkeypatch):
+    import os,stat
+    monkeypatch.syspath_prepend(str(ROOT))
+    from handoff_io import public_directory,json_write,read
+    old=os.umask(0o077)
+    try:
+        outer=tmp_path/'outer';outer.mkdir(mode=0o700)
+        private=outer/'private';private.mkdir(mode=0o700)
+        inbox=outer/'control-in';public_directory(inbox)
+        snapshot=inbox/'snapshot';public_directory(snapshot)
+        failure=inbox/'failure-result';public_directory(failure)
+        json_write(snapshot/'context.json',{'public_test_only':True})
+        assert stat.S_IMODE(outer.stat().st_mode)==0o700
+        assert stat.S_IMODE(private.stat().st_mode)==0o700
+        # Check real resulting filesystem access bits, not requested mkdir mode.
+        # World RX is the UID65534 traversal contract for this mounted subtree;
+        # outer0700 is not traversed inside the jail's /control mount.
+        for directory in (inbox,snapshot,failure):
+            actual=stat.S_IMODE(directory.stat().st_mode)
+            assert actual==0o755 and actual&stat.S_IXOTH and actual&stat.S_IROTH
+            assert not actual&stat.S_IWOTH and not actual&stat.S_IWGRP
+            assert os.access(directory,os.R_OK|os.X_OK)
+        public_file=snapshot/'context.json'
+        assert stat.S_IMODE(public_file.stat().st_mode)==0o444
+        assert read(public_file)==b'{"public_test_only":true}'
+    finally:os.umask(old)
