@@ -41,9 +41,13 @@ def _adapter(mapping, *, emulator=True, frida=None):
         adb_path="/fake/adb", frida_path=frida, runner=_runner_script(responses))
 
 
+PIDOF_OK = ("shell", "pidof", "com.example")
+
+
 def _frida_adapter(class_count=1420, rc=0):
     return _adapter(
-        {("-q", "-n", "com.example", "-e", _FRIDA_ENUMERATE_SCRIPT):
+        {PIDOF_OK: (0, b"1234\n", b""),
+         ("-q", "-n", "com.example", "-e", _FRIDA_ENUMERATE_SCRIPT):
             (rc, f"MOBIUS_CLASSES:{class_count}\n".encode(), b"")},
         frida="/fake/frida",
     )
@@ -187,7 +191,8 @@ def test_frida_failure_detail_uses_fixed_classes_never_target_strings():
     # Output deliberately stuffed with target-derived strings: the persisted
     # detail must carry only the fixed class label.
     leaky = _adapter(
-        {("-q", "-n", "com.example", "-e", _FRIDA_ENUMERATE_SCRIPT):
+        {PIDOF_OK: (0, b"1234\n", b""),
+         ("-q", "-n", "com.example", "-e", _FRIDA_ENUMERATE_SCRIPT):
             (1, b"", b"Failed to attach: unable to find process with name "
                       b"com.example and path /data/app/com.example.private/libsecret.so")},
         frida="/fake/frida",
@@ -199,11 +204,41 @@ def test_frida_failure_detail_uses_fixed_classes_never_target_strings():
     assert "/data/app" not in result.detail
     assert "com.example" not in result.detail.split("frida-process-not-found")[-1]
     unknown = _adapter(
-        {("-q", "-n", "com.example", "-e", _FRIDA_ENUMERATE_SCRIPT):
+        {PIDOF_OK: (0, b"1234\n", b""),
+         ("-q", "-n", "com.example", "-e", _FRIDA_ENUMERATE_SCRIPT):
             (7, b"weird tool-specific text", b"")},
         frida="/fake/frida",
     )
     assert "frida-error-unclassified" in unknown.probe_frida_enumerate_classes("com.example").detail
+
+
+def test_frida_probe_launches_app_when_process_is_gone(monkeypatch):
+    # Emulator killed the app between install and execution: the probe
+    # relaunches it (target-side setup) before attaching.
+    calls = []
+
+    def sequenced(argv, timeout):
+        calls.append(tuple(argv))
+        suffix = tuple(argv[-3:])
+        if suffix == ("shell", "pidof", "com.example"):
+            pidof_calls = [c for c in calls if tuple(c[-3:]) == suffix]
+            if len(pidof_calls) >= 2:
+                return (0, b"4321\n", b"")
+            return (1, b"", b"")
+        if "ro.kernel.qemu" in argv:
+            return (0, b"1\n", b"")
+        if "monkey" in argv:
+            return (0, b"Events injected: 1\n", b"")
+        if tuple(argv[-2:]) == ("-e", _FRIDA_ENUMERATE_SCRIPT):
+            return (0, b"MOBIUS_CLASSES:900\n", b"")
+        return (1, b"", b"unexpected")
+
+    monkeypatch.setattr("mobius.services.phantom.time.sleep", lambda _s: None)
+    adapter = PhantomEmulatorAdapter(
+        adb_path="/fake/adb", frida_path="/fake/frida", runner=sequenced)
+    result = adapter.probe_frida_enumerate_classes("com.example")
+    assert result.actual == 900
+    assert any("monkey" in c for c in calls)
 
 
 def test_stop_instrumentation_is_idempotent_cleanup():

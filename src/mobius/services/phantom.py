@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import time
 from dataclasses import dataclass
 from typing import Any, Callable, Sequence
 
@@ -128,18 +129,40 @@ class PhantomEmulatorAdapter:
             "content query row count", text[:_DETAIL_OUTPUT_BYTES],
         )
 
+    def _pid_of(self, package: str) -> bool:
+        rc, text = self._run(self._argv("shell", "pidof", package))
+        return rc == 0 and bool(text.strip())
+
+    def _ensure_app_running(self, package: str) -> None:
+        """Target-side setup (not instrumentation): launch the lab app on the
+        verified emulator if its process is not running, waiting bounded.
+        Emulators kill background apps aggressively, so a process verified at
+        install time may be gone by the time a plan executes."""
+        if self._pid_of(package):
+            return
+        self._run(self._argv(
+            "shell", "monkey", "-p", package,
+            "-c", "android.intent.category.LAUNCHER", "1",
+        ))
+        for _ in range(6):
+            if self._pid_of(package):
+                return
+            time.sleep(5)
+
     def probe_frida_enumerate_classes(self, package: str) -> EmulatorProbeResult:
-        """Observation-only instrumentation: attach to the running lab app and
-        count loaded classes with the fixed embedded script. actual is the
-        class count, or None when attach/enumeration failed. Requires frida
-        tooling configured and a frida-server already running on the verified
-        emulator (the CI job owns the server lifecycle); the upstream PoC
-        approval flow gates this probe."""
+        """Observation-only instrumentation: ensure the lab app process is
+        running (launching it on the verified emulator if needed), attach,
+        and count loaded classes with the fixed embedded script. actual is
+        the class count, or None when attach/enumeration failed. Requires
+        frida tooling configured and a frida-server already running on the
+        verified emulator (the CI job owns the server lifecycle); the
+        upstream PoC approval flow gates this probe."""
         self._require_emulator()
         if not self._frida:
             raise PoCAdapterUnavailable(
                 "frida tooling is not configured on this host"
             )
+        self._ensure_app_running(package)
         device = ["-D", self._serial] if self._serial else ["-U"]
         argv = [self._frida, *device, "-q", "-n", package, "-e", _FRIDA_ENUMERATE_SCRIPT]
         rc, out, err = self._runner(argv, FRIDA_TIMEOUT_SECONDS)
