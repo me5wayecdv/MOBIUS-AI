@@ -288,6 +288,92 @@ def kill_session_stable(sid, wait=ABSENCE_WAIT, clock=time.monotonic):
         time.sleep(0.02)
 
 
+def validate_stage_lock(lock, roots):
+    """Pre-spawn: the SAME production validators the stager uses (no weaker duplicate schema), plus the exact staging-row checks
+    stage_role applies. Raises ValueError on any defect, before any record or effect."""
+    here = str(Path(__file__).resolve().parent)
+    if here not in sys.path:
+        sys.path.insert(0, here)
+    import stage_archives as sa
+    import namespace_supervisor as ns
+    if not isinstance(lock, dict) or lock.get('status') != 'EXACT_REVIEWED_SIBLING_STAGE_LOCK':
+        raise ValueError('unresolved or incomplete reviewed lock')
+    if lock.get('sdk_license_reviewed') is not True:
+        raise ValueError('explicit scoped license review missing')
+    if not isinstance(lock.get('roles'), dict) or set(lock['roles']) != set(roots):
+        raise ValueError('reviewed lock roles must equal the exact owned roots (missing or unexpected role)')
+    names = {row['name'] for row in sa.archive_rows(lock)}
+    files = total = 0
+    for role in roots:
+        manifest = lock['roles'][role]
+        ns.validate_manifest(manifest, role)
+        seen = set()
+        groups = {}
+        for row in manifest['files']:
+            source = sa.relative(row['source'])
+            member = sa.relative(row['member'])
+            if row.get('archive') not in names or source in seen or source == 'closure-lock.json':
+                raise ValueError('unique exact source archive/path required')
+            seen.add(source)
+            group = groups.setdefault((row['archive'], member), [])
+            group.append(row)
+            if len(group) > 16 or any((x['size'], x['sha256'], x['mode']) != (row['size'], row['sha256'], row['mode']) for x in group):
+                raise ValueError('member alias fanout or content mismatch')
+        files += len(manifest['files'])
+        total += sum(x['size'] for x in manifest['files'])
+    if files > sa.MAX_FILES or total > sa.MAX_BYTES:
+        raise ValueError('aggregate staging declarations exceed session ceiling')
+
+
+def pid_ns_inode(pid):
+    """Inode string of the PID namespace the given process's CHILDREN are created in, or None."""
+    try:
+        return os.readlink('/proc/%d/ns/pid_for_children' % pid)
+    except OSError:
+        return None
+
+
+def ns_members(ns_link):
+    """Live processes (any state but zombie) whose own PID namespace link equals ns_link."""
+    out = []
+    for entry in os.scandir('/proc'):
+        if entry.name.isdigit():
+            try:
+                if os.readlink('/proc/%s/ns/pid' % entry.name) != ns_link:
+                    continue
+            except OSError:
+                continue
+            ident = process_identity(int(entry.name))
+            if ident and ident['state'] != 'Z':
+                out.append(ident)
+    return out
+
+
+def kill_ns_members(ns_link, wait=ABSENCE_WAIT, clock=time.monotonic):
+    """Live-owner only: pidfd-signal every member of the recorded namespace after re-verifying its namespace link and identity."""
+    deadline = clock() + wait
+    while True:
+        members = ns_members(ns_link)
+        if not members:
+            return []
+        for ident in members:
+            try:
+                pfd = os.pidfd_open(ident['pid'])
+            except OSError:
+                continue
+            try:
+                again = process_identity(ident['pid'])
+                if again and again['start_ticks'] == ident['start_ticks'] and os.readlink('/proc/%d/ns/pid' % ident['pid']) == ns_link:
+                    signal.pidfd_send_signal(pfd, signal.SIGKILL)
+            except (ProcessLookupError, OSError):
+                pass
+            finally:
+                os.close(pfd)
+        if clock() > deadline:
+            return ns_members(ns_link)
+        time.sleep(0.02)
+
+
 def contain_argv(argv, *, user_namespace=False):
     """Wrap argv in a fresh PID namespace whose init is the stager and which dies with it/unshare.
 
@@ -356,7 +442,7 @@ def quarantine_partial(roots, attempt, uid=None):
     return out
 
 
-def stop_and_reap(child, sid):
+def stop_and_reap(child, sid, ns_link=None):
     """Bounded: kill the session via pidfds, verify absence, then reap the leader with a timeout."""
     remaining = kill_session_stable(sid)
     if child.poll() is None:
@@ -371,6 +457,10 @@ def stop_and_reap(child, sid):
         code = child.wait(timeout=REAP_WAIT)
     except subprocess.TimeoutExpired:
         remaining = remaining or ['leader_unreaped']
+    if ns_link is not None:
+        # Absence obligation for a namespaced run: every member of the recorded namespace, not just the session.
+        left = kill_ns_members(ns_link)
+        remaining = list(remaining) + [dict(m, ns=True) for m in left]
     return code, remaining
 
 
@@ -390,24 +480,7 @@ def supervise(argv, report_path, *, role_roots, lock_bytes, expected_lock_sha256
     if hashlib.sha256(lock_bytes).hexdigest() != expected_lock_sha256:
         raise ValueError('lock bytes differ from the reviewed lock identity')
     lock = json.loads(lock_bytes)
-    if lock.get('status') != 'EXACT_REVIEWED_SIBLING_STAGE_LOCK' or not isinstance(lock.get('roles'), dict):
-        raise ValueError('unresolved or incomplete reviewed lock')
-    if set(lock['roles']) != set(roots):
-        raise ValueError('reviewed lock roles must equal the exact owned roots (missing or unexpected role)')
-    for _role, _m in lock['roles'].items():
-        _files = _m.get('files') if isinstance(_m, dict) else None
-        if not isinstance(_files, list) or not _files:
-            raise ValueError('lock role schema invalid: ' + _role)
-        _seen = set()
-        for _f in _files:
-            if (not isinstance(_f, dict) or not isinstance(_f.get('source'), str) or not _f['source']
-                    or _f['source'].startswith('/') or '..' in _f['source'].split('/') or _f['source'] in _seen
-                    or _f['source'] == 'closure-lock.json'
-                    or not isinstance(_f.get('size'), int) or isinstance(_f.get('size'), bool) or _f['size'] < 0
-                    or not isinstance(_f.get('mode'), int) or isinstance(_f.get('mode'), bool)
-                    or not isinstance(_f.get('sha256'), str) or not re.fullmatch('[0-9a-f]{64}', _f['sha256'])):
-                raise ValueError('lock file entry schema invalid: ' + _role)
-            _seen.add(_f['source'])
+    validate_stage_lock(lock, roots)
     for path in list(roots.values()) + [str(report_path)]:
         if lexists_anchored(path):
             raise ValueError('refusing preexisting stage output (never adopted or quarantined): ' + path)
@@ -423,13 +496,25 @@ def supervise(argv, report_path, *, role_roots, lock_bytes, expected_lock_sha256
     reason = None
     setup_error = None
     pidfd = None
+    ns_link = None
     try:
         # ALL post-Popen setup is inside this guard.
         pidfd = os.pidfd_open(child.pid)
+        if pid_namespace:
+            own = os.readlink('/proc/self/ns/pid')
+            end = clock() + 5.0
+            while ns_link is None:
+                seen = pid_ns_inode(child.pid)
+                if seen is not None and seen != own:
+                    ns_link = seen
+                elif clock() > end:
+                    raise RuntimeError('pid namespace identity not established')
+                else:
+                    time.sleep(0.01)
         ident = process_identity(child.pid)
         if ident is None or ident['sid'] != sid:
             raise RuntimeError('child session identity not confirmed')
-        record(record_dir, 'stage-watchdog-progress-%s.json' % attempt, {'attempt': attempt, 'child_identity': ident, 'sid': sid})
+        record(record_dir, 'stage-watchdog-progress-%s.json' % attempt, {'attempt': attempt, 'child_identity': ident, 'sid': sid, 'pid_namespace': ns_link, 'absence_obligation': 'session_and_namespace' if ns_link else 'session'})
         while True:
             if select.select([pidfd], [], [], 0)[0]:
                 break  # leader exited (still unreaped)
@@ -448,7 +533,7 @@ def supervise(argv, report_path, *, role_roots, lock_bytes, expected_lock_sha256
     except BaseException as error:
         setup_error = type(error).__name__ + ':' + str(error)[:120]
         reason = reason or 'supervision_error'
-    code, remaining = stop_and_reap(child, sid)
+    code, remaining = stop_and_reap(child, sid, ns_link)
     if pidfd is not None:
         os.close(pidfd)
     absence_verified = not remaining
@@ -473,7 +558,7 @@ def supervise(argv, report_path, *, role_roots, lock_bytes, expected_lock_sha256
         dispositions = []
     result = {'version': 'staging-watchdog/3', 'attempt': attempt, 'exit_code': code, 'killed_reason': reason,
               'setup_error': setup_error, 'pid_namespace_containment': pid_namespace, 'absence_verified': absence_verified,
-              'session_members_remaining': [m if isinstance(m, str) else m['pid'] for m in remaining],
+              'session_members_remaining': [m if isinstance(m, str) else m['pid'] for m in remaining], 'pid_namespace_identity': ns_link,
               'final_scan': final, 'final_validation_error': scan_error, 'complete': complete,
               'root_dispositions': dispositions, 'elapsed_seconds': round(clock() - started, 3),
               'exit0_alone_is_not_proof': True, 'not_attestation': True}
@@ -484,9 +569,8 @@ def supervise(argv, report_path, *, role_roots, lock_bytes, expected_lock_sha256
 def recover(record_dir, attempt):
     """Independent attributable recovery after a watchdog death.
 
-    Never uses a numeric group kill. Members of the RECORDED session are signalled only through pidfds after
-    identity re-verification. Roots are renamed only if absence is verified; otherwise UNVERIFIED, no mutation.
-    Originals are never overwritten; a unique recovery record is written.
+    Strictly UNVERIFIED: sends no signal and mutates no root. Writes a unique recovery record preserving the recorded
+    identities for a reviewed outer owner. Originals are never overwritten.
     """
     if not APPROVED_FOR_EXECUTION:
         raise RuntimeError('staging watchdog HELD')
@@ -498,31 +582,14 @@ def recover(record_dir, attempt):
         progress = json.loads(read_anchored(Path(record_dir) / ('stage-watchdog-progress-%s.json' % attempt), 65536))
     except FileNotFoundError:
         progress = None
-    if progress is None:
-        result = {'attempt': attempt, 'recovery_id': token, 'state': 'UNVERIFIED_no_progress_record',
-                  'root_dispositions': [{'state': 'UNVERIFIED_ABSENCE_NO_ROOT_MUTATION'}]}
-    else:
-        sid = progress['sid']
-        recorded = progress.get('child_identity')
-        current = process_identity(sid) if isinstance(sid, int) else None
-        authentic = (isinstance(recorded, dict) and current is not None and recorded.get('pid') == sid
-                     and current['sid'] == sid and current['pgrp'] == recorded.get('pgrp')
-                     and current['start_ticks'] == recorded.get('start_ticks'))
-        if not authentic:
-            # A bare numeric SID could now name an unrelated session. Without the original leader we cannot
-            # authenticate membership: no signals, no root mutation.
-            result = {'attempt': attempt, 'recovery_id': token, 'sid': sid,
-                      'state': 'UNVERIFIED_session_identity_not_authenticated',
-                      'root_dispositions': [{'state': 'UNVERIFIED_ABSENCE_NO_ROOT_MUTATION'}]}
-            record(record_dir, 'stage-watchdog-recovery-%s-%s.json' % (attempt, token), result)
-            return result
-        remaining = kill_session_stable(sid)
-        verified = not remaining
-        result = {'attempt': attempt, 'recovery_id': token, 'sid': sid,
-                  'state': 'absence_verified' if verified else 'UNVERIFIED_members_remain',
-                  'session_members_remaining': [m['pid'] for m in remaining],
-                  'root_dispositions': quarantine_partial(list(intent['roots'].values()), attempt + '-r' + token)
-                  if verified else [{'state': 'UNVERIFIED_ABSENCE_NO_ROOT_MUTATION'}]}
+    # Independent recovery after the live owner died is STRICTLY UNVERIFIED: no signals, no root mutation. A numeric SID or
+    # namespace link cannot be authenticated across the owner's death without a persistent containment handle (cgroup/pidfd
+    # owner) that this source does not have. Recorded identities are preserved for a reviewed outer owner.
+    state = 'UNVERIFIED_no_progress_record' if progress is None else 'UNVERIFIED_no_persistent_containment_handle'
+    result = {'attempt': attempt, 'recovery_id': token, 'state': state, 'signals_sent': 0,
+              'recorded_sid': None if progress is None else progress.get('sid'),
+              'recorded_pid_namespace': None if progress is None else progress.get('pid_namespace'),
+              'root_dispositions': [{'state': 'UNVERIFIED_ABSENCE_NO_ROOT_MUTATION'}]}
     record(record_dir, 'stage-watchdog-recovery-%s-%s.json' % (attempt, token), result)
     return result
 

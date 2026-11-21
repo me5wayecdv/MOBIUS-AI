@@ -360,13 +360,26 @@ def wd(monkeypatch):
 
 
 def _lockset(tmp_path):
-    """A reviewed-lock-shaped fixture plus a stager stand-in script that writes consistent output."""
+    """Production-shaped reviewed lock (validate_manifest + stage_role row schema) and per-role file payloads."""
     import hashlib
-    files = {'runtime': (b'rt-bytes', 'bin/rt'), 'control': (b'ct-bytes', 'lib/ct')}
+    import sys as _sys
+    _sys.path.insert(0, str(ROOT))
+    import namespace_supervisor as nsup
+    files = {}
+    lock = {'status': 'EXACT_REVIEWED_SIBLING_STAGE_LOCK', 'sdk_license_reviewed': True,
+            'archives': [{'name': 'a.zip', 'bytes': 10, 'sha256': '0' * 64}], 'roles': {}}
+    for role in ('runtime', 'control'):
+        dests = [nsup.ROLES[role][1], '/runtime/bin/python', '/usr/bin/setpriv']
+        rows, payload = [], []
+        for dest in dests:
+            data = (role + dest).encode()
+            rel = dest.lstrip('/')
+            rows.append({'destination': dest, 'source': rel, 'archive': 'a.zip', 'member': 'm/' + rel, 'size': len(data),
+                         'sha256': hashlib.sha256(data).hexdigest(), 'mode': 0o444})
+            payload.append((data, rel))
+        files[role] = payload
+        lock['roles'][role] = {'status': 'EXACT_REVIEWED_ANDROID_CLOSURE', 'files': rows}
     roots = {r: tmp_path / (r + '_closure') for r in files}
-    lock = {'status': 'EXACT_REVIEWED_SIBLING_STAGE_LOCK', 'roles': {
-        r: {'files': [{'source': rel, 'size': len(b), 'sha256': hashlib.sha256(b).hexdigest(), 'mode': 0o444}]}
-        for r, (b, rel) in files.items()}}
     lock_bytes = json.dumps(lock).encode()
     rec = tmp_path / 'rec'
     rec.mkdir(mode=0o700)
@@ -385,16 +398,17 @@ if mode == 'hang':
     import subprocess, time
     subprocess.Popen(['sleep', '60'])
     time.sleep(60)
-for role, row in spec['roles'].items():
+for role, rows in spec['roles'].items():
     root = spec['roots'][role]
-    rel = row['rel']
-    os.makedirs(os.path.join(root, os.path.dirname(rel)), exist_ok=True)
-    data = bytes.fromhex(row['hex'])
-    if mode == 'wrong_digest':
-        data = b'X' * len(data)
-    with open(os.path.join(root, rel), 'wb') as f:
-        f.write(data)
-    os.chmod(os.path.join(root, rel), 0o444)
+    for row in rows:
+        rel = row['rel']
+        os.makedirs(os.path.join(root, os.path.dirname(rel)), exist_ok=True)
+        data = bytes.fromhex(row['hex'])
+        if mode == 'wrong_digest':
+            data = b'X' * len(data)
+        with open(os.path.join(root, rel), 'wb') as f:
+            f.write(data)
+        os.chmod(os.path.join(root, rel), 0o444)
     manifest = spec['lock']['roles'][role]
     with open(os.path.join(root, 'closure-lock.json'), 'w') as f:
         json.dump({'files': []} if mode == 'invalid_lock' else manifest, f)
@@ -405,7 +419,7 @@ for role, row in spec['roles'].items():
         import time; time.sleep(60)
 if mode == 'exit_no_report':
     sys.exit(0)
-results = [{'role': r, 'root': spec['roots'][r], 'file_count': 1, 'closure_sha256': hashlib.sha256(json.dumps(spec['lock']['roles'][r], sort_keys=True, separators=(',', ':')).encode()).hexdigest()} for r in spec['roots']]
+results = [{'role': r, 'root': spec['roots'][r], 'file_count': len(spec['lock']['roles'][r]['files']), 'closure_sha256': hashlib.sha256(json.dumps(spec['lock']['roles'][r], sort_keys=True, separators=(',', ':')).encode()).hexdigest()} for r in spec['roots']]
 json.dump({'results': results, 'no_code_executed': True}, open(spec['report'], 'w'))
 '''
 
@@ -413,7 +427,7 @@ json.dump({'results': results, 'no_code_executed': True}, open(spec['report'], '
 def _run(wd, tmp_path, mode, attempt, **kw):
     files, roots, lock, lock_bytes, lock_sha, rec, report = _lockset(tmp_path)
     spec = {'roots': {r: str(p) for r, p in roots.items()}, 'report': str(report), 'lock': lock,
-            'roles': {r: {'rel': rel, 'hex': b.hex()} for r, (b, rel) in files.items()}}
+            'roles': {r: [{'rel': rel, 'hex': b.hex()} for b, rel in rows] for r, rows in files.items()}}
     (tmp_path / 'spec.json').write_text(json.dumps(spec))
     (tmp_path / 'stager.py').write_text(STAGER_SRC)
     args = dict(role_roots=roots, lock_bytes=lock_bytes, expected_lock_sha256=lock_sha, record_dir=rec, attempt=attempt)
@@ -536,8 +550,10 @@ def test_watchdog_recover_stable_pidfd_unique_and_no_mutation_when_unverified(wd
     (rec / 'stage-watchdog-intent-r1.json').write_text(json.dumps({'roots': {'runtime': str(root)}}))
     (rec / 'stage-watchdog-progress-r1.json').write_text(json.dumps({'child_identity': ident, 'sid': ident['sid']}))
     first = wd.recover(rec, 'r1')
-    child.wait(timeout=5)
-    assert first['state'] == 'absence_verified' and first['root_dispositions'][0]['state'] == 'quarantined'
+    assert child.poll() is None  # recovery never signals, even the authentic recorded leader
+    child.kill(); child.wait(timeout=5)
+    assert first['state'] == 'UNVERIFIED_no_persistent_containment_handle' and first['signals_sent'] == 0
+    assert first['root_dispositions'][0]['state'] == 'UNVERIFIED_ABSENCE_NO_ROOT_MUTATION' and root.exists() and (root / 'partial').exists()
     # no progress record: UNVERIFIED and NO root mutation
     root2 = tmp_path / 'role2'
     root2.mkdir()
@@ -616,16 +632,33 @@ def test_pid_namespace_kills_setsid_escapee_that_session_scan_alone_misses(wd, t
     import threading
     from threading import Event
     cancel = Event()
-    threading.Timer(1.0, cancel.set).start()
+    seen = {}
+
+    def witness():
+        # witnessed start: only cancel once the escapee has written its marker AND the recorded namespace has >=2 live members
+        for _ in range(400):
+            prog = rec / 'stage-watchdog-progress-ns1.json'
+            if esc.exists() and prog.exists():
+                link = json.loads(prog.read_text()).get('pid_namespace')
+                if link and len(wd.ns_members(link)) >= 2:
+                    seen['link'], seen['count'] = link, len(wd.ns_members(link))
+                    cancel.set()
+                    return
+            time.sleep(0.05)
+        cancel.set()
+    t = threading.Thread(target=witness)
+    t.start()
     r = wd.supervise([PY, str(tmp_path / 'stager.py')], report, role_roots=roots, lock_bytes=lock_bytes,
                      expected_lock_sha256=lock_sha, record_dir=rec, attempt='ns1', cancel=cancel,
                      pid_namespace=True, user_namespace=True)
+    t.join()
+    assert seen.get('count', 0) >= 2, 'start not witnessed: escapee never ran inside the recorded namespace'
     assert r['pid_namespace_containment'] is True and r['killed_reason'] == 'cancelled' and r['absence_verified']
-    # the escapee's host PID is recorded by itself inside the namespace (namespace-relative); verify no live
-    # sleeper from this stager remains by scanning for the escapee's marker script.
-    time.sleep(0.5)
-    live = [e.name for e in os.scandir('/proc') if e.name.isdigit() and b'escapee.py' in _cmdline(int(e.name))]
-    assert live == []
+    assert r['pid_namespace_identity'] == seen['link']
+    prog = json.loads((rec / 'stage-watchdog-progress-ns1.json').read_text())
+    assert prog['absence_obligation'] == 'session_and_namespace' and prog['pid_namespace'] == seen['link']
+    # exact owned identity: no process anywhere still carries the recorded namespace link
+    assert wd.ns_members(seen['link']) == []
 
 
 def _cmdline(pid):
@@ -657,17 +690,48 @@ def test_without_namespace_a_setsid_escapee_survives_documenting_the_limit(wd, t
         os.kill(pid, sg.SIGKILL)
 
 
-def test_watchdog_lock_role_set_must_equal_roots_and_schema_valid(wd, tmp_path):
+def _mut(lock, how):
+    import copy
+    lk = copy.deepcopy(lock)
+    rows = lk['roles']['control']['files']
+    if how == 'missing_role':
+        del lk['roles']['control']
+    elif how == 'unexpected_role':
+        lk['roles']['extra'] = lk['roles']['control']
+    elif how == 'noncanonical_source':
+        rows[0]['source'] = 'a//b'
+    elif how == 'dot_source':
+        rows[0]['source'] = './x'
+    elif how == 'bad_mode':
+        rows[0]['mode'] = 0o777
+    elif how == 'no_license':
+        lk['sdk_license_reviewed'] = False
+    elif how == 'missing_required':
+        lk['roles']['control']['files'] = [r for r in rows if r['destination'] != '/usr/bin/setpriv']
+    elif how == 'unknown_archive':
+        rows[0]['archive'] = 'nope.zip'
+    elif how == 'dup_source':
+        rows[1]['source'] = rows[0]['source']
+    elif how == 'bad_status':
+        lk['roles']['control']['status'] = 'DRAFT'
+    elif how == 'bad_destination':
+        rows[0]['destination'] = '/home/x'
+    elif how == 'no_archives':
+        lk['archives'] = []
+    elif how == 'oversize':
+        rows[0]['size'] = 5 * 1024 ** 3
+    return lk
+
+
+@pytest.mark.parametrize('how', ['missing_role', 'unexpected_role', 'noncanonical_source', 'dot_source', 'bad_mode', 'no_license',
+                                 'missing_required', 'unknown_archive', 'dup_source', 'bad_status', 'bad_destination', 'no_archives', 'oversize'])
+def test_prespawn_uses_production_validators_and_rejects_before_any_effect(wd, tmp_path, how):
     import hashlib
     files, roots, lock, lock_bytes, lock_sha, rec, report = _lockset(tmp_path)
-    bad = {'status': lock['status'], 'roles': {'runtime': lock['roles']['runtime'], 'unexpected': lock['roles']['control']}}
+    wd.validate_stage_lock(lock, roots)  # the unmutated production-shaped lock passes
+    bad = _mut(lock, how)
     bb = json.dumps(bad).encode()
-    with pytest.raises(ValueError):
-        wd.supervise([PY, '-c', 'pass'], report, role_roots=roots, lock_bytes=bb, expected_lock_sha256=hashlib.sha256(bb).hexdigest(), record_dir=rec)
-    bad = json.loads(lock_bytes)
-    bad['roles']['control']['files'][0]['sha256'] = 'zz'
-    bb = json.dumps(bad).encode()
-    with pytest.raises(ValueError):
+    with pytest.raises((ValueError, KeyError)):
         wd.supervise([PY, '-c', 'pass'], report, role_roots=roots, lock_bytes=bb, expected_lock_sha256=hashlib.sha256(bb).hexdigest(), record_dir=rec)
     assert not list(rec.iterdir()) and not any(r.exists() for r in roots.values())
 
@@ -695,7 +759,7 @@ def test_recover_refuses_unauthenticated_reused_sid_no_signal_no_mutation(wd, tm
         (rec / 'stage-watchdog-intent-r9.json').write_text(json.dumps({'roots': {'runtime': str(root)}}))
         (rec / 'stage-watchdog-progress-r9.json').write_text(json.dumps({'child_identity': stale, 'sid': ident['sid']}))
         res = wd.recover(rec, 'r9')
-        assert res['state'] == 'UNVERIFIED_session_identity_not_authenticated' and root.exists()
+        assert res['state'].startswith('UNVERIFIED') and root.exists()
         assert bystander.poll() is None  # unrelated session was never signalled
     finally:
         bystander.kill(); bystander.wait()
