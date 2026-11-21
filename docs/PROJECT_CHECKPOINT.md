@@ -1,74 +1,97 @@
-# Mobius Project Checkpoint (2026-11-21)
+# Mobius project checkpoint, 2026-11-21 09:48 EET
 
-Durable checkpoint of verification state, evidence, limits and open decisions.
-Written at task expiry; reflects main at squash SHA 20627843.
+This checkpoint supersedes the earlier 20627843 snapshot. It records evidence
+limits, not whole-project completion. Merged main inspected at
+`4f3f85762ff8364137116b8d2e2c6a00b4454ea3`; latest baseline CI was still pending
+when written. Research PR117 is separate, disabled preparation.
 
-## Consent state
+## Landed work versus demonstrated work
 
-- Upstream model-provider consent: verified against the owner's original
-  messages (Nov 20, 22:20:59 and 22:21:02 EET, owner number +201140495914),
-  with agent scope confirmation at 22:21:09: free DeepSeek via opencode for
-  Mobius trials only, no account secrets, no unrelated data.
-- Distinct gates kept separate: upstream-data consent, synthetic-CI test
-  approval, and any real-plan or production approval. Production activation,
-  paid spend, data deletion and key changes remain owner-approval-gated.
-- Owner instruction (Nov 21, 00:09): no user-facing messages until the whole
-  project completes.
-
-## Merged and verified (SHA-matched CI evidence)
-
-| Item | Merge SHA | Evidence |
+| Work | Merged state | Demonstration boundary |
 | --- | --- | --- |
-| PHANTOM approval-gated observation-only Frida instrumentation (#106) | 93aa0b7 | post-merge run 44857880298 green; 11361 classes observed on Allsafe |
-| Mobius-managed boot + pinned frida-server lifecycle (#107) | e4bc956 | post-merge runs 44862803510 / 44862803373 / 44862803427 green |
-| D-061 documented as not established (#109) | 043aff6 | docs only |
-| Connected-journey advisory workflow + hypothesis_ids serializer fix (#110) | 20627843 | round-1 run 44865900582 full chain; MOBIUS CI and worker smoke green post-merge on 20627843 |
+| Observation-only PHANTOM/Frida (#106), lifecycle (#107) | 93aa0b7, e4bc956 | Prior target-scoped class observation/lifecycle evidence, not capture/TLS or general app coverage |
+| D061 not-established docs (#109) | 043aff6 | Explicit gap, not optional completion |
+| Connected journey plus hypothesis-ID serializer fix (#110) | 20627843 | Model-positive run reached report but failed projection; serializer fix unit-tested, no positive-model E2E re-verification |
+| Infrastructure-only diagnostic/evidence corrections (#113,#114) | 4d7d2f60, f19c1153 | Two failed infrastructure runs, partial evidence described below |
+| Narrow chain-counter comparator and evidence persistence correction (#115) | d712b86a | Approved source branch had five normal checks green; offline actual snapshots compare equal; original run still FAILED |
+| PROPOSED offline evidence contract (#116) | 4f3f8576 | Six synthetic unit tests/25 subtests define structural consistency only, no capture/replay/TLS runtime proof |
 
-## Verification status and gaps
+The 42-wheel native proxy closure and disabled standalone code are proposed at
+https://github.com/me5wayecdv/MOBIUS-AI/pull/117 . No installation/import/launch
+has been performed for that slice. See `research/d061_native/README.md` in that
+PR for exact source and remaining technical review, not an activation plan.
 
-- Connected journey (consent -> model hypotheses -> dynamic evidence ->
-  ARCHIVIST report): run as one connected chain in CI, round 1 run
-  44865900582. Mode model_gateway, provenance opencode/deepseek-v4.1-flash-free,
-  5 model hypotheses, approval leg, frida actual=11361, report carrying
-  model_consent_updated and hypotheses_generated events plus poc-result and
-  report evidence.
-- Gap, explicit: the run-bound-to-model-hypothesis projection failed in round
-  1 (serializer omitted hypothesis_ids). The fix (126e0da) is unit-verified
-  (968 tests passed) but NOT re-verified end to end on a model-positive run.
-  No model retries into a pass were or will be performed.
-- Model non-determinism on the free route is an established property: three
-  samples of identical code, route and inputs returned 5, 0, 0 hypotheses
-  (runs 44865900582, 44868837467 attempt 1, 44868837467 attempt 2). Empty
-  output is a legitimate model answer; the harness fails honestly.
-- D-061 traffic capture: NOT established. Earlier strictly-controlled capture
-  could not be proven contained on free runners (see docs merged in #109 and
-  the PR #108 record). A follow-up capability assessment found a plausible
-  contained-lab route (docs/D061_CONTAINED_LAB_ASSESSMENT.md, probe runs
-  44875785657 / 44876090990 / 44876211141); executing it is an unresolved
-  decision. D-061 is blocked pending that decision, not optional and not
-  complete.
+## Connected journey, still incomplete at the original acceptance bar
 
-## Held by the owner (not engineering-blocked)
+- Model-positive round1:
+  https://github.com/me5wayecdv/MOBIUS-AI/actions/runs/44865900582 . GitHub result
+  remains failure. Five hypotheses reached approval, dynamic observation and
+  report stages, but run-to-model-hypothesis projection failed because the
+  serializer omitted hypothesis IDs. The later fix does not retroactively pass
+  that run.
+- Subsequent model samples returned zero hypotheses twice at unchanged route
+  and inputs, alongside the earlier five. Empty answers are legitimate model
+  outputs. The harness fails honestly, no retries into a pass:
+  https://github.com/me5wayecdv/MOBIUS-AI/actions/runs/44868837467 .
+- Unit/baseline success is not evidence that the corrected model-positive
+  connected journey has run end to end. No invented approvals, expected-verdict
+  tuning or seeded hypotheses have been added.
 
-- D-003 owner-host capabilities.
-- Production activation beyond approved experiments.
-- Paid spend, data deletion, key changes.
+## D061 infrastructure evidence, not universal containment
 
-## Genuinely optional (later demo plan, not the original proposal)
+1. First infrastructure-only run:
+   https://github.com/me5wayecdv/MOBIUS-AI/actions/runs/44879445681 . FAILED at
+   4d7d2f60; incomplete diagnostic location and root0700 artifact collection
+   failure. Missing journal/artifacts do not prove no namespace existed.
+2. Second infrastructure-only run:
+   https://github.com/me5wayecdv/MOBIUS-AI/actions/runs/44880833440 . FAILED at
+   f19c1153 because original comparator treated whole-chain iptables numeric
+   counters as semantic changes. The 61-file archive provides narrow evidence
+   for a nonroot/no-capabilities/no-new-privileges IPv4 loopback workload,
+   loopback-only namespace topology, normal tracked-process/name cleanup and
+   working private-artifact collection. IPv6 was inspected, not exercised.
+3. Actual raw before and initial-after0039 as well as fallback-after0048 compare
+   equal offline under the narrowly corrected chain-counter normalization.
+   Fallback overwrote named host-after files; raw command records preserve both.
+   Rule removal/order, ports/protocol/owner/verdict and topology changes remain
+   meaningful. Ten diagnostics tests/32 subtests passed at merged4f3f857.
+4. No third infrastructure run was needed or launched. The original failure
+   remains failure. Offline comparator repair is not new runtime evidence.
 
-- D-062 PDF export: no insufficiency evidence for the current report.
-- D-063 broader app catalogue: scope decision, parked.
-- Action-managed AVD creation/snapshotting: convenience.
-- Allsafe runtime certificate-pinning posture: unverified, remains unknown.
+Socket-cgroup classification and host-counter equality do not prove all-traffic
+containment. Earlier assessment wording suggesting that they do is superseded.
+Inherited descriptors, helper/broker paths, exact process cleanup and complete
+network boundary still need source-specific review. PR112 full harness remains
+held and incomplete: https://github.com/me5wayecdv/MOBIUS-AI/pull/112 .
 
-## Standing limits in force
+## Native capture/replay/TLS frontier
 
-- Free-only route; no bypass of the opencode client gating; no paid keys.
-- No production activation, no new image publication, no GHCR tag or
-  republish, no new repo dependencies.
-- Runtime findings are scoped to the tested target and version.
-- State-changing PoC adapters stay disabled.
-- No expected-verdict tuning, no seeded hypotheses, no invented approvals.
-- Mobius byte-accounting units are conservative budget units, never reported
-  as actual provider usage; provider-reported usage persists separately as
-  provider_reported_*.
+- D061 remains NOT ESTABLISHED. Actual native request-flow capture and replay,
+  independently received request, and appropriate positive/negative TLS tests
+  have not been demonstrated by the proposed contract or dependency lock.
+- A digest binds bytes, not occurrence, authorship or authorization. Synthetic
+  fixture consistency is not evidence of actual capture or TLS capability.
+- PR117's concrete local-only native proposal uses trusted harness profile
+  attribution and pinned actual FlowWriter/FlowReader/client replay API, not a
+  flow-selected profile or hardcoded request reconstruction. It is still
+  disabled and unexecuted, with operational installation/execution hold.
+- Its dependency lock is wheel-only/hash-closed for CPython3.12, Linuxx86_64,
+  glibc>=2.28. Exact runner image/runtime remains unpinned. Dependency resolution
+  and download are not imports, runtime validation or a safety certificate.
+
+## Unchanged limits and unfinished decisions
+
+- Free-only. No production activation, new image publication or GHCR republish.
+- Paid spend, old-data deletion and key changes remain gated.
+- No state-changing PoC adapters or model retries into a desired result.
+- Byte-accounting units are conservative budget units, not provider usage;
+  provider-reported usage stays separately labelled `provider_reported_*`.
+- Owner-host capabilities are outside current execution; do not ask again as a
+  workaround. Held PR66/68 stay held, PR69 stays untouched.
+- D062 PDF export, D063 broader app catalogue and action-managed AVD convenience
+  are later-scope decisions, not replacements for unfinished original work.
+- Allsafe certificate-pinning posture and broader APK capability remain unknown.
+- Routine free technical dependency selection is not a blanket prohibition.
+  Exact installation/toolchain/harness review is still an operational gate.
+
+No whole-project completion claim is supported by these partial results.
