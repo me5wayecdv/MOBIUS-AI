@@ -39,4 +39,8 @@ jobs:
           { printf '%s\n' 'table inet probe_check {'; printf '%s\n' '  chain out {'; printf '%s\n' '    type filter hook output priority 0; policy drop;'; printf '%s\n' '    socket cgroupv2 level 1 "probe.slice" ip daddr 127.0.0.1 tcp dport 9999 accept'; printf '%s\n' '    socket cgroupv2 level 1 "probe.slice" ip6 daddr ::1 tcp dport 9999 accept'; printf '%s\n' '  }'; printf '%s\n' '}'; } > /tmp/probe.nft
           sudo nft --check --file /tmp/probe.nft && echo NFT_CHECK_OK || echo NFT_CHECK_FAILED
           sudo modprobe nft_socket 2>/dev/null && echo MODPROBE_NFT_SOCKET_OK || echo MODPROBE_FAILED_OR_BUILT_IN
+          sudo mkdir -p /sys/fs/cgroup/probe.slice && echo CGROUP_CREATED
+          sudo sh -c 'echo $$ > /sys/fs/cgroup/probe.slice/cgroup.procs' 2>/dev/null && echo CGROUP_WRITABLE || echo CGROUP_NOT_WRITABLE
+          sudo nft --check --file /tmp/probe.nft && echo NFT_CHECK3_OK || echo NFT_CHECK3_FAILED
+          sudo rmdir /sys/fs/cgroup/probe.slice 2>/dev/null || true
           sudo nft --check --file /tmp/probe.nft && echo NFT_CHECK2_OK || echo NFT_CHECK2_FAILED
