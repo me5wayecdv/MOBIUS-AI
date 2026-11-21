@@ -302,3 +302,8 @@ staging, a root-owned run, kernel limit enforcement or the real fault chain. `AP
 Export obligations come from the root-published `control-in/result/result.json` status, never from the payload's
 own control-result before absence. The staged control, execute and DB statuses must agree with it; unknown or
 disagreeing status is an error. `complete_diagnostic_export` and `complete_product_evidence` are distinct.
+
+## Review round on eaa65bc (source corrections, still HELD)
+- Exporter: published/control/execute/DB statuses are whitelisted to the real run states (passed, failed, cancelled, timed_out); unknown strings fail closed. Non-passed published status requires every present record to be a whitelisted non-passed status (host `failed` may stand for any non-passed product state).
+- Watchdog: recover() signals nothing and mutates no root unless the recorded leader identity (pid, pgrp, start ticks) is still authenticated; otherwise UNVERIFIED_session_identity_not_authenticated. scan_roots budgets are aggregate. Lock roles must equal the owned roots exactly and each file entry is schema-checked before any spawn.
+- Claim limits: final scan/hash deadlines are cooperative checks between filesystem operations, NOT a hard wall-clock bound on blocked reads or Popen preexec. Production namespace/cgroup containment, resource caps and outer-owner recovery remain open. Tests use benign children and synthetic roots only.

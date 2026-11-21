@@ -276,7 +276,7 @@ def test_export_failed_run_does_not_require_success_only_files(tmp_path, monkeyp
     assert res['complete_diagnostic_export'] is True and res['complete_product_evidence'] is False
 
 
-@pytest.mark.parametrize('mutate', ['report_bytes', 'db_run_case', 'status_pub_passed_control_failed', 'status_control_missing', 'status_db_failed', 'status_pub_unknown', 'status_pub_failed_control_passed', 'status_readback_identity', 'status_execute_failed', 'missing_object', 'extra_manifest_object', 'readback_link',
+@pytest.mark.parametrize('mutate', ['report_bytes', 'db_run_case', 'status_pub_passed_control_failed', 'status_control_missing', 'status_db_failed', 'status_pub_unknown', 'status_pub_failed_control_passed', 'status_readback_identity', 'status_execute_failed', 'status_pub_bogus', 'status_control_bogus', 'status_failed_path_execute_passed', 'status_failed_path_db_passed', 'missing_object', 'extra_manifest_object', 'readback_link',
                                     'db_evidence_missing_from_manifest', 'wrong_ready', 'apk_swap'])
 def test_export_mismatches_fail_closed(tmp_path, monkeypatch, mutate):
     root, work, owner = _full_root(tmp_path)
@@ -300,6 +300,18 @@ def test_export_mismatches_fail_closed(tmp_path, monkeypatch, mutate):
         rb = json.loads((work / 'api-readback.json').read_text()); rb['investigation_id'] = 'scn_other'; _wjson(work / 'api-readback.json', rb)
     elif mutate == 'status_execute_failed':
         ex = json.loads((work / 'execute-response.json').read_text()); ex['body']['status'] = 'failed'; _wjson(work / 'execute-response.json', ex)
+    elif mutate == 'status_pub_bogus':
+        _wjson(root / 'control-in/result/result.json', {'status': 'bogus'})
+    elif mutate == 'status_control_bogus':
+        _wjson(root / 'control-in/result/result.json', {'status': 'failed'})
+        cr = json.loads((work / 'control-result.json').read_text()); cr['status'] = 'weird'; _wjson(work / 'control-result.json', cr)
+    elif mutate == 'status_failed_path_execute_passed':
+        _wjson(root / 'control-in/result/result.json', {'status': 'failed'})
+        cr = json.loads((work / 'control-result.json').read_text()); cr['status'] = 'failed'; _wjson(work / 'control-result.json', cr)
+    elif mutate == 'status_failed_path_db_passed':
+        _wjson(root / 'control-in/result/result.json', {'status': 'timed_out'})
+        cr = json.loads((work / 'control-result.json').read_text()); cr['status'] = 'timed_out'; _wjson(work / 'control-result.json', cr)
+        ex = json.loads((work / 'execute-response.json').read_text()); ex['body']['status'] = 'timed_out'; _wjson(work / 'execute-response.json', ex)
     elif mutate == 'missing_object':
         h = man['objects'][0]['sha256']
         (work / 'store/apk' / h[:2] / (h + '.apk')).unlink()
@@ -489,8 +501,8 @@ def test_watchdog_parent_death_kills_child_via_pdeathsig(tmp_path):
     (tmp_path / 'lock.bin').write_bytes(lock_bytes)
     (tmp_path / 'parent.py').write_text(
         "import sys\nsys.path.insert(0,%r)\nimport staging_watchdog as w\nw.APPROVED_FOR_EXECUTION=True\n"
-        "w.supervise([sys.executable,%r,%r],%r,role_roots={'runtime':%r},lock_bytes=open(%r,'rb').read(),expected_lock_sha256=%r,record_dir=%r,wall=60)\n"
-        % (str(ROOT), str(tmp_path / 'sleeper.py'), str(pidfile), str(report), str(roots['runtime']), str(tmp_path / 'lock.bin'), lock_sha, str(rec)))
+        "w.supervise([sys.executable,%r,%r],%r,role_roots={'runtime':%r,'control':%r},lock_bytes=open(%r,'rb').read(),expected_lock_sha256=%r,record_dir=%r,wall=60)\n"
+        % (str(ROOT), str(tmp_path / 'sleeper.py'), str(pidfile), str(report), str(roots['runtime']), str(roots['control']), str(tmp_path / 'lock.bin'), lock_sha, str(rec)))
     p = sp.Popen([PY, str(tmp_path / 'parent.py')])
     for _ in range(100):
         if pidfile.exists() and pidfile.read_text():
@@ -643,3 +655,47 @@ def test_without_namespace_a_setsid_escapee_survives_documenting_the_limit(wd, t
         assert wd_state(pid) != 'Z' and Path('/proc/%d' % pid).exists()  # escaped: session containment alone is insufficient
     finally:
         os.kill(pid, sg.SIGKILL)
+
+
+def test_watchdog_lock_role_set_must_equal_roots_and_schema_valid(wd, tmp_path):
+    import hashlib
+    files, roots, lock, lock_bytes, lock_sha, rec, report = _lockset(tmp_path)
+    bad = {'status': lock['status'], 'roles': {'runtime': lock['roles']['runtime'], 'unexpected': lock['roles']['control']}}
+    bb = json.dumps(bad).encode()
+    with pytest.raises(ValueError):
+        wd.supervise([PY, '-c', 'pass'], report, role_roots=roots, lock_bytes=bb, expected_lock_sha256=hashlib.sha256(bb).hexdigest(), record_dir=rec)
+    bad = json.loads(lock_bytes)
+    bad['roles']['control']['files'][0]['sha256'] = 'zz'
+    bb = json.dumps(bad).encode()
+    with pytest.raises(ValueError):
+        wd.supervise([PY, '-c', 'pass'], report, role_roots=roots, lock_bytes=bb, expected_lock_sha256=hashlib.sha256(bb).hexdigest(), record_dir=rec)
+    assert not list(rec.iterdir()) and not any(r.exists() for r in roots.values())
+
+
+def test_scan_roots_budgets_are_aggregate_across_roots(wd, tmp_path):
+    a, b = tmp_path / 'a', tmp_path / 'b'
+    a.mkdir(); b.mkdir()
+    for d in (a, b):
+        (d / 'f1').write_text('xx'); (d / 'f2').write_text('xx')
+    assert wd.scan_roots([a], max_files=3)['files'] == 2
+    with pytest.raises(ValueError):
+        wd.scan_roots([a, b], max_files=3)
+    with pytest.raises(ValueError):
+        wd.scan_roots([a, b], max_bytes=6)
+
+
+def test_recover_refuses_unauthenticated_reused_sid_no_signal_no_mutation(wd, tmp_path):
+    import subprocess as sp
+    rec = tmp_path / 'rec'; rec.mkdir(mode=0o700)
+    root = tmp_path / 'role'; root.mkdir(); (root / 'partial').write_text('x')
+    bystander = sp.Popen([PY, '-c', 'import time;time.sleep(30)'], preexec_fn=os.setsid)
+    try:
+        ident = wd.process_identity(bystander.pid)
+        stale = dict(ident, start_ticks=ident['start_ticks'] + 1)  # recorded identity is of a different (dead) leader
+        (rec / 'stage-watchdog-intent-r9.json').write_text(json.dumps({'roots': {'runtime': str(root)}}))
+        (rec / 'stage-watchdog-progress-r9.json').write_text(json.dumps({'child_identity': stale, 'sid': ident['sid']}))
+        res = wd.recover(rec, 'r9')
+        assert res['state'] == 'UNVERIFIED_session_identity_not_authenticated' and root.exists()
+        assert bystander.poll() is None  # unrelated session was never signalled
+    finally:
+        bystander.kill(); bystander.wait()

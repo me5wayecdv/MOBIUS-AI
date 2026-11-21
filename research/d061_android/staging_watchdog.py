@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import resource
 import secrets
 import select
@@ -159,10 +160,12 @@ def walk_root(root, *, max_files=MAX_OUTPUT_FILES, max_dirs=MAX_OUTPUT_DIRS, max
     return files, dirs, size, entries
 
 
-def scan_roots(roots, **kw):
+def scan_roots(roots, *, max_files=MAX_OUTPUT_FILES, max_dirs=MAX_OUTPUT_DIRS, max_bytes=MAX_OUTPUT_BYTES, **kw):
+    """Budgets are AGGREGATE across all roots: each walk receives only what the earlier roots left."""
     out = {'files': 0, 'dirs': 0, 'bytes': 0, 'absent_roots': []}
     for root in roots:
-        res = walk_root(root, **kw)
+        res = walk_root(root, max_files=max_files - out['files'], max_dirs=max_dirs - out['dirs'],
+                        max_bytes=max_bytes - out['bytes'], **kw)
         if res is None:
             out['absent_roots'].append(str(root))
         else:
@@ -387,8 +390,24 @@ def supervise(argv, report_path, *, role_roots, lock_bytes, expected_lock_sha256
     if hashlib.sha256(lock_bytes).hexdigest() != expected_lock_sha256:
         raise ValueError('lock bytes differ from the reviewed lock identity')
     lock = json.loads(lock_bytes)
-    if lock.get('status') != 'EXACT_REVIEWED_SIBLING_STAGE_LOCK' or set(lock.get('roles', {})) < set(roots):
+    if lock.get('status') != 'EXACT_REVIEWED_SIBLING_STAGE_LOCK' or not isinstance(lock.get('roles'), dict):
         raise ValueError('unresolved or incomplete reviewed lock')
+    if set(lock['roles']) != set(roots):
+        raise ValueError('reviewed lock roles must equal the exact owned roots (missing or unexpected role)')
+    for _role, _m in lock['roles'].items():
+        _files = _m.get('files') if isinstance(_m, dict) else None
+        if not isinstance(_files, list) or not _files:
+            raise ValueError('lock role schema invalid: ' + _role)
+        _seen = set()
+        for _f in _files:
+            if (not isinstance(_f, dict) or not isinstance(_f.get('source'), str) or not _f['source']
+                    or _f['source'].startswith('/') or '..' in _f['source'].split('/') or _f['source'] in _seen
+                    or _f['source'] == 'closure-lock.json'
+                    or not isinstance(_f.get('size'), int) or isinstance(_f.get('size'), bool) or _f['size'] < 0
+                    or not isinstance(_f.get('mode'), int) or isinstance(_f.get('mode'), bool)
+                    or not isinstance(_f.get('sha256'), str) or not re.fullmatch('[0-9a-f]{64}', _f['sha256'])):
+                raise ValueError('lock file entry schema invalid: ' + _role)
+            _seen.add(_f['source'])
     for path in list(roots.values()) + [str(report_path)]:
         if lexists_anchored(path):
             raise ValueError('refusing preexisting stage output (never adopted or quarantined): ' + path)
@@ -484,6 +503,19 @@ def recover(record_dir, attempt):
                   'root_dispositions': [{'state': 'UNVERIFIED_ABSENCE_NO_ROOT_MUTATION'}]}
     else:
         sid = progress['sid']
+        recorded = progress.get('child_identity')
+        current = process_identity(sid) if isinstance(sid, int) else None
+        authentic = (isinstance(recorded, dict) and current is not None and recorded.get('pid') == sid
+                     and current['sid'] == sid and current['pgrp'] == recorded.get('pgrp')
+                     and current['start_ticks'] == recorded.get('start_ticks'))
+        if not authentic:
+            # A bare numeric SID could now name an unrelated session. Without the original leader we cannot
+            # authenticate membership: no signals, no root mutation.
+            result = {'attempt': attempt, 'recovery_id': token, 'sid': sid,
+                      'state': 'UNVERIFIED_session_identity_not_authenticated',
+                      'root_dispositions': [{'state': 'UNVERIFIED_ABSENCE_NO_ROOT_MUTATION'}]}
+            record(record_dir, 'stage-watchdog-recovery-%s-%s.json' % (attempt, token), result)
+            return result
         remaining = kill_session_stable(sid)
         verified = not remaining
         result = {'attempt': attempt, 'recovery_id': token, 'sid': sid,

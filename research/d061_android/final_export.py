@@ -77,19 +77,33 @@ def _db_status(stage,run):
     finally:db.close()
 
 
+# Real terminal run states (poc_runs CHECK constraint / poc_runner): the host may publish 'failed' for any non-passed product state.
+RUN_STATUSES=('passed','failed','cancelled','timed_out')
+def _known(value):return value if isinstance(value,str) and value in RUN_STATUSES else None
+
+
 def check_status(stage,pub_status):
-    """Staged control/execute/DB status must agree with the root-published status (passed-ness), else fail closed."""
+    """Published, staged control, execute and DB statuses must be whitelisted and agree. Mapping: passed requires all passed;
+    a non-passed published status requires every present record to be a whitelisted NON-passed status (host 'failed' may stand
+    for product failed/cancelled/timed_out). Unknown or arbitrary strings fail closed."""
     stage=Path(stage)
+    if _known(pub_status) is None:raise ValueError('published status not in the allowed set')
     want=pub_status=='passed'
     result=json.loads(read(stage/'control/control-result.json',65536))
-    if result.get('status') is None or (result['status']=='passed')!=want:raise ValueError('staged control status disagrees with published result')
-    if want:
-        execute=json.loads(read(stage/'control/execute-response.json',1048576)).get('body',{})
-        if execute.get('status')!='passed':raise ValueError('execute response status disagrees with published result')
-        if _db_status(stage,result.get('run_id'))!='passed':raise ValueError('DB run status disagrees with published result')
-    else:
-        db_status=_db_status(stage,result.get('run_id')) if (stage/'control/mobius.db').exists() else None
-        if db_status=='passed':raise ValueError('DB run status passed while published result is not passed')
+    cs=_known(result.get('status'))
+    if cs is None or (cs=='passed')!=want:raise ValueError('staged control status disagrees with published result')
+    if not want and pub_status!='failed' and cs!=pub_status and cs!='failed':raise ValueError('control status inconsistent with published non-passed status')
+    run=result.get('run_id')
+    exe_path=stage/'control/execute-response.json'
+    if want or exe_path.exists():
+        body=json.loads(read(exe_path,1048576)).get('body',{})
+        es=_known(body.get('status'))
+        if es is None or (es=='passed')!=want:raise ValueError('execute response status disagrees with published result')
+        if run is not None and body.get('run_id') not in (None,run):raise ValueError('execute run identity differs from control result')
+    if want or (stage/'control/mobius.db').exists():
+        ds=_db_status(stage,run)
+        if want and ds!='passed':raise ValueError('DB run status disagrees with published result')
+        if not want and ds is not None and (_known(ds) is None or ds=='passed'):raise ValueError('DB run status disagrees with non-passed published result')
 
 
 def bind_manifest(manifest,stage,pub_status='passed'):
@@ -191,7 +205,7 @@ def export(root,destination,*,owner,absence_checker=check_absent,clock=time.mono
     if 'control' in reached:
         try:
             value=json.loads(read(root/'control-in/result/result.json',65536)).get('status')
-            pub_status=value if isinstance(value,str) and value else None
+            pub_status=_known(value)
         except BaseException:pass
         if pub_status is None:errors.append({'class':'PublishedStatusUnknown'})
     passed=pub_status in (None,'passed')
