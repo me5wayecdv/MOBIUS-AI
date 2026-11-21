@@ -24,14 +24,13 @@ FRIDA_TIMEOUT_SECONDS = 90
 _DETAIL_OUTPUT_BYTES = 4_000
 
 # Fixed observation-only Frida script: count classes loaded in the target
-# process. No user-controlled script ever reaches Frida through this adapter.
+# process. Synchronous enumeration (enumerateLoadedClassesSync) so the count
+# prints during initial script evaluation - the CLI's post-evaluation exit
+# cannot race an async onComplete callback. No user-controlled script ever
+# reaches Frida through this adapter.
 _FRIDA_ENUMERATE_SCRIPT = (
-    "var __mobiusCount = 0;"
     "Java.perform(function () {"
-    "Java.enumerateLoadedClasses({"
-    "onMatch: function () { __mobiusCount++; },"
-    "onComplete: function () { console.log('MOBIUS_CLASSES:' + __mobiusCount); }"
-    "});"
+    "console.log('MOBIUS_CLASSES:' + Java.enumerateLoadedClassesSync().length);"
     "});"
 )
 
@@ -153,9 +152,20 @@ class PhantomEmulatorAdapter:
                 except ValueError:
                     count = None
         if rc != 0 or count is None:
+            # Surface the tool's own first error line for diagnosability
+            # (tool-generated output, never target data).
+            error_line = ""
+            for line in text.splitlines():
+                lowered = line.lower()
+                if "error" in lowered or "failed" in lowered or "exception" in lowered:
+                    error_line = line.strip()[:300]
+                    break
+            detail = f"frida attach/enumeration failed (rc={rc})"
+            if error_line:
+                detail = f"{detail}: {error_line}"
             return EmulatorProbeResult(
                 "frida_enumerate_classes", package, None,
-                f"frida attach/enumeration failed (rc={rc})", text[:_DETAIL_OUTPUT_BYTES],
+                detail, text[:_DETAIL_OUTPUT_BYTES],
             )
         return EmulatorProbeResult(
             "frida_enumerate_classes", package, count,

@@ -53,6 +53,7 @@ class PoCStepResult:
     duration_ms: int
     tool_name: str
     tool_version: str
+    detail: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,11 +136,11 @@ class SafePoCRunner:
                     break
                 step_started = time.monotonic()
                 if plan.target_kind == "lab_apk":
-                    actual, tool, version = self._run_manifest_step(plan, step.action, step.target_ref)
+                    actual, tool, version, detail = self._run_manifest_step(plan, step.action, step.target_ref)
                 elif plan.target_kind == "local_harness":
-                    actual, tool, version = self._run_harness_step(step.action, step.target_ref, step.input_values, context)
+                    actual, tool, version, detail = self._run_harness_step(step.action, step.target_ref, step.input_values, context)
                 elif plan.target_kind == "emulator":
-                    actual, tool, version = self._run_emulator_step(plan, step)
+                    actual, tool, version, detail = self._run_emulator_step(plan, step)
                 else:
                     raise PoCAdapterUnavailable(f"unsupported target kind: {plan.target_kind}")
                 versions.add(f"{tool}/{version}")
@@ -163,7 +164,8 @@ class SafePoCRunner:
                 duration_ms = max(0, int((time.monotonic() - step_started) * 1000))
                 results.append(PoCStepResult(index=index, action=step.action, target_ref=step.target_ref,
                     status="passed" if passed else "failed", passed=passed, actual_value=actual,
-                    expected_value=step.expected_value, duration_ms=duration_ms, tool_name=tool, tool_version=version))
+                    expected_value=step.expected_value, duration_ms=duration_ms, tool_name=tool, tool_version=version,
+                    detail=detail))
                 if duration_ms > step.timeout_seconds * 1000 or time.monotonic() - started_clock > plan.max_duration_seconds:
                     status = "timed_out"
                     break
@@ -267,7 +269,7 @@ class SafePoCRunner:
                     ObservationRow.kind == "fact",
                 ).limit(1)
             ).scalar_one_or_none()
-            return found is not None, "persisted-manifest-observation", "1"
+            return found is not None, "persisted-manifest-observation", "1", "persisted manifest fact lookup"
         if action == "assert_manifest_permission":
             rows = self.session.execute(
                 select(ObservationRow).where(
@@ -276,7 +278,7 @@ class SafePoCRunner:
                 )
             ).scalars()
             declared = any((row.attributes or {}).get("permission") == target_ref for row in rows)
-            return declared, "persisted-manifest-observation", "1"
+            return declared, "persisted-manifest-observation", "1", "persisted manifest fact lookup"
         raise PoCAdapterUnavailable(f"action {action} is not available for lab_apk targets")
 
     @staticmethod
@@ -298,7 +300,7 @@ class SafePoCRunner:
                     "emulator package probes must target the plan's authorized package"
                 )
             result = adapter.probe_package_present(step.target_ref)
-            return result.actual, "phantom-adb", adapter.VERSION
+            return result.actual, "phantom-adb", adapter.VERSION, result.detail
         if step.action == "assert_emulator_provider_rows":
             authority, sep, path = step.target_ref.partition("/")
             if (
@@ -311,14 +313,14 @@ class SafePoCRunner:
                     "within the plan's authorized package"
                 )
             result = adapter.probe_provider_query_rows(authority, path)
-            return result.actual, "phantom-adb", adapter.VERSION
+            return result.actual, "phantom-adb", adapter.VERSION, result.detail
         if step.action == "assert_emulator_frida_classes":
             if step.target_ref != plan.target_package:
                 raise PoCScopeRejected(
                     "emulator instrumentation probes must target the plan's authorized package"
                 )
             result = adapter.probe_frida_enumerate_classes(step.target_ref)
-            return result.actual, "phantom-frida", adapter.VERSION
+            return result.actual, "phantom-frida", adapter.VERSION, result.detail
         raise PoCAdapterUnavailable(f"action {step.action} is not available for emulator targets")
 
     def _run_harness_step(
@@ -334,13 +336,13 @@ class SafePoCRunner:
                 raise PoCAdapterUnavailable(f"local harness is not registered: {target_ref}")
             result = harness(input_values)
             context["last_result"] = result
-            return result, target_ref, self._HARNESS_VERSION
+            return result, target_ref, self._HARNESS_VERSION, "deterministic local harness"
         if action == "assert_local_harness_result":
             result = context.get("last_result")
             if not isinstance(result, dict):
                 raise PoCExecutionError("no local harness result is available to assert")
             actual = result.get(target_ref)
-            return actual, "local-harness-assertion", self._HARNESS_VERSION
+            return actual, "local-harness-assertion", self._HARNESS_VERSION, "deterministic local harness"
         raise PoCAdapterUnavailable(f"action {action} is not available for local_harness targets")
 
     @staticmethod
