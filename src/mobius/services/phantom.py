@@ -1,4 +1,4 @@
-"""PHANTOM emulator adapter (D-060): bounded runtime probes.
+"""PHANTOM emulator adapter (D-060): bounded runtime probes and lifecycle.
 
 A closed set of adb probes against a verified emulator only - physical devices
 are refused before any probe runs. Every invocation is an argv list (never a
@@ -6,11 +6,20 @@ shell string) with a bounded timeout and capped output. adb probes are
 read-only: no install, no delete, no proxy. The optional Frida probe is
 observation-only instrumentation (a fixed enumeration script embedded in this
 module - callers cannot supply scripts), gated upstream by the PoC approval
-flow. An unconfigured environment fails closed with PoCAdapterUnavailable,
+flow.
+
+Target-side lifecycle operations (not probes): bounded boot verification and
+the pinned frida-server lifecycle. start_instrumentation only ever pushes a
+local server binary whose sha256 matches the caller-pinned digest - a
+mismatch fails closed before any device traffic - and only onto the verified
+emulator. stop_instrumentation is the matching idempotent cleanup.
+
+An unconfigured environment fails closed with PoCAdapterUnavailable,
 preserving the pre-adapter behavior.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import subprocess
 import time
@@ -22,7 +31,13 @@ from .poc_runner import PoCAdapterUnavailable
 MAX_OUTPUT_BYTES = 262_144
 PROBE_TIMEOUT_SECONDS = 30
 FRIDA_TIMEOUT_SECONDS = 90
+BOOT_BUDGET_SECONDS = 120
+BOOT_POLL_SECONDS = 5
 _DETAIL_OUTPUT_BYTES = 4_000
+
+# Fixed on-device path for the pinned frida-server binary. The name is fixed
+# so the matching pkill cleanup and pidof verification are unambiguous.
+_SERVER_DEVICE_PATH = "/data/local/tmp/mobius-frida-server"
 
 # Fixed observation-only Frida script: count classes loaded in the target
 # process. Synchronous enumeration (enumerateLoadedClassesSync) so the count
@@ -216,6 +231,73 @@ class PhantomEmulatorAdapter:
             "frida_enumerate_classes", package, count,
             "observation-only frida class enumeration", text[:_DETAIL_OUTPUT_BYTES],
         )
+
+    def wait_for_boot(
+        self,
+        budget_seconds: int = BOOT_BUDGET_SECONDS,
+        poll_seconds: int = BOOT_POLL_SECONDS,
+    ) -> bool:
+        """Bounded boot verification: wait for the device, then poll
+        sys.boot_completed until the budget is exhausted. Returns False on
+        timeout - callers fail closed, never proceed against a device whose
+        boot state is unverified."""
+        self._require_emulator()
+        rc, _ = self._run(self._argv("wait-for-device"))
+        if rc != 0:
+            return False
+        polls = max(1, budget_seconds // poll_seconds)
+        for _ in range(polls):
+            rc, text = self._run(self._argv(
+                "shell", "getprop", "sys.boot_completed"))
+            if rc == 0 and text.strip() == "1":
+                return True
+            time.sleep(poll_seconds)
+        return False
+
+    def start_instrumentation(
+        self, server_path: str, expected_sha256: str
+    ) -> str:
+        """Pinned frida-server lifecycle on the verified emulator: verify the
+        local binary's sha256 against the caller-pinned digest (fail closed
+        before any device traffic on mismatch), push it, and start it.
+        Returns a fixed detail string; raises PoCAdapterUnavailable on any
+        verification or push failure. Target-side setup, not a probe."""
+        self._require_emulator()
+        digest = hashlib.sha256()
+        with open(server_path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                digest.update(chunk)
+        if digest.hexdigest() != expected_sha256.lower():
+            raise PoCAdapterUnavailable(
+                "refusing to push an unverified binary: local server digest "
+                "does not match the pinned sha256"
+            )
+        # adb root is best-effort: expected on userdebug emulator images,
+        # tolerated when already running as root.
+        self._run(self._argv("root"))
+        rc, _ = self._run(self._argv("wait-for-device"))
+        if rc != 0:
+            raise PoCAdapterUnavailable(
+                "device did not return after adb root (bounded wait)"
+            )
+        rc, text = self._run(self._argv(
+            "push", server_path, _SERVER_DEVICE_PATH))
+        if rc != 0:
+            raise PoCAdapterUnavailable(
+                "frida-server push failed (rc=%d)" % rc
+            )
+        self._run(self._argv("shell", "chmod", "755", _SERVER_DEVICE_PATH))
+        self._run(self._argv(
+            "shell", "nohup", _SERVER_DEVICE_PATH,
+            ">/dev/null", "2>&1", "&"))
+        time.sleep(2)
+        rc, text = self._run(self._argv(
+            "shell", "pidof", "mobius-frida-server"))
+        if rc != 0 or not text.strip():
+            raise PoCAdapterUnavailable(
+                "frida-server did not stay up after start (bounded check)"
+            )
+        return "frida-server started on the verified emulator (pinned digest)"
 
     def stop_instrumentation(self) -> str:
         """Best-effort cleanup: stop any frida-server on the verified

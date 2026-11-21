@@ -19,8 +19,12 @@ D-041 currently provides two execution surfaces:
    or proxy capability exists in the adb probes.
 4. **Observation-only Frida instrumentation** (`assert_emulator_frida_classes`),
    enabled only when `MOBIUS_PHANTOM_FRIDA` names a frida CLI binary and a
-   frida-server is already running on the verified emulator (the environment
-   owns the server lifecycle). The script is a fixed class-enumeration
+   frida-server is already running on the verified emulator. The server
+   lifecycle is Mobius-managed: `scripts/phantom_emulator_lifecycle.py`
+   verifies the local server binary against a pinned sha256 (fail closed on
+   mismatch), pushes and starts it on the verified emulator only, and the
+   bounded boot check (`wait-boot`) verifies `sys.boot_completed` first.
+   The enumeration script is a fixed class-enumeration
    literal embedded in the adapter - callers cannot supply scripts. These
    plans must use the `non_destructive` safety class, so they require a
    granted PoC approval and a `stop_emulator_instrumentation` cleanup step,

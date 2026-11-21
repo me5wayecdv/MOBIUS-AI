@@ -25,6 +25,15 @@ echo "== verify pinned digests =="
 echo "d6792d6634a033f048f935f1269179d3c27b859c4c34b1e9e5b008a88375efd9  $APK" | sha256sum -c -
 expect "apk-sha256-pinned" $?
 
+# Lifecycle CLI configuration (same env the adapter uses; exported here so
+# the Mobius-managed boot and server-lifecycle steps run before the API).
+export MOBIUS_PHANTOM_ADB="$(command -v adb)"
+export MOBIUS_PHANTOM_SERIAL="emulator-5554"
+
+echo "== Mobius-managed boot verification =="
+python3 scripts/phantom_emulator_lifecycle.py wait-boot
+expect "emulator-boot-verified" $?
+
 echo "== install and launch lab app =="
 timeout 240 adb -s emulator-5554 install -r "$APK" >"$OUT/install.out" 2>&1
 expect "adb-install" $?
@@ -40,15 +49,13 @@ done
 timeout 15 adb -s emulator-5554 shell pidof infosecadventures.allsafe >"$OUT/app-pid.out" 2>&1
 expect "app-process-running" $?
 
-echo "== start pinned frida-server (ephemeral emulator only) =="
-timeout 30 adb -s emulator-5554 root >"$OUT/adb-root.out" 2>&1 || true
-timeout 60 adb -s emulator-5554 wait-for-device
-timeout 60 adb -s emulator-5554 push "$FRIDA_BIN" /data/local/tmp/mobius-frida-server \
-  >"$OUT/frida-push.out" 2>&1
+echo "== Mobius-managed pinned frida-server lifecycle (ephemeral emulator only) =="
+# The CLI verifies the local binary against this pinned sha256 of the
+# uncompressed frida-server 17.27.4 android-x86_64 before any device traffic.
+python3 scripts/phantom_emulator_lifecycle.py start-server \
+  --server-path "$FRIDA_BIN" \
+  --sha256 "69846bb6e0a554bc776f9e71a57bc03a9af983f8eeec232d5875989e5199a977"
 expect "frida-server-pushed" $?
-timeout 30 adb -s emulator-5554 shell chmod 755 /data/local/tmp/mobius-frida-server
-timeout 15 adb -s emulator-5554 shell "nohup /data/local/tmp/mobius-frida-server >/dev/null 2>&1 &"
-sleep 3
 frida-ps -D emulator-5554 >"$OUT/frida-ps.out" 2>&1
 expect "frida-server-answering" $?
 

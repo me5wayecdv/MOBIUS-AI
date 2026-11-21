@@ -10,12 +10,12 @@ claim here is either CI-verified (run-referenced) or source-grounded
 | Requirement (methodology §7) | Status |
 |---|---|
 | Hardware acceleration | **Satisfied (CI-verified).** KVM on `ubuntu-latest` via the udev rule; three emulator runs completed (44834324180, 44842949369, and the #102 hardened smoke run). |
-| Root / frida-server | **Route exists (source-grounded, not yet CI-verified).** Non-Google-Play emulator images are userdebug builds where `adb root` works; `frida-server` is a standalone binary pushed to the device. Sources: https://frida.re/docs/android/ , https://mas.owasp.org/MASTG/tools/android/MASTG-TOOL-0001/ , https://stackoverflow.com/questions/43923996/adb-root-is-not-working-on-emulator-cannot-run-as-root-in-production-builds |
+| Root / frida-server | **Satisfied (CI-verified).** `adb root`, pinned frida-server 17.27.4 push/start/answer, and observation-only class enumeration (11361 classes on the pinned Allsafe lab build) all completed on the CI emulator: run 44855421235 (32050e6) and post-merge run 44857880298 (93aa0b7). Mobius now owns the lifecycle: `scripts/phantom_emulator_lifecycle.py` verifies the binary against the pinned uncompressed sha256 before any device traffic. |
 | Emulator detection | Expected and recorded, never hidden; AOSP images are trivially detected. A detected instrumentation attempt is itself defensive-posture evidence. |
 | Certificate pinning | Per-app; bypass is a moving target and out of bounded scope. Whether the pinned Allsafe lab build pins is **unverified** (a runtime question, not asserted here). |
 | Play Integrity | **Hard limit.** Cannot pass on an emulator; apps gated by it refuse to run. Lab target unaffected. |
 | Isolation | **Partial.** Ephemeral GitHub runner has no LAN bridge (lateral isolation holds), but job internet egress cannot be disabled on the free route (the job must download the APK and tooling). Acceptable for the public lab target; a real limit for anything else. |
-| Snapshotting / lifecycle | Cold boot per investigation is the de-facto CI posture (ephemeral runner, `disable-animations`, no saved state). Mobius-managed AVD lifecycle (driving `avdmanager`/`emulator` directly instead of the action, snapshot-per-investigation) is feasible on the same free KVM route; **not implemented**. |
+| Snapshotting / lifecycle | Cold boot per investigation remains the de-facto CI posture. Mobius-managed pieces are **implemented**: bounded boot verification and the pinned frida-server lifecycle (above). AVD creation is still action-managed; driving `avdmanager`/`emulator` directly or snapshot-per-investigation remains **not implemented**. |
 
 ## Bounded instrumentation route (Frida-class)
 
@@ -49,10 +49,7 @@ has not been CI-verified.
 
 ## What remains genuinely open
 
-- Frida route: source-grounded but not runtime-verified on this CI emulator
-  image (adb root on the exact `default` API-29 image is expected, not
-  observed).
-- Instrumentation gating decision (above).
 - Allsafe pinning posture: unverified.
-- Mobius-managed emulator lifecycle: feasible, unimplemented.
+- Mobius-managed AVD creation (avdmanager/emulator direct, snapshotting):
+  feasible, unimplemented; AVD creation is action-managed today.
 - Full network isolation: unavailable on free hosted runners.
