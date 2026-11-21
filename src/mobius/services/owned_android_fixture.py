@@ -193,8 +193,20 @@ class OwnedAppAdapter:
             if state.get('complete') is not True or state.get('errors')!=[]:
                 raise ValueError('stage cleanup/absence incomplete '+name)
         wrapper=read('wrapper-cleanup.json');absence=read('independent-absence.json')
-        if (wrapper.get('remaining_namespace_members')!=[] or wrapper.get('jail_absent') is not True
-            or absence.get('stage_required_records_complete') is not True or absence.get('private_material_absent') is not True
+        if wrapper.get('backend') is not None:
+            # Closed backend-aware branch. Jail records carry no tag and keep the jail checks below, untouched.
+            keys=('inspect_not_found','cgroup_unpopulated_or_gone','ns_members_empty','handles_absent','leader_exit_observed')
+            ab=wrapper.get('absence')
+            if (wrapper.get('backend')!='docker' or wrapper.get('role')!='runtime' or wrapper.get('errors')!=[]
+                or wrapper.get('verdict')!='VERIFIED_ABSENT_RECORD' or wrapper.get('container_absent') is not True
+                or not isinstance(ab,dict) or any(ab.get(k) is not True for k in keys)
+                or re.fullmatch('[0-9a-f]{64}',str(wrapper.get('container_id'))) is None
+                or re.fullmatch('[0-9a-f]{32}',str(wrapper.get('run_id'))) is None
+                or 'jail_absent' in wrapper or 'remaining_namespace_members' in wrapper):
+                raise ValueError('docker backend wrapper absence unverified or mixed with jail fields')
+        elif (wrapper.get('remaining_namespace_members')!=[] or wrapper.get('jail_absent') is not True):
+            raise ValueError('independent stage-aware absence unverified')
+        if (absence.get('stage_required_records_complete') is not True or absence.get('private_material_absent') is not True
             or absence.get('remaining_namespace_members')!=[] or absence.get('reverse_mappings')!=[]):
             raise ValueError('independent stage-aware absence unverified')
         collector=read('collector-summary.json')

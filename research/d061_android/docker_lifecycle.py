@@ -273,6 +273,7 @@ def wrapper_record(bound, absence, errors):
     return {'backend': 'docker', 'run_id': bound['run_id'], 'role': bound['role'], 'container_id': bound['container_id'],
             'absence': {k: (absence or {}).get(k) for k in ABSENCE_KEYS}, 'verdict': verdict,
             'container_absent': verdict == 'VERIFIED_ABSENT_RECORD' and not errors, 'errors': list(errors),
+            'complete': verdict == 'VERIFIED_ABSENT_RECORD' and not errors,
             'scope': 'docker_translated_owner_observation_not_daemon_enforcement_proof'}
 
 

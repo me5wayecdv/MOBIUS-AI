@@ -165,12 +165,15 @@ def main():
     def launch_docker(role):
         # Docker backend: the trusted owner module binds identity before release; call sites below keep the same child-like shape.
         import docker_owner,docker_lifecycle
-        spec=owner['docker']   # {'image','mem_mb','pids','cpus','kvm_gid'} from the root-owned owner intent, never from a payload
+        spec=owner['docker']   # {'images':{runtime,control},'mem_mb','pids','cpus','kvm_gid'} from the root-owned owner intent, never from a payload
+        if spec['images']['runtime']==spec['images']['control'] or set(spec['images'])!={'runtime','control'}:raise ValueError('distinct role-bound pinned images required')
         params={k:spec[k] for k in ('mem_mb','pids','cpus')};params['kvm_gid']=spec.get('kvm_gid') if role=='runtime' else None
         proc=docker_owner.HostProc()
         other=docker_owners.get('control' if role=='runtime' else 'runtime')
         sibling=None if other is None else {k:other.bound[k] for k in docker_lifecycle.NS_KEYS}
-        o=docker_owner.RoleOwner(root,role,run_id,spec['image'],params,docker_owner.DockerCli(),proc,sibling_ns=sibling)
+        def lock_loader(r):
+            return json.loads(root_file('/opt/d061-docker-closure/%s/closure-lock.json'%r,16*1024**2))
+        o=docker_owner.RoleOwner(root,role,run_id,spec['images'][role],params,docker_owner.DockerCli(),proc,sibling_ns=sibling,lock_loader=lock_loader)
         docker_owners[role]=o
         handle=o.launch()
         return handle
@@ -201,6 +204,7 @@ def main():
         return child
     def pump():
         producer.pump()
+        for o in docker_owners.values():o.pump()      # continuous bounded attach drain, also during every wait/teardown loop
         stage_request=root/'runtime/work/emulator-stage-request.json'
         if not root_stage['emulator_expected'] and exists(stage_request):
             record=json.loads(read(stage_request,65536))
@@ -313,14 +317,14 @@ def main():
                 result_delivered=True
                 until=time.monotonic()+30
                 while children['control'].poll() is None and time.monotonic()<until:
-                    producer.pump();time.sleep(.05)
+                    pump();time.sleep(.05)
             except BaseException as error:errors.append({'stage':'failed_product_return','class':type(error).__name__})
         try:producer.stop()
         except BaseException as error:errors.append({'stage':'siblings_stop','class':type(error).__name__})
         if backend=='docker':
             for role,o in docker_owners.items():
                 try:
-                    if not exists(root/role/'wrapper-cleanup.json') and role in children:o.cleanup(children[role])
+                    if not exists(root/role/'wrapper-cleanup.json'):o.cleanup(children.get(role))   # covers every post-create state, incl. launches that failed
                 except BaseException as error:errors.append({'stage':role+'_docker_cleanup','class':type(error).__name__})
         for role,child in children.items():
             try:
