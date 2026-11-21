@@ -6,28 +6,36 @@ must hand over; today no such producer exists as reviewed source.
 
 ## A. TLS-negative evidence: producer handoff into `negative_verdict.evaluate`
 
-Evaluator inputs (current source, `negative_verdict.py`): `scenario` (closed set),
-`logcat_text`, `nonce`, `run_id` (canonical string), `app_window{start,end}` (ints, common
-monotonic clock), `capture{year,tz_offset_minutes,device_clock_offset_ms}`,
-`expected_app{pid,uid}`, `build_record`, `premises`, `native_ledger`, `origin_ledger`,
-`proxy_refusal`, `teardown_absence_verified`. The evaluator checks supplied records for
-consistency only. It cannot authenticate any of them.
+Clock domains. Evaluator timestamps (`app_window`, ledger windows, `proxy_refusal.observed_at`, and the
+certificate validity check) are HOST UNIX EPOCH MILLISECONDS. Logcat calendar fields are converted to that
+domain by `capture`. Monotonic time is used only for supervision deadlines, never in evaluator records.
 
-Handoff order each producer owes, and the proof each hand-off needs from its OWN trusted source:
-1. Run owner (outer owner): issues `run_id` and `nonce` before anything starts, in a root-owned record.
-2. Build producer: `build_record` incl. `embedded_anchor_sha256`, `proxy_upstream_trust_sha256`
-   and the exact APK/source sha. Needs the reviewed source/stage lock. Unavailable today.
-3. Certificate originals: canonical DER for trust anchor and presented chain, written by the
-   proxy/origin setup, hashed into the run record before the app starts.
-4. Ledgers: native listener and origin each write `{run_id,scenario,nonce,window_start,window_end,complete,count}`
-   from the root side. Payload self-report is never accepted as ledger.
-5. App window and `expected_app{pid,uid}`: observed by the root-side driver, not by the app.
-6. Logcat capture plus the clock mapping measured by the driver at capture time.
-7. Proxy refusal record `{run_id,scenario,nonce,upstream 127.0.0.1:18443,leaf sha256,reason,observed_at}`.
-8. `teardown_absence_verified` from the independent namespace recovery check, only after the
-   namespace is released.
-Failure rule: any missing producer evidence means the scenario is NOT evaluated, never defaulted.
-A synthetic record passes the predicate and proves nothing about a device.
+Exact current closed schemas (copied from `negative_verdict.py`):
+- `scenario`: one of `untrusted-ca`, `wrong-hostname`, `untrusted-origin`.
+- `nonce`: 32 lowercase hex. `run_id`: `[A-Za-z0-9][A-Za-z0-9._-]{0,63}`, typed str.
+- `capture`: exactly `{year, tz_offset_minutes, device_clock_offset_ms}`, all int; year 2000..2100; |tz|<=840; |offset|<=2000.
+- `expected_app`: exactly `{pid, uid}`, ints, observed independently.
+- `app_window`: exactly `{start, end}`, ints, start<end.
+- `build_record`: exactly `{run_id, scenario, apk_sha256, installed_apk_sha256, embedded_anchor_sha256, proxy_upstream_trust_sha256}`;
+  run_id and scenario equal the run; apk_sha256 == installed_apk_sha256; all hashes 64 lowercase hex. The source/stage lock
+  binding lives in a SEPARATE producer manifest, not in this record.
+- `premises`: `untrusted-ca` and `untrusted-origin`: exactly `{trust_anchor_der, presented_chain_der}`;
+  `wrong-hostname`: exactly `{trust_anchor_der, presented_chain_der, peer_name}`. Canonical DER, pinned fixture profile at `app_window.start`.
+- `native_ledger`, `origin_ledger`: exactly `{run_id, scenario, nonce, window_start, window_end, complete, count}`; complete True; window covers the app window.
+- `proxy_refusal` (required for `untrusted-origin`): exactly `{run_id, scenario, nonce, upstream, upstream_leaf_sha256, reason, observed_at, count}`;
+  upstream is the fixed 127.0.0.1:18443; leaf sha256 equals the presented leaf DER; observed_at inside the app window; count >= 1.
+- `teardown_absence_verified`: supplied by the independent namespace recovery check.
+
+Handoff order each producer owes, each from its OWN trusted source:
+1. Run owner issues `run_id` and `nonce` in a root-owned record before anything starts.
+2. Build producer supplies `build_record` (needs the reviewed source/stage lock; unavailable today).
+3. Certificate originals (DER) are written by the proxy/origin setup and hashed into the run record before the app starts.
+4. Both ledgers are written root-side. Payload self-report is never a ledger.
+5. The app window and `expected_app` are observed by the root-side driver.
+6. Logcat capture plus the clock mapping measured by the driver.
+7. The proxy refusal record (untrusted-origin only).
+8. `teardown_absence_verified` only after the namespace is released.
+A missing producer means the scenario is NOT evaluated. A synthetic record passes the predicate and proves nothing about a device.
 
 ## B. Outer-owner / cgroup lifetime obligations (interface contract, nothing proven)
 
@@ -41,35 +49,42 @@ Not established anywhere yet: that any host delegates cgroup v2 controllers, all
 
 ## C. Benign real-root fault plan (plan only; needs a reviewed run, held)
 
-A reviewed one-shot run on a root-capable host, with no SDK, no APK, no network, no model, only `sleep`-class payloads:
-- F1 Capability check (real, not metadata): create the cgroup leaf and read back limits; try to unshare a PID namespace; record success or errno. Pass criterion: both succeed, else report the exact errno and stop.
-- F2 Normal exit: owner starts a `sleep 1`, absence check per O4 reports verified.
-- F3 Cancel: owner receives its cancel path while a `sleep 60` runs; leaf is killed via `cgroup.kill`; O4 absence verified.
-- F4 SIGKILL of the owner: independent recovery must report UNVERIFIED and send no signals; the owner-held handles then let a second, authenticated owner-successor (if designed) or the runner teardown clean up. Pass criterion: recovery performs NO mutation and leaves a bounded diagnostic.
-- F5 Fork-bomb bound: a payload that forks past `pids.max` is refused by the kernel, the leaf stays intact.
-- F6 Memory bound: a payload exceeding `memory.max` is OOM-killed inside the leaf only.
-- F7 Output: a closed schema of booleans/ints/errno only (see `audience_gate.validate_content` `capability_metadata`), written to a verified private destination, never to the public workflow log.
-Each step records start, end, errno and result. It is one run, not repeated polling.
+Phase 1, benign lifecycle on a root-capable host. No SDK, APK, network or model; `sleep`-class payloads only:
+- F1 Capability check (real, not metadata): create the cgroup leaf and read back limits; unshare a PID namespace. Pass: both succeed, else the errno and stop.
+- F2 Normal exit: owner starts `sleep 1`; absence per O4 verified.
+- F3 Cancel: owner takes its cancel path while `sleep 60` runs; leaf killed via `cgroup.kill`; O4 absence verified.
+- F4 Owner SIGKILL. Owner-held fds close when the owner dies, so they give NO cleanup assurance afterwards. Independent recovery stays UNVERIFIED with no signals and no root mutation.
+  Cleanup is an unresolved external obligation: a reviewed, bounded, independent host-teardown path and a named evidence owner (for example the runner VM teardown or a separately reviewed supervisor). F4 must NOT start until that path is designed and reviewed. A successor that is not yet designed is not cleanup assurance.
+Phase 2, pressure cases, held separately and only after phase 1 is proven:
+- F5 pids bound and F6 memory bound. Each has a finite child and byte ceiling, an outer watchdog with a deadline, and cleanup evidence. They are not sleep-only.
+Output for every step is the closed `fault_result` schema in `audience_gate.validate_content`: `{step in F1..F6, ok bool, errno 0..4095, start_epoch_ms, end_epoch_ms}`.
+No free text. Diagnostics beyond this need a new reviewed closed schema. Written only to a verified private destination, never the public workflow log. One run, no polling.
 
 ## D. Artifact audience and retention (interface)
 
 Repository is PUBLIC. Logs, job summaries, artifacts, PR text and commits are public audiences.
-`audience_gate.py` validates a supplied plan only (`validated_plan_only`), verifies a private
-local directory at use time, and validates content by fixed schema. Retention is declared,
+`audience_gate.py` validates a supplied plan only (`validated_plan_only`), retains a verified private
+directory fd and creates output exclusively relative to it, and validates content SHAPE by fixed schema.
+Shape is not redaction: inventories keep package member paths and link targets, so they are valid only for exact
+pinned official containers and private reporting. `provenance_note` is a fixed constant. Retention is declared,
 not enforced. A creator must also own expiry and deletion follow-through. Internal handoff to main
 is not a publication and needs no new user permission; any public disclosure remains separate.
 
 ## E. Unresolved decision preserved for main (no interpretation made here)
 
 Decision: whether, and on what legal basis, the Android SDK license may be treated as accepted for
-(a) hash-only reading of the six archives and (b) later staging and use of the SDK packages to
-build and run the owned fixture. No acceptance marker or agreement action exists or was created.
-- Governing text for platforms;android-35, build-tools;35.0.0, platform-tools and the stable
-  emulator 37.3.10: license id `android-sdk-license` in
-  https://dl.google.com/android/repository/repository2-3.xml (the `license` element, 16,962 chars).
-- The `android-sdk-preview-license` applies only to the dev-channel emulator 37.4.1, not used.
-- The system image license ref in https://dl.google.com/android/repository/sys-img/android/sys-img2-3.xml
-  was not separately read for this spec and is unverified.
-- Temurin JDK: notice not retrieved; release sidecar and release metadata only.
-- Scope needed for eventual use: the SDK components on a CI runner, for developing and testing the
-  user's own Android fixture app, with outputs kept private.
+(a) hash-only reading of the six archives and (b) later staging and use of the SDK packages to build and run the owned fixture.
+No acceptance marker or agreement action exists or was created.
+- `android-sdk-license` element in https://dl.google.com/android/repository/repository2-3.xml covers platforms;android-35, build-tools;35.0.0,
+  platform-tools and the stable emulator 37.3.10.
+- The system image `system-images;android-29;default;x86_64` r8 (`x86_64-29_r08-linux.zip`) also uses license ref `android-sdk-license` in
+  https://dl.google.com/android/repository/sys-img/android/sys-img2-3.xml. Per the reviewer, that referenced element is dated 2019-01-16;
+  its section 2.1 requires agreement before SDK use, 2.2 describes click acceptance, and 3.5 gives open-source components their own licenses.
+  Do not substitute another currently served terms version for this metadata's actual text.
+- `android-sdk-preview-license` applies only to the dev-channel emulator 37.4.1, which is not used.
+- Temurin JDK 17.0.21.1+2: release-linked build NOTICE.template at commit 8d9fd6fa96e5066571a13823b07c2934e5958d8b declares GPL-2.0 WITH
+  Classpath-exception-2.0 and points Java 9+ users to the installed `legal/` directory. Sources:
+  https://api.github.com/repos/adoptium/temurin17-binaries/releases/tags/jdk-17.0.21.1%2B2 and
+  https://raw.githubusercontent.com/adoptium/temurin-build/8d9fd6fa96e5066571a13823b07c2934e5958d8b/sbin/NOTICE.template.
+  LIMIT: this is build-source notice, NOT the notices packaged inside the exact binary, which remain unread.
+- None of this is a legal determination. Scope for eventual use: the SDK on a CI runner, to build and test the user's own fixture, private outputs.

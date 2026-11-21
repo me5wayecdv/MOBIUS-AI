@@ -16,6 +16,7 @@ from zip_preflight import preflight
 
 APPROVED_FOR_EXECUTION=False
 MAX_FILES=50000;MAX_MEMBER=4*1024**3;MAX_TOTAL=16*1024**3;MAX_LINK=4096
+PROVENANCE_NOTE='hashes of supplied bytes only'
 MAX_CONTAINER=2*1024**3;MAX_OUTPUT=64*1024**2
 LIMITS={'as':3*1024**3,'cpu':900,'wall':1200,'nofile':16}
 
@@ -162,7 +163,7 @@ def _parse(fd,st,expected_sha256,expected_size,ident):
         return {'container_sha256':container,'container_bytes':size,'member_count':len(book.rows),
             'declared_expanded_bytes':book.total,'members':book.rows,'inspection':'data_only_streaming_hash',
             'member_written':False,'package_code_executed':False,'license_accepted':False,
-            'runtime_closure_resolved':False,'provenance_note':'hashes of supplied bytes only'}
+            'runtime_closure_resolved':False,'provenance_note':PROVENANCE_NOTE}
     finally:f.close()
 
 
@@ -188,7 +189,7 @@ def validate_inventory(out,sha256,size):
     if (out['container_sha256']!=sha256 or not is_int(out['container_bytes']) or out['container_bytes']!=size
         or out['inspection']!='data_only_streaming_hash' or out['member_written'] is not False
         or out['package_code_executed'] is not False or out['license_accepted'] is not False
-        or out['runtime_closure_resolved'] is not False or not isinstance(out['provenance_note'],str) or len(out['provenance_note'])>200):raise bad()
+        or out['runtime_closure_resolved'] is not False or out['provenance_note']!=PROVENANCE_NOTE):raise bad()
     rows=out['members']
     if (not isinstance(rows,list) or not is_int(out['member_count']) or out['member_count']!=len(rows) or len(rows)>MAX_FILES
         or not is_int(out['declared_expanded_bytes'])):raise bad()

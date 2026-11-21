@@ -1301,7 +1301,7 @@ def test_member_hash_inspect_anchored_open_and_outer_limits_in_child(tmp_path,mo
     sha=hashlib.sha256(b'z').hexdigest()
     good={'container_sha256':sha,'container_bytes':1,'member_count':1,'declared_expanded_bytes':1,
         'members':[{'path':'a','size':1,'kind':'regular','mode':420,'sha256':sha}],'inspection':'data_only_streaming_hash',
-        'member_written':False,'package_code_executed':False,'license_accepted':False,'runtime_closure_resolved':False,'provenance_note':'x'}
+        'member_written':False,'package_code_executed':False,'license_accepted':False,'runtime_closure_resolved':False,'provenance_note':m.PROVENANCE_NOTE}
     import json as J
     def child(code):return [sys.executable,'-c',code]
     def run(code,**k):return m.run_child('x',sha,1,cmd=child(code),**k)
@@ -1363,6 +1363,7 @@ def test_member_hash_inspect_anchored_open_and_outer_limits_in_child(tmp_path,mo
     # cleanup_verified is part of the closed diagnostic
     with pytest.raises(m.CaptureError) as ce:m.run_child('x',sha,1,cmd=child('print(1)'),_pidfd_open=nopidfd)
     assert ce.value.cleanup_verified in (True,False)
+    assert kind(sch(provenance_note='free text'))=='bad_schema'
     # no group signalling anywhere in the parent
     import inspect as I
     assert 'killpg' not in I.getsource(m)
@@ -1395,18 +1396,34 @@ def test_audience_gate_is_plan_validation_only(monkeypatch,tmp_path):
     with pytest.raises(ValueError):g.check_plan('x')
     # use-time verification of the real filesystem destination
     d=tmp_path/'priv';d.mkdir(mode=0o700);os.chmod(tmp_path,0o700)
-    assert g.verify_private_destination(str(d))
+    dfd=g.open_private_destination(str(d))
+    res=g.write_private(dfd,'inv.json',b'{}',ok)
+    assert res['written_relative_to_verified_fd'] and oct((d/'inv.json').stat().st_mode&0o777)=='0o600'
+    with pytest.raises(FileExistsError):g.write_private(dfd,'inv.json',b'{}',ok)
+    (d/'t').symlink_to('/tmp/x_target')
+    with pytest.raises(OSError):g.write_private(dfd,'t',b'{}',ok)
+    for bad_name in ('../x','a/b','',' x'):
+        with pytest.raises(ValueError):g.write_private(dfd,bad_name,b'{}',ok)
+    with pytest.raises(ValueError):g.write_private(dfd,'o2','str',ok)
+    with pytest.raises(ValueError):g.write_private(dfd,'o3',b'{}',{**ok,'route':'x'})
     os.chmod(d,0o750)
-    with pytest.raises(ValueError):g.verify_private_destination(str(d))
+    with pytest.raises(ValueError):g.write_private(dfd,'o4',b'{}',ok)
+    os.chmod(d,0o700);os.close(dfd)
+    os.chmod(d,0o750)
+    with pytest.raises(ValueError):g.open_private_destination(str(d))
     os.chmod(d,0o700);(tmp_path/'ln').symlink_to(d)
-    with pytest.raises(OSError):g.verify_private_destination(str(tmp_path/'ln'))
+    with pytest.raises(OSError):g.open_private_destination(str(tmp_path/'ln'))
     os.chmod(tmp_path,0o770)
-    with pytest.raises(ValueError):g.verify_private_destination(str(d))
+    with pytest.raises(ValueError):g.open_private_destination(str(d))
     os.chmod(tmp_path,0o700)
     # content validated by schema, never by label
     cap={'euid':0,'kvm_present':True,'kvm_rw':False,'disk_free_bytes':1,'disk_total_bytes':2}
     assert g.validate_content('capability_metadata',cap)==cap
     for bad in ({**cap,'host':'runner-1'},{**cap,'euid':True},{**cap,'disk_free_bytes':-1},{**cap,'kvm_present':'yes'}):
         with pytest.raises(ValueError):g.validate_content('capability_metadata',bad)
+    fr={'step':'F1','ok':True,'errno':0,'start_epoch_ms':1,'end_epoch_ms':2}
+    assert g.validate_content('fault_result',fr)==fr
+    for bad in ({**fr,'step':'F9'},{**fr,'errno':-1},{**fr,'ok':1},{**fr,'end_epoch_ms':0},{**fr,'msg':'x'},{**fr,'errno':True}):
+        with pytest.raises(ValueError):g.validate_content('fault_result',bad)
     with pytest.raises(ValueError):g.validate_content('device_logs',{})
     with pytest.raises(ValueError):g.validate_content('package_hash_inventory',{'members':[]},sha256='0'*64,size=1)
