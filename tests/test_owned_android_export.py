@@ -943,24 +943,86 @@ def _nv():
     return importlib.import_module('negative_verdict')
 
 
+RUN = 'run-1'
+WIN = {'start': 2, 'end': 8}
+_CERTS = {}
+
+
+def _mk(name, issuer=None, sans=None, key=None, ca=True):
+    import datetime
+    import ipaddress
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509.oid import NameOID
+    key = key or ec.generate_private_key(ec.SECP256R1())
+    subj = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, name)])
+    ik, ic = issuer if issuer else (key, None)
+    b = (x509.CertificateBuilder().subject_name(subj).issuer_name(ic.subject if ic else subj).public_key(key.public_key())
+         .serial_number(x509.random_serial_number()).not_valid_before(datetime.datetime(2026, 1, 1))
+         .not_valid_after(datetime.datetime(2030, 1, 1))
+         .add_extension(x509.BasicConstraints(ca=ca, path_length=None), critical=True))
+    if sans is not None:
+        b = b.add_extension(x509.SubjectAlternativeName(sans), critical=False)
+    cert = b.sign(ik, hashes.SHA256())
+    return key, cert
+
+
+def _der(c):
+    from cryptography.hazmat.primitives.serialization import Encoding
+    return c.public_bytes(Encoding.DER)
+
+
+def _pki():
+    if not _CERTS:
+        import ipaddress
+        from cryptography import x509
+        a = _mk('Anchor A')
+        b = _mk('Anchor B')
+        loop = [x509.IPAddress(ipaddress.ip_address('127.0.0.1'))]
+        _CERTS.update(a=a, b=b, leaf_a=_mk('leaf', issuer=a, sans=loop, ca=False), leaf_b=_mk('leaf', issuer=b, sans=loop, ca=False),
+                      wild=_mk('leaf', issuer=a, sans=[x509.DNSName('*.invalid')], ca=False),
+                      dns=_mk('leaf', issuer=a, sans=[x509.DNSName('owned-name-mismatch.invalid')], ca=False),
+                      reissued_b=_mk('Anchor B reissued', key=b[0]))
+    return _CERTS
+
+
+def _sha(b):
+    return hashlib.sha256(b).hexdigest()
+
+
 def _led(sc, count=0, **over):
-    d = {'scenario': sc, 'nonce': NONCE, 'window_start': 1, 'window_end': 9, 'complete': True, 'count': count}
+    d = {'run_id': RUN, 'scenario': sc, 'nonce': NONCE, 'window_start': 1, 'window_end': 9, 'complete': True, 'count': count}
     d.update(over)
     return d
 
 
 def _prem(sc):
+    k = _pki()
     if sc == 'untrusted-ca':
-        return {'embedded_anchor_sha256': 'e' * 64, 'origin_chain_anchor_sha256': 'f' * 64}
+        return {'trust_anchor_der': _der(k['a'][1]), 'presented_chain_der': [_der(k['leaf_b'][1]), _der(k['b'][1])]}
     if sc == 'wrong-hostname':
-        return {'peer_name': 'owned-name-mismatch.invalid', 'presented_cert_names': ['127.0.0.1'], 'chain_anchor_trusted': True}
-    return {'upstream_chain_anchor_sha256': 'e' * 64, 'proxy_upstream_trust_sha256': 'f' * 64}
+        return {'trust_anchor_der': _der(k['a'][1]), 'presented_chain_der': [_der(k['leaf_a'][1]), _der(k['a'][1])],
+                'peer_name': 'owned-name-mismatch.invalid'}
+    return {'trust_anchor_der': _der(k['a'][1]), 'presented_chain_der': [_der(k['leaf_b'][1]), _der(k['b'][1])]}
+
+
+def _build(sc):
+    a = _sha(_der(_pki()['a'][1]))
+    return {'run_id': RUN, 'scenario': sc, 'apk_sha256': 'b' * 64, 'installed_apk_sha256': 'b' * 64,
+            'embedded_anchor_sha256': a, 'proxy_upstream_trust_sha256': a}
+
+
+def _refusal(sc, **over):
+    d = {'run_id': RUN, 'scenario': sc, 'nonce': NONCE, 'upstream': '127.0.0.1:18443',
+         'upstream_leaf_sha256': _sha(_der(_pki()['leaf_b'][1])), 'reason': 'certificate_verify_failed', 'observed_at': 5, 'count': 1}
+    d.update(over)
+    return d
 
 
 def _ev(sc, text, **kw):
-    base = dict(nonce=NONCE, expected_app=dict(APP), build_record={'scenario': sc, 'apk_sha256': 'b' * 64, 'installed_apk_sha256': 'b' * 64},
-                premises=_prem(sc), native_ledger=_led(sc), origin_ledger=_led(sc),
-                proxy_refusal={'scenario': sc, 'nonce': NONCE, 'upstream': '127.0.0.1:18444', 'reason': 'certificate_verify_failed', 'count': 1},
+    base = dict(nonce=NONCE, run_id=RUN, app_window=dict(WIN), expected_app=dict(APP), build_record=_build(sc),
+                premises=_prem(sc), native_ledger=_led(sc), origin_ledger=_led(sc), proxy_refusal=_refusal(sc),
                 teardown_absence_verified=True)
     base.update(kw)
     return _nv().evaluate(sc, text, **base)
@@ -979,7 +1041,8 @@ def test_negative_verdict_untrusted_origin_requires_refusal_and_no_tls():
     ok = _log('PREPARED', 'SOCKET', 'FAILED', fail='IOException')
     assert _ev('untrusted-origin', ok)['passed'] is True
     assert not _ev('untrusted-origin', ok, proxy_refusal=None)['passed']
-    assert not _ev('untrusted-origin', ok, proxy_refusal={'scenario': 'untrusted-origin', 'nonce': 'c' * 32, 'upstream': 'x', 'reason': 'y', 'count': 1})['passed']
+    for bad in ({'nonce': 'c' * 32}, {'upstream': '10.0.0.1:443'}, {'upstream_leaf_sha256': 'e' * 64}, {'observed_at': 50}, {'run_id': 'other'}, {'reason': 'x'}):
+        assert not _ev('untrusted-origin', ok, proxy_refusal=_refusal('untrusted-origin', **bad))['passed'], bad
     assert not _ev('untrusted-origin', _log(*KINDS, fail='IOException'))['passed']
 
 
@@ -1037,13 +1100,30 @@ def _mutated(mutate):
     elif mutate == 'teardown_truthy':
         kw['teardown_absence_verified'] = 1
     elif mutate == 'apk_arbitrary_equal':
-        kw['build_record'] = {'scenario': sc, 'apk_sha256': 'not-a-hash', 'installed_apk_sha256': 'not-a-hash'}
+        kw['build_record'] = dict(_build(sc), apk_sha256='not-a-hash', installed_apk_sha256='not-a-hash')
     elif mutate == 'apk_not_installed':
-        kw['build_record'] = {'scenario': sc, 'apk_sha256': 'b' * 64, 'installed_apk_sha256': 'd' * 64}
+        kw['build_record'] = dict(_build(sc), installed_apk_sha256='d' * 64)
     elif mutate == 'apk_other_scenario':
-        kw['build_record'] = {'scenario': 'wrong-hostname', 'apk_sha256': 'b' * 64, 'installed_apk_sha256': 'b' * 64}
+        kw['build_record'] = dict(_build(sc), scenario='wrong-hostname')
     elif mutate == 'same_anchor':
-        kw['premises'] = {'embedded_anchor_sha256': 'e' * 64, 'origin_chain_anchor_sha256': 'e' * 64}
+        k = _pki()
+        kw['premises'] = {'trust_anchor_der': _der(k['a'][1]), 'presented_chain_der': [_der(k['leaf_a'][1]), _der(k['a'][1])]}
+    elif mutate == 'same_key_reissued_anchor':
+        k = _pki()
+        kw['premises'] = {'trust_anchor_der': _der(k['reissued_b'][1]), 'presented_chain_der': [_der(k['leaf_b'][1]), _der(k['b'][1])]}
+        kw['build_record'] = dict(_build(sc), embedded_anchor_sha256=_sha(_der(k['reissued_b'][1])))
+    elif mutate == 'anchor_not_bound_to_build':
+        kw['build_record'] = dict(_build(sc), embedded_anchor_sha256='9' * 64)
+    elif mutate == 'ledger_disjoint_window':
+        kw['native_ledger'] = _led(sc, 0, window_start=100, window_end=200)
+    elif mutate == 'ledger_ends_before_app':
+        kw['origin_ledger'] = _led(sc, 0, window_start=1, window_end=3)
+    elif mutate == 'ledger_wrong_run':
+        kw['native_ledger'] = _led(sc, 0, run_id='other')
+    elif mutate == 'build_wrong_run':
+        kw['build_record'] = dict(_build(sc), run_id='other')
+    elif mutate == 'no_app_window':
+        kw['app_window'] = None
     return _ev(sc, text, **kw)
 
 
@@ -1051,18 +1131,21 @@ def _mutated(mutate):
                                     'ledger_false', 'ledger_incomplete', 'ledger_wrong_nonce', 'ledger_bad_window', 'wrong_nonce', 'mixed_pid',
                                     'logcat_pid_mismatch', 'unobserved_identity', 'missing_identity', 'missing_nonce', 'wrong_tag',
                                     'not_threadtime', 'duplicate_key', 'refused_marker', 'bad_class', 'missing_begin', 'order', 'no_teardown',
-                                    'teardown_truthy', 'apk_arbitrary_equal', 'apk_not_installed', 'apk_other_scenario', 'same_anchor'])
+                                    'teardown_truthy', 'apk_arbitrary_equal', 'apk_not_installed', 'apk_other_scenario', 'same_anchor',
+                                    'same_key_reissued_anchor', 'anchor_not_bound_to_build', 'ledger_disjoint_window', 'ledger_ends_before_app',
+                                    'ledger_wrong_run', 'build_wrong_run', 'no_app_window'])
 def test_negative_verdict_fails_closed(mutate):
     res = _mutated(mutate)
     assert res['passed'] is False and res['reasons'], mutate
 
 
-@pytest.mark.parametrize('premises', [
-    {'peer_name': 'owned-name-mismatch.invalid', 'presented_cert_names': ['owned-name-mismatch.invalid'], 'chain_anchor_trusted': True},
-    {'peer_name': 'owned-name-mismatch.invalid', 'presented_cert_names': ['127.0.0.1'], 'chain_anchor_trusted': False},
-    {'peer_name': 'other.invalid', 'presented_cert_names': ['127.0.0.1'], 'chain_anchor_trusted': True}])
-def test_wrong_hostname_requires_trusted_chain_and_distinct_name_premise(premises):
-    assert not _ev('wrong-hostname', _log(*KINDS), premises=premises)['passed']
+@pytest.mark.parametrize('leaf', ['wild', 'dns', 'leaf_b'])
+def test_wrong_hostname_refuses_wildcard_dns_and_untrusted_chain(leaf):
+    k = _pki()
+    chain = [_der(k[leaf][1]), _der((k['b'] if leaf == 'leaf_b' else k['a'])[1])]
+    prem = dict(_prem('wrong-hostname'), presented_chain_der=chain)
+    assert not _ev('wrong-hostname', _log(*KINDS), premises=prem)['passed']
+    assert not _ev('wrong-hostname', _log(*KINDS), premises=dict(_prem('wrong-hostname'), peer_name='other.invalid'))['passed']
 
 
 def test_ns_get_parent_eperm_is_indeterminate_unless_own_namespace_proves_outside(wd, monkeypatch):

@@ -72,36 +72,115 @@ def parse(text, expected_pid, expected_uid):
     return rows, problems
 
 
-def _ledger(rec, scenario, nonce):
-    keys = {'scenario', 'nonce', 'window_start', 'window_end', 'complete', 'count'}
-    return (isinstance(rec, dict) and set(rec) == keys and rec['scenario'] == scenario and rec['nonce'] == nonce
-            and rec['complete'] is True and _int(rec['window_start']) and _int(rec['window_end'])
-            and rec['window_start'] < rec['window_end'] and _int(rec['count']))
+EXPECTED_UPSTREAM = '127.0.0.1:18443'  # reviewed fixed origin from README; the proxy refusal record must name exactly this
+REFUSAL_REASONS = {'certificate_verify_failed'}
 
 
-def _premises_problem(scenario, p):
-    if not isinstance(p, dict):
-        return 'premises missing'
-    if scenario == 'untrusted-ca':
-        if set(p) != {'embedded_anchor_sha256', 'origin_chain_anchor_sha256'} or not all(_hex(v) for v in p.values()):
-            return 'untrusted-ca premises malformed'
-        if p['embedded_anchor_sha256'] == p['origin_chain_anchor_sha256']:
-            return 'untrusted-ca premise: embedded anchor must differ from the presented chain anchor'
-    elif scenario == 'wrong-hostname':
-        if set(p) != {'peer_name', 'presented_cert_names', 'chain_anchor_trusted'}:
-            return 'wrong-hostname premises malformed'
-        if (p['peer_name'] != WRONG_PEER.split('"')[1] or not isinstance(p['presented_cert_names'], list)
-                or not p['presented_cert_names'] or p['peer_name'] in p['presented_cert_names'] or p['chain_anchor_trusted'] is not True):
-            return 'wrong-hostname premise: trusted chain required and the peer name must be absent from the certificate names'
-    else:
-        if set(p) != {'upstream_chain_anchor_sha256', 'proxy_upstream_trust_sha256'} or not all(_hex(v) for v in p.values()):
-            return 'untrusted-origin premises malformed'
-        if p['upstream_chain_anchor_sha256'] == p['proxy_upstream_trust_sha256']:
-            return 'untrusted-origin premise: upstream chain anchor must differ from the proxy trust anchor'
+def _certs(blobs, minimum=1):
+    from cryptography import x509
+    if not isinstance(blobs, list) or not minimum <= len(blobs) <= 4 or not all(isinstance(b, bytes) for b in blobs):
+        raise ValueError('bounded DER certificate chain required')
+    out = []
+    for b in blobs:
+        cert = x509.load_der_x509_certificate(b)
+        if cert.public_bytes(_der()) != b:
+            raise ValueError('canonical DER certificate required')
+        out.append(cert)
+    return out
+
+
+def _der():
+    from cryptography.hazmat.primitives.serialization import Encoding
+    return Encoding.DER
+
+
+def _spki(cert):
+    from cryptography.hazmat.primitives.serialization import PublicFormat
+    return cert.public_key().public_bytes(_der(), PublicFormat.SubjectPublicKeyInfo)
+
+
+def _issued_by(child, parent):
+    try:
+        child.verify_directly_issued_by(parent)
+        return True
+    except Exception:
+        return False
+
+
+def _chain_consistent(chain):
+    return all(_issued_by(chain[k], chain[k + 1]) for k in range(len(chain) - 1))
+
+
+def _anchored_by(chain, anchor):
+    """True if the presented chain would be trusted by `anchor`: a member IS the anchor key, or the top is issued by it."""
+    a = _spki(anchor)
+    if any(_spki(c) == a for c in chain):
+        return True
+    return any(_issued_by(c, anchor) for c in chain)
+
+
+def _ca_ok(cert):
+    from cryptography import x509
+    try:
+        return cert.extensions.get_extension_for_class(x509.BasicConstraints).value.ca is True
+    except Exception:
+        return False
+
+
+def _premises_problem(scenario, p, build):
+    """Validates ACTUAL canonical DER certificates and chain relations, not unrelated digest strings."""
+    from cryptography import x509
+    import ipaddress
+    import hashlib
+    try:
+        if not isinstance(p, dict):
+            return 'premises missing'
+        if scenario in ('untrusted-ca', 'untrusted-origin'):
+            keys = {'trust_anchor_der', 'presented_chain_der'}
+            if set(p) != keys:
+                return 'premises malformed'
+            anchor = _certs([p['trust_anchor_der']])[0]
+            chain = _certs(p['presented_chain_der'])
+            if not _ca_ok(anchor) or not _chain_consistent(chain):
+                return 'anchor must be a CA and the presented chain internally consistent'
+            if _anchored_by(chain, anchor):
+                return 'presented chain is anchored by the trust anchor, so refusal would not be an untrusted-chain case'
+            bound = build.get('embedded_anchor_sha256') if scenario == 'untrusted-ca' else build.get('proxy_upstream_trust_sha256')
+            if bound != hashlib.sha256(p['trust_anchor_der']).hexdigest():
+                return 'trust anchor is not the one bound to the build record'
+        else:
+            if set(p) != {'trust_anchor_der', 'presented_chain_der', 'peer_name'}:
+                return 'wrong-hostname premises malformed'
+            anchor = _certs([p['trust_anchor_der']])[0]
+            chain = _certs(p['presented_chain_der'])
+            if not _ca_ok(anchor) or not _chain_consistent(chain) or not _anchored_by(chain, anchor):
+                return 'wrong-hostname requires a consistent chain TRUSTED by the embedded anchor'
+            if build.get('embedded_anchor_sha256') != hashlib.sha256(p['trust_anchor_der']).hexdigest():
+                return 'trust anchor is not the one bound to the build record'
+            if p['peer_name'] != WRONG_PEER.split('"')[1]:
+                return 'peer name must be the reviewed fixed mismatch name'
+            san = chain[0].extensions.get_extension_for_class(x509.SubjectAlternativeName).value
+            names = [n for n in san]
+            # Conservative: ONLY the exact reviewed loopback IP SAN; no DNS names, no wildcards, no other types, no CN fallback.
+            if len(names) != 1 or not isinstance(names[0], x509.IPAddress) or names[0].value != ipaddress.ip_address('127.0.0.1'):
+                return 'leaf SAN must be exactly the reviewed loopback IP'
+    except Exception as error:
+        return 'premise certificate validation failed: ' + error.__class__.__name__
     return None
 
 
-def evaluate(scenario, logcat_text, *, nonce, expected_app, build_record, premises, native_ledger, origin_ledger,
+def _window_ok(rec):
+    return _int(rec.get('window_start')) and _int(rec.get('window_end')) and rec['window_start'] < rec['window_end']
+
+
+def _ledger(rec, scenario, nonce, run_id, app):
+    keys = {'run_id', 'scenario', 'nonce', 'window_start', 'window_end', 'complete', 'count'}
+    return (isinstance(rec, dict) and set(rec) == keys and rec['run_id'] == run_id and rec['scenario'] == scenario
+            and rec['nonce'] == nonce and rec['complete'] is True and _window_ok(rec) and _int(rec['count'])
+            and rec['window_start'] <= app['start'] and rec['window_end'] >= app['end'])
+
+
+def evaluate(scenario, logcat_text, *, nonce, run_id, app_window, expected_app, build_record, premises, native_ledger, origin_ledger,
              proxy_refusal=None, teardown_absence_verified=None):
     if scenario not in CLASSES:
         raise ValueError('closed negative scenario required')
@@ -111,11 +190,18 @@ def evaluate(scenario, logcat_text, *, nonce, expected_app, build_record, premis
     if not (isinstance(expected_app, dict) and set(expected_app) == {'pid', 'uid'} and _int(expected_app['pid']) and _int(expected_app['uid'])):
         reasons.append('independently observed app pid/uid required')
         return {'passed': False, 'reasons': reasons, 'scenario': scenario, 'not_attestation': True}
-    if not (isinstance(build_record, dict) and set(build_record) == {'scenario', 'apk_sha256', 'installed_apk_sha256'}
+    if not (isinstance(app_window, dict) and set(app_window) == {'start', 'end'} and _int(app_window['start'])
+            and _int(app_window['end']) and app_window['start'] < app_window['end']):
+        reasons.append('witnessed app attempt window required')
+        return {'passed': False, 'reasons': reasons, 'scenario': scenario, 'not_attestation': True}
+    bkeys = {'run_id', 'scenario', 'apk_sha256', 'installed_apk_sha256', 'embedded_anchor_sha256', 'proxy_upstream_trust_sha256'}
+    if not (isinstance(build_record, dict) and set(build_record) == bkeys and build_record['run_id'] == run_id
             and build_record['scenario'] == scenario and _hex(build_record['apk_sha256'])
-            and build_record['apk_sha256'] == build_record['installed_apk_sha256']):
-        reasons.append('scenario-bound fresh APK identity (built == installed, exact sha256) required')
-    problem = _premises_problem(scenario, premises)
+            and build_record['apk_sha256'] == build_record['installed_apk_sha256']
+            and _hex(build_record['embedded_anchor_sha256']) and _hex(build_record['proxy_upstream_trust_sha256'])):
+        reasons.append('same-run scenario-bound fresh APK/trust identity (built == installed, exact sha256) required')
+        build_record = build_record if isinstance(build_record, dict) else {}
+    problem = _premises_problem(scenario, premises, build_record)
     if problem:
         reasons.append(problem)
     rows, problems = parse(logcat_text, expected_app['pid'], expected_app['uid'])
@@ -137,17 +223,24 @@ def evaluate(scenario, logcat_text, *, nonce, expected_app, build_record, premis
     if failed and failed[0].get('class') not in CLASSES[scenario]:
         reasons.append('failure class outside the expected refusal for this scenario')
     for name, rec in (('native', native_ledger), ('origin', origin_ledger)):
-        if not _ledger(rec, scenario, nonce):
-            reasons.append('%s ledger must be typed, complete and scenario/nonce/window-bound' % name)
+        if not _ledger(rec, scenario, nonce, run_id, app_window):
+            reasons.append('%s ledger must be typed, complete, same-run, scenario/nonce-bound and cover the witnessed app window' % name)
         elif rec['count'] != 0:
             reasons.append('request reached the %s ledger' % name)
     if scenario == 'untrusted-origin':
-        keys = {'scenario', 'nonce', 'upstream', 'reason', 'count'}
-        if not (isinstance(proxy_refusal, dict) and set(proxy_refusal) == keys and proxy_refusal['scenario'] == scenario
-                and proxy_refusal['nonce'] == nonce and isinstance(proxy_refusal['upstream'], str) and proxy_refusal['upstream']
-                and isinstance(proxy_refusal['reason'], str) and proxy_refusal['reason'] and _int(proxy_refusal['count'])
-                and proxy_refusal['count'] >= 1):
-            reasons.append('typed nonce-bound proxy upstream refusal record required')
+        import hashlib
+        keys = {'run_id', 'scenario', 'nonce', 'upstream', 'upstream_leaf_sha256', 'reason', 'observed_at', 'count'}
+        leaf_ok = False
+        try:
+            leaf_ok = proxy_refusal['upstream_leaf_sha256'] == hashlib.sha256(premises['presented_chain_der'][0]).hexdigest()
+        except Exception:
+            pass
+        if not (isinstance(proxy_refusal, dict) and set(proxy_refusal) == keys and proxy_refusal['run_id'] == run_id
+                and proxy_refusal['scenario'] == scenario and proxy_refusal['nonce'] == nonce
+                and proxy_refusal['upstream'] == EXPECTED_UPSTREAM and proxy_refusal['reason'] in REFUSAL_REASONS
+                and leaf_ok and _int(proxy_refusal['observed_at']) and app_window['start'] <= proxy_refusal['observed_at'] <= app_window['end']
+                and _int(proxy_refusal['count']) and proxy_refusal['count'] >= 1):
+            reasons.append('typed same-run proxy refusal bound to the fixed upstream, presented leaf digest, reason set and app window required')
     if teardown_absence_verified is not True:
         reasons.append('independent teardown absence not verified')
     return {'passed': not reasons, 'reasons': reasons, 'scenario': scenario, 'refusal_reason_established': False,
