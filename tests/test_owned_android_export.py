@@ -639,9 +639,9 @@ def test_pid_namespace_kills_setsid_escapee_that_session_scan_alone_misses(wd, t
         for _ in range(400):
             prog = rec / 'stage-watchdog-progress-ns1.json'
             if esc.exists() and prog.exists():
-                link = json.loads(prog.read_text()).get('pid_namespace')
-                if link and len(wd.ns_members(link)) >= 2:
-                    seen['link'], seen['count'] = link, len(wd.ns_members(link))
+                di = json.loads(prog.read_text()).get('pid_namespace_dev_ino')
+                if di and len(wd.ns_members(di, True)) >= 2:
+                    seen['link'], seen['count'] = di, len(wd.ns_members(di, True))
                     cancel.set()
                     return
             time.sleep(0.05)
@@ -654,11 +654,11 @@ def test_pid_namespace_kills_setsid_escapee_that_session_scan_alone_misses(wd, t
     t.join()
     assert seen.get('count', 0) >= 2, 'start not witnessed: escapee never ran inside the recorded namespace'
     assert r['pid_namespace_containment'] is True and r['killed_reason'] == 'cancelled' and r['absence_verified']
-    assert r['pid_namespace_identity'] == seen['link']
+    assert r['pid_namespace_identity'].startswith('pid:[')
     prog = json.loads((rec / 'stage-watchdog-progress-ns1.json').read_text())
-    assert prog['absence_obligation'] == 'session_and_namespace' and prog['pid_namespace'] == seen['link']
+    assert prog['absence_obligation'] == 'session_and_namespace' and prog['pid_namespace_dev_ino'] == list(seen['link'])
     # exact owned identity: no process anywhere still carries the recorded namespace link
-    assert wd.ns_members(seen['link']) == []
+    assert wd.ns_members(seen['link'], True) == []
 
 
 def _cmdline(pid):
@@ -765,43 +765,160 @@ def test_recover_refuses_unauthenticated_reused_sid_no_signal_no_mutation(wd, tm
         bystander.kill(); bystander.wait()
 
 
-def _mk_export(tmp_path):
+def _mk_export(tmp_path, ctx='ctx', run='r1'):
     import hashlib
-    d = tmp_path / 'exp'
-    (d / 'control').mkdir(parents=True)
-    data = b'hello'
-    (d / 'control' / 'a.txt').write_bytes(data)
-    summary = {'version': 'owned-final-export/1', 'private_candidates_exported': False, 'complete_product_evidence': False,
-               'inventory': [{'path': 'control/a.txt', 'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest()}]}
+    d = tmp_path / ('d061-owned-export-%s-1' % run)
+    (d / 'control').mkdir(parents=True, mode=0o700)
+    os.chmod(d, 0o700)
+    data = b'{"ok":1}'
+    (d / 'control' / 'control-result.json').write_bytes(data)
+    summary = {k: None for k in ('version', 'workflow_context', 'infrastructure_run_id', 'complete', 'complete_diagnostic_export',
+                                 'complete_product_evidence', 'published_status', 'diagnostic_partial_export', 'errors', 'role_absence',
+                                 'inventory', 'total_bytes', 'original_status_not_upgraded', 'private_candidates_exported',
+                                 'cooperative_export_budget_seconds', 'not_cryptographic_attestation')}
+    summary.update(version='owned-final-export/1', workflow_context=ctx, infrastructure_run_id=run, complete=False,
+                   complete_diagnostic_export=False, complete_product_evidence=False, published_status='failed',
+                   diagnostic_partial_export=True, errors=[], role_absence={}, total_bytes=len(data),
+                   original_status_not_upgraded=True, private_candidates_exported=False, cooperative_export_budget_seconds=30,
+                   not_cryptographic_attestation=True,
+                   inventory=[{'path': 'control/control-result.json', 'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest()}])
     (d / 'export-summary.json').write_text(json.dumps(summary))
+    for f in (d / 'control' / 'control-result.json', d / 'export-summary.json'):
+        os.chmod(f, 0o444)
     return d
 
 
-def test_publication_packer_is_held_and_deterministic_and_inventory_exact(tmp_path, monkeypatch):
+def _pp():
+    import importlib
+    import sys as _sys
+    if str(ROOT) not in _sys.path:
+        _sys.path.insert(0, str(ROOT))
+    return importlib.import_module('publication_packer')
+
+
+def _args(d):
+    return dict(expected_dirname=d.name, expected_workflow_context='ctx', expected_run_id='r1')
+
+
+def test_publication_packer_held_deterministic_readable_under_umask_and_cleans_up(tmp_path, monkeypatch):
     import tarfile
-    import importlib.util
-    spec = importlib.util.spec_from_file_location('pp', ROOT / 'publication_packer.py')
-    pp = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(pp)
+    pp = _pp()
     d = _mk_export(tmp_path)
+    out = tmp_path / 'out'
+    out.mkdir(mode=0o700)
     with pytest.raises(RuntimeError):
-        pp.pack(d, tmp_path / 'o.tar')
+        pp.pack(d, out / 'o.tar', **_args(d))
     monkeypatch.setattr(pp, 'APPROVED_FOR_EXECUTION', True)
-    a = pp.pack(d, tmp_path / 'o1.tar')
-    b = pp.pack(d, tmp_path / 'o2.tar')
-    assert a['tar_sha256'] == b['tar_sha256'] and a['files'] == 2
-    with tarfile.open(tmp_path / 'o1.tar') as tf:
+    old = os.umask(0o077)
+    try:
+        a = pp.pack(d, out / 'o1.tar', **_args(d))
+    finally:
+        os.umask(old)
+    b = pp.pack(d, out / 'o2.tar', **_args(d))
+    assert a['tar_sha256'] == b['tar_sha256'] == hashlib.sha256((out / 'o1.tar').read_bytes()).hexdigest()
+    assert (out / 'o1.tar').stat().st_mode & 0o777 == 0o644  # runner-readable even under umask 077
+    assert a['diagnostic_only'] is True and a['product_evidence_export'] is False
+    with tarfile.open(out / 'o1.tar') as tf:
         assert all(m.uid == 0 and m.mode == 0o644 and m.mtime == 0 for m in tf.getmembers())
     with pytest.raises(FileExistsError):
-        pp.pack(d, tmp_path / 'o1.tar')
+        pp.pack(d, out / 'o1.tar', **_args(d))
+    assert sorted(p.name for p in out.iterdir()) == ['o1.tar', 'o2.tar']  # no partial left behind
+
+
+def test_publication_packer_refusals(tmp_path, monkeypatch):
+    pp = _pp()
+    monkeypatch.setattr(pp, 'APPROVED_FOR_EXECUTION', True)
+    out = tmp_path / 'out'
+    out.mkdir(mode=0o700)
+
+    def attempt(d, **over):
+        kw = _args(d)
+        kw.update(over)
+        with pytest.raises((ValueError, FileExistsError, OSError)):
+            pp.pack(d, out / ('x%d.tar' % len(list(out.iterdir()))), **kw)
+        assert not [p for p in out.iterdir() if p.name.endswith('.partial')]
+    d = _mk_export(tmp_path)
+    attempt(d, expected_run_id='other')
+    attempt(d, expected_workflow_context='other')
+    attempt(d, expected_dirname='d061-owned-export-zzz-1')
     (d / 'control' / 'extra').write_text('x')
-    with pytest.raises(ValueError):
-        pp.pack(d, tmp_path / 'o3.tar')
+    attempt(d)
     (d / 'control' / 'extra').unlink()
-    (d / 'control' / 'a.txt').write_bytes(b'HELLO')
-    with pytest.raises(ValueError):
-        pp.pack(d, tmp_path / 'o4.tar')
-    (d / 'control' / 'a.txt').write_bytes(b'hello')
+    os.chmod(d / 'control' / 'control-result.json', 0o644)
+    (d / 'control' / 'control-result.json').write_bytes(b'{"ok":2}')
+    attempt(d)  # tampered vs inventory (same length)
+    (d / 'control' / 'control-result.json').write_bytes(b'{"ok":1}')
+    os.chmod(d / 'control' / 'control-result.json', 0o444)
+    os.chmod(d, 0o755)
+    attempt(d)  # export root not private
+    os.chmod(d, 0o700)
     os.symlink('/etc/passwd', d / 'control' / 'l')
+    attempt(d)
+    (d / 'control' / 'l').unlink()
+    os.mkfifo(d / 'control' / 'fifo')
+    attempt(d)  # FIFO refused by walk, never opened blocking
+    (d / 'control' / 'fifo').unlink()
+
+
+def test_publication_packer_rejects_arbitrary_self_consistent_inventory_and_ancestor_links(tmp_path, monkeypatch):
+    pp = _pp()
+    monkeypatch.setattr(pp, 'APPROVED_FOR_EXECUTION', True)
+    out = tmp_path / 'out'
+    out.mkdir(mode=0o700)
+    d = _mk_export(tmp_path)
+    summary = json.loads((d / 'export-summary.json').read_text())
+    (d / 'control' / 'a.txt').write_bytes(b'hello')
+    summary['inventory'].append({'path': 'control/a.txt', 'bytes': 5, 'sha256': hashlib.sha256(b'hello').hexdigest()})
+    os.chmod(d / 'export-summary.json', 0o644)
+    (d / 'export-summary.json').write_text(json.dumps(summary))
+    os.chmod(d / 'export-summary.json', 0o444)
     with pytest.raises(ValueError):
-        pp.pack(d, tmp_path / 'o5.tar')
+        pp.pack(d, out / 'a.tar', **_args(d))  # self-consistent but outside the exporter's fixed categories
+    assert not (out / 'a.tar').exists()
+    d2 = _mk_export(tmp_path / 'sub') if (tmp_path / 'sub').mkdir() is None else None
+    link = tmp_path / 'viasym'
+    os.symlink(tmp_path / 'sub', link)
+    with pytest.raises(OSError):
+        pp.pack(link / d2.name, out / 'b.tar', **_args(d2))  # ancestor symlink refused
+    os.symlink(tmp_path / 'out', tmp_path / 'outlink')
+    with pytest.raises(OSError):
+        pp.pack(d2, tmp_path / 'outlink' / 'c.tar', **_args(d2))  # output ancestor symlink refused
+
+
+def test_publication_packer_short_read_and_failure_cleanup(tmp_path, monkeypatch):
+    pp = _pp()
+    monkeypatch.setattr(pp, 'APPROVED_FOR_EXECUTION', True)
+    out = tmp_path / 'out'
+    out.mkdir(mode=0o700)
+    d = _mk_export(tmp_path)
+    monkeypatch.setattr(pp, 'MAX_TAR', 100)  # tar construction fails mid-write: no final file, no partial
+    with pytest.raises(ValueError):
+        pp.pack(d, out / 'f.tar', **_args(d))
+    assert list(out.iterdir()) == []
+
+
+@pytest.mark.skipif(not _userns_ok(), reason='unprivileged user+PID namespaces unavailable')
+def test_requested_but_unestablished_namespace_is_unverified_and_never_mutates_roots(wd, tmp_path, monkeypatch):
+    monkeypatch.setattr(wd, 'open_child_pid_ns', lambda pid: None)
+    monkeypatch.setattr(wd, 'NS_ESTABLISH_WAIT', 0.2)
+    r, roots, rec, report = _run(wd, tmp_path, 'ok', 'nsfail', pid_namespace=True, user_namespace=True)
+    assert r['absence_verified'] is False and r['complete'] is False and r['setup_error']
+    assert r['root_dispositions'] == [{'state': 'UNVERIFIED_ABSENCE_NO_ROOT_MUTATION'}]
+
+
+def test_namespace_inspection_error_is_never_absence(wd, monkeypatch):
+    def boom(pid, target):
+        raise wd.NamespaceInspectionError('simulated EACCES')
+    monkeypatch.setattr(wd, '_in_or_under', boom)
+    left = wd.kill_ns_members((0, 0), wait=0.1)
+    assert left and left[0].get('inspection_error')
+
+
+def test_namespace_scan_sees_descendant_namespace_and_handle_holders(wd):
+    # a process that merely holds the namespace link open is an obligation too; use this process's own ns as the target
+    own_fd = os.open('/proc/self/ns/pid', os.O_RDONLY)
+    try:
+        pids = {m['pid'] for m in wd.ns_members(own_fd, True)}
+        assert os.getpid() in pids
+    finally:
+        os.close(own_fd)

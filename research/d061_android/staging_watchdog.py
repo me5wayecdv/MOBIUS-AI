@@ -325,35 +325,129 @@ def validate_stage_lock(lock, roots):
         raise ValueError('aggregate staging declarations exceed session ceiling')
 
 
-def pid_ns_inode(pid):
-    """Inode string of the PID namespace the given process's CHILDREN are created in, or None."""
+NS_GET_PARENT = 0xb702
+NS_ESTABLISH_WAIT = 5.0
+
+
+class NamespaceInspectionError(RuntimeError):
+    """A /proc or namespace inspection could not be completed: absence cannot be claimed."""
+
+
+def open_child_pid_ns(pid):
+    """Open a trusted handle on the PID namespace the process's CHILDREN are created in, or None. The fd keeps it alive."""
     try:
-        return os.readlink('/proc/%d/ns/pid_for_children' % pid)
+        return os.open('/proc/%d/ns/pid_for_children' % pid, os.O_RDONLY | os.O_CLOEXEC)
     except OSError:
         return None
 
 
-def ns_members(ns_link):
-    """Live processes (any state but zombie) whose own PID namespace link equals ns_link."""
+def _ref(ns_ref):
+    if isinstance(ns_ref, int):
+        st = os.fstat(ns_ref)
+        return (st.st_dev, st.st_ino)
+    return tuple(ns_ref)
+
+
+def _stat_ns(path):
+    """(dev, ino) of an nsfs link, None if the process vanished; any other failure is an inspection error."""
+    try:
+        st = os.stat(path)
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+    except OSError as error:
+        raise NamespaceInspectionError('%s: %s' % (path, error.__class__.__name__))
+    return (st.st_dev, st.st_ino)
+
+
+def _in_or_under(pid, target):
+    """True if the process's PID namespace is the target or a DESCENDANT of it (walks NS_GET_PARENT, bounded)."""
+    import fcntl
+    try:
+        fd = os.open('/proc/%d/ns/pid' % pid, os.O_RDONLY | os.O_CLOEXEC)
+    except (FileNotFoundError, ProcessLookupError):
+        return False
+    except OSError as error:
+        raise NamespaceInspectionError('ns/pid open: %s' % error.__class__.__name__)
+    try:
+        for _ in range(33):
+            st = os.fstat(fd)
+            if (st.st_dev, st.st_ino) == target:
+                return True
+            try:
+                parent = fcntl.ioctl(fd, NS_GET_PARENT)
+            except OSError as error:
+                if error.errno == 1:  # EPERM: no visible ancestor, so it is not under the target
+                    return False
+                raise NamespaceInspectionError('NS_GET_PARENT: %s' % error.__class__.__name__)
+            os.close(fd)
+            fd = parent if isinstance(parent, int) else None
+            if fd is None:
+                raise NamespaceInspectionError('NS_GET_PARENT returned no handle')
+        raise NamespaceInspectionError('namespace nesting ceiling')
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+def ns_members(ns_ref, skip_foreign=False):
+    """Obligations for the recorded namespace: live processes in it or any DESCENDANT PID namespace, processes whose
+    pid_for_children points at it, and processes holding an open namespace handle to it. Inspection failures raise
+    NamespaceInspectionError (never silently read as absence)."""
+    target = _ref(ns_ref)
     out = []
     for entry in os.scandir('/proc'):
-        if entry.name.isdigit():
+        if not entry.name.isdigit():
+            continue
+        pid = int(entry.name)
+        if skip_foreign:
+            # ONLY for the unprivileged user-namespace test form: a process of another uid cannot have joined a namespace an
+            # unprivileged user created. Production (root) never sets this, so EACCES stays an inspection error there.
             try:
-                if os.readlink('/proc/%s/ns/pid' % entry.name) != ns_link:
+                if os.stat('/proc/%d' % pid).st_uid != os.geteuid():
                     continue
             except OSError:
                 continue
-            ident = process_identity(int(entry.name))
+        hit = _in_or_under(pid, target)
+        if not hit:
+            hit = _stat_ns('/proc/%d/ns/pid_for_children' % pid) == target
+        if not hit:
+            try:
+                fds = os.listdir('/proc/%d/fd' % pid)
+            except (FileNotFoundError, ProcessLookupError):
+                fds = []
+            except OSError as error:
+                raise NamespaceInspectionError('fd dir: %s' % error.__class__.__name__)
+            for fd in fds:
+                try:
+                    st = os.stat('/proc/%d/fd/%s' % (pid, fd))
+                except (FileNotFoundError, ProcessLookupError):
+                    continue
+                except OSError as error:
+                    raise NamespaceInspectionError('fd stat: %s' % error.__class__.__name__)
+                if (st.st_dev, st.st_ino) == target and pid != os.getpid():
+                    hit = True
+                    break
+        if hit:
+            ident = process_identity(pid)
             if ident and ident['state'] != 'Z':
                 out.append(ident)
     return out
 
 
-def kill_ns_members(ns_link, wait=ABSENCE_WAIT, clock=time.monotonic):
-    """Live-owner only: pidfd-signal every member of the recorded namespace after re-verifying its namespace link and identity."""
+def kill_ns_members(ns_ref, wait=ABSENCE_WAIT, clock=time.monotonic, skip_foreign=False):
+    """Live-owner only. ns_ref is the HELD namespace fd, so the identity cannot be reused while we signal. Each member is
+    pidfd-signalled after its identity is re-verified. Returns remaining obligations; an inspection failure is returned
+    as a remaining obligation (UNVERIFIED), never as absence."""
     deadline = clock() + wait
+    target = _ref(ns_ref)
     while True:
-        members = ns_members(ns_link)
+        try:
+            members = ns_members(target, skip_foreign)
+        except NamespaceInspectionError as error:
+            return [{'pid': -1, 'inspection_error': str(error)[:120]}]
         if not members:
             return []
         for ident in members:
@@ -363,14 +457,17 @@ def kill_ns_members(ns_link, wait=ABSENCE_WAIT, clock=time.monotonic):
                 continue
             try:
                 again = process_identity(ident['pid'])
-                if again and again['start_ticks'] == ident['start_ticks'] and os.readlink('/proc/%d/ns/pid' % ident['pid']) == ns_link:
+                if again and again['start_ticks'] == ident['start_ticks']:
                     signal.pidfd_send_signal(pfd, signal.SIGKILL)
             except (ProcessLookupError, OSError):
                 pass
             finally:
                 os.close(pfd)
         if clock() > deadline:
-            return ns_members(ns_link)
+            try:
+                return ns_members(target, skip_foreign)
+            except NamespaceInspectionError as error:
+                return [{'pid': -1, 'inspection_error': str(error)[:120]}]
         time.sleep(0.02)
 
 
@@ -442,9 +539,13 @@ def quarantine_partial(roots, attempt, uid=None):
     return out
 
 
-def stop_and_reap(child, sid, ns_link=None):
+def stop_and_reap(child, sid, ns_fd=None, skip_foreign=False):
     """Bounded: kill the session via pidfds, verify absence, then reap the leader with a timeout."""
     remaining = kill_session_stable(sid)
+    ns_left = []
+    if ns_fd is not None:
+        # Namespace obligation first, while the leader is still unreaped and the namespace handle is held.
+        ns_left = kill_ns_members(ns_fd, skip_foreign=skip_foreign)
     if child.poll() is None:
         child.kill()  # Popen-guarded kill of the still-unreaped leader (fallback when pidfd signalling failed)
         end = time.monotonic() + ABSENCE_WAIT
@@ -457,10 +558,10 @@ def stop_and_reap(child, sid, ns_link=None):
         code = child.wait(timeout=REAP_WAIT)
     except subprocess.TimeoutExpired:
         remaining = remaining or ['leader_unreaped']
-    if ns_link is not None:
-        # Absence obligation for a namespaced run: every member of the recorded namespace, not just the session.
-        left = kill_ns_members(ns_link)
-        remaining = list(remaining) + [dict(m, ns=True) for m in left]
+    if ns_fd is not None:
+        # Re-check after the reap, still holding the handle; the caller releases it afterwards.
+        ns_left = ns_left or kill_ns_members(ns_fd, skip_foreign=skip_foreign)
+        remaining = list(remaining) + [dict(m, ns=True) for m in ns_left]
     return code, remaining
 
 
@@ -497,24 +598,32 @@ def supervise(argv, report_path, *, role_roots, lock_bytes, expected_lock_sha256
     setup_error = None
     pidfd = None
     ns_link = None
+    ns_fd = None
+    ns_ref = None
     try:
         # ALL post-Popen setup is inside this guard.
         pidfd = os.pidfd_open(child.pid)
         if pid_namespace:
-            own = os.readlink('/proc/self/ns/pid')
-            end = clock() + 5.0
-            while ns_link is None:
-                seen = pid_ns_inode(child.pid)
-                if seen is not None and seen != own:
-                    ns_link = seen
+            own = _ref(os.open('/proc/self/ns/pid', os.O_RDONLY | os.O_CLOEXEC))
+            end = clock() + NS_ESTABLISH_WAIT
+            while ns_fd is None:
+                fd = open_child_pid_ns(child.pid)
+                if fd is not None and _ref(fd) != own:
+                    ns_fd = fd
+                    ns_link = os.readlink('/proc/self/fd/%d' % fd)
+                    ns_ref = _ref(fd)
                 elif clock() > end:
+                    if fd is not None:
+                        os.close(fd)
                     raise RuntimeError('pid namespace identity not established')
                 else:
+                    if fd is not None:
+                        os.close(fd)
                     time.sleep(0.01)
         ident = process_identity(child.pid)
         if ident is None or ident['sid'] != sid:
             raise RuntimeError('child session identity not confirmed')
-        record(record_dir, 'stage-watchdog-progress-%s.json' % attempt, {'attempt': attempt, 'child_identity': ident, 'sid': sid, 'pid_namespace': ns_link, 'absence_obligation': 'session_and_namespace' if ns_link else 'session'})
+        record(record_dir, 'stage-watchdog-progress-%s.json' % attempt, {'attempt': attempt, 'child_identity': ident, 'sid': sid, 'pid_namespace': ns_link, 'pid_namespace_dev_ino': list(ns_ref) if ns_ref else None, 'absence_obligation': 'session_and_namespace' if pid_namespace else 'session'})
         while True:
             if select.select([pidfd], [], [], 0)[0]:
                 break  # leader exited (still unreaped)
@@ -533,7 +642,11 @@ def supervise(argv, report_path, *, role_roots, lock_bytes, expected_lock_sha256
     except BaseException as error:
         setup_error = type(error).__name__ + ':' + str(error)[:120]
         reason = reason or 'supervision_error'
-    code, remaining = stop_and_reap(child, sid, ns_link)
+    code, remaining = stop_and_reap(child, sid, ns_fd, skip_foreign=user_namespace)
+    if ns_fd is not None:
+        os.close(ns_fd)
+    if pid_namespace and ns_ref is None:
+        remaining = list(remaining) + [{'pid': -1, 'namespace_unestablished': True}]  # requested but never established: UNVERIFIED
     if pidfd is not None:
         os.close(pidfd)
     absence_verified = not remaining
