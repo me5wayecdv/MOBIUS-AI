@@ -225,3 +225,34 @@ archive descriptor used to retrieve each member, not a later path-open assumed
 to match a prior hash. This is deliberately conservative and may reread archives;
 no speed claim or staging completion is made. Public intermediate directories use
 explicit fchmod0755 under private umask077; incomplete role roots remain private.
+
+## Scope-bound workflow and bounded staging session correction
+
+The unregistered candidate's recovery step runs only after a trusted per-workflow
+context step succeeds, following the held source/lock gates. That root-owned
+one-shot context binds GitHub run ID, attempt, exact reviewed/source SHA and a
+fresh context ID, before owner invocation. The outer locator carries that exact
+context. Recover-only compares all of it before signaling/cleanup or root attempt
+records. A stale/other-run locator refuses; existence alone triggers nothing.
+A missing locator/launch identity stays unverified failure, not clean absence.
+Mock-only main-entry regression confirms mismatched context has no effects.
+
+Archive leaves open O_NONBLOCK|O_NOFOLLOW then refuse nonregular descriptors.
+Actual synthetic FIFO tests exercise both source inspection and session paths,
+with metadata ownership policy shimmed solely to reach the FIFO type checks.
+Production staging retains one verified immutable container FD and archive
+reader/index for the entire bounded session. Hash occurs once per container;
+materialization checks descriptor identity again and streams exact reviewed
+members. Per-role members process in archive-offset order and duplicate aliases
+share one decompression stream, bounded to16 outputs. Whole session ceilings:
+900 seconds,100000 materialized files,24GiB materialized bytes, independently of
+bounded archive/member declarations. A synthetic three-alias test materializes
+ONLY tiny unit bytes and checks actual0555/0755 modes underumask077 and byte
+accounting. No Google/JDK/SDK archive is extracted or installed by these tests.
+
+Static ELF metadata leads are now recorded for12 pinned archive members using
+ELF headers as data, never ldd or loading/executing the object. Concrete leads:
+d8/apksigner require/bin/bash and invoke shell utilities; emulator ELF requires
+X11 and Qt/pulse-related libraries even though the launch intends no-window and
+no-audio. Flags do not remove DT_NEEDED dependencies. These leads do not resolve
+the transitive host/library/Python/JDK/plugin closure or binary compatibility.

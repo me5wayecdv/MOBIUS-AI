@@ -421,7 +421,7 @@ def test_held_workflow_is_manual_unregistered_and_recovery_always_runs():
     assert set(data.get('on',data.get(True)))=={'workflow_dispatch'}
     steps=data['jobs']['held-owned-android']['steps']
     recovery=[step for step in steps if '--recover-only' in step.get('run','')]
-    assert len(recovery)==1 and recovery[0]['if']=='always()'
+    assert len(recovery)==1 and recovery[0]['if']=="always() && steps.recovery_context.outcome == 'success'"
     assert 'HELD source/build/runtime review missing' in steps[1]['run']
     assert not (ROOT.parents[1]/'.github/workflows/owned-siblings.yml').exists()
     assert not (ROOT/'reviewed-stage-lock.json').exists()
@@ -526,3 +526,177 @@ def test_negative_app_anchor_requires_distinct_public_key_not_only_certificate(m
         prepare(source,positive,scenario='untrusted-ca',negative_public_ca_der=same_key)
     prepared,embedded,record=prepare(source,positive,scenario='untrusted-ca',negative_public_ca_der=negative)
     assert prepared==source and embedded==negative and record['tls_scenario']=='untrusted-ca'
+
+
+def test_static_elf_metadata_is_bounded_data_not_executed(tmp_path,monkeypatch):
+    import struct,pytest
+    monkeypatch.syspath_prepend(str(ROOT))
+    from elf_metadata import inspect
+    assert inspect(b'not an executable')['kind']=='non-ELF'
+    script=inspect(b'#!/bin/sh\nnever executed')
+    assert script['kind']=='script' and not script['object_executed'] and not script['dependency_closure_resolved']
+    data=bytearray(512)
+    identity=b'\x7fELF'+bytes([2,1,1])+bytes(9)
+    struct.pack_into('<16sHHIQQQIHHHHHH',data,0,identity,3,62,1,0,64,0,0,64,56,2,0,0,0)
+    struct.pack_into('<IIQQQQQQ',data,64,1,4,0,0x400000,0,512,512,4096)
+    struct.pack_into('<IIQQQQQQ',data,120,2,4,192,0x4000c0,0,64,64,8)
+    table=b'\x00libunit.so\x00$ORIGIN/unit\x00'
+    struct.pack_into('<qQqQqQqQ',data,192,5,0x400100,10,len(table),1,1,0,0)
+    data[256:256+len(table)]=table
+    result=inspect(bytes(data))
+    assert result['needed']==['libunit.so'] and result['interpreter'] is None
+    assert not result['object_executed'] and not result['dependency_closure_resolved']
+    with pytest.raises(ValueError):inspect(bytes(data[:220]))
+    data[5]=2
+    with pytest.raises(ValueError):inspect(bytes(data))
+
+
+def test_recovery_refuses_other_workflow_attempt_source_or_context_before_effects(monkeypatch):
+    import pytest
+    monkeypatch.syspath_prepend(str(ROOT))
+    import outer_owner
+    env={'GITHUB_RUN_ID':'123','GITHUB_RUN_ATTEMPT':'2','GITHUB_SHA':'a'*40,'REVIEWED_SHA':'a'*40}
+    fields=outer_owner.workflow_fields(env)
+    context={**fields,'context_id':'b'*32,'owner_launch_expected':True}
+    owner={'root':'/opt/d061-owned-android-run-'+'c'*32,'run_id':'c'*32,'workflow_context':context}
+    assert outer_owner.validate_workflow_owner(fields,context,owner)==Path(owner['root'])
+    for key,value in [('workflow_run_id','124'),('workflow_attempt','3'),('reviewed_sha','d'*40),('context_id','e'*32)]:
+        changed={**context,key:value}
+        with pytest.raises(ValueError):outer_owner.validate_workflow_owner(fields,context,{**owner,'workflow_context':changed})
+    with pytest.raises(ValueError):outer_owner.workflow_fields({**env,'GITHUB_SHA':'d'*40})
+    with pytest.raises(ValueError):outer_owner.workflow_fields({**env,'GITHUB_RUN_ID':'../other'})
+    # The recovered root comes only from exact identity equality, not ambient
+    # existence. Missing original identity remains unverified in recovery tests.
+    assert '123-2' in str(outer_owner.workflow_context_path(fields))
+
+
+def test_archive_fifo_rejected_nonblocking_by_both_inspection_and_session(tmp_path,monkeypatch):
+    import os,stat,pytest,time
+    monkeypatch.syspath_prepend(str(ROOT))
+    import stage_archives
+    fifo=tmp_path/'archive-fifo';os.mkfifo(fifo)
+    original_stat=os.fstat;original_open=os.open;opened=[]
+    class RootPolicyOnly:
+        def __init__(self,meta):self.meta=meta
+        @property
+        def st_uid(self):return 0
+        def __getattr__(self,key):return getattr(self.meta,key)
+    # Synthetic ownership shim permits reaching the actual FIFO type/open test;
+    # it does not simulate a root session or make the FIFO a regular file.
+    monkeypatch.setattr(stage_archives.os,'fstat',lambda fd:RootPolicyOnly(original_stat(fd)))
+    def checked_open(path,flags,*args,**kwargs):
+        if path=='archive-fifo':
+            assert flags&os.O_NONBLOCK
+            opened.append(path)
+        return original_open(path,flags,*args,**kwargs)
+    monkeypatch.setattr(stage_archives.os,'open',checked_open)
+    started=time.monotonic()
+    with pytest.raises(ValueError):
+        with stage_archives.member_stream(fifo,'member',1):pass
+    lock={'archives':[{'name':fifo.name,'bytes':1,'sha256':'0'*64}]}
+    with pytest.raises(ValueError):
+        with stage_archives.verify_archives(tmp_path,lock):pass
+    assert len(opened)==2 and time.monotonic()-started<1
+
+
+def test_archive_session_retains_one_verified_fd_hash_and_reader(tmp_path,monkeypatch):
+    import os,zipfile,hashlib
+    monkeypatch.syspath_prepend(str(ROOT))
+    import stage_archives
+    archive=tmp_path/'synthetic.zip'
+    with zipfile.ZipFile(archive,'w') as out:
+        out.writestr('first',b'first unit');out.writestr('second',b'second unit')
+    archive.chmod(0o444)
+    lock={'archives':[{'name':archive.name,'bytes':archive.stat().st_size,'sha256':hashlib.sha256(archive.read_bytes()).hexdigest()}]}
+    original_stat=os.fstat;original_hash=hashlib.sha256;hashes=[]
+    class RootPolicyOnly:
+        def __init__(self,meta):self.meta=meta
+        @property
+        def st_uid(self):return 0
+        def __getattr__(self,key):return getattr(self.meta,key)
+    monkeypatch.setattr(stage_archives.os,'fstat',lambda fd:RootPolicyOnly(original_stat(fd)))
+    def counted_hash(*args,**kwargs):hashes.append(True);return original_hash(*args,**kwargs)
+    monkeypatch.setattr(stage_archives.hashlib,'sha256',counted_hash)
+    with stage_archives.verify_archives(tmp_path,lock) as (archives,budget):
+        container=archives[archive.name];fd=container.source.fileno();reader=container.reader
+        for member,expected in [('first',b'first unit'),('second',b'second unit')]:
+            with container.stream(member,len(expected)) as source:assert source.read()==expected
+            assert container.source.fileno()==fd and container.reader is reader
+        assert len(hashes)==1
+    assert container.source.closed
+
+
+def test_staging_session_aggregate_time_bytes_and_count_caps(monkeypatch):
+    import pytest
+    monkeypatch.syspath_prepend(str(ROOT))
+    import stage_archives
+    now=[0];budget=stage_archives.Budget(clock=lambda:now[0])
+    now[0]=stage_archives.MAX_SECONDS+1
+    with pytest.raises(TimeoutError):budget.check()
+    with pytest.raises(ValueError):stage_archives.Budget().check(files=stage_archives.MAX_FILES+1)
+    with pytest.raises(ValueError):stage_archives.Budget().check(bytes=stage_archives.MAX_BYTES+1)
+
+
+def test_synthetic_stage_aliases_stream_once_with_real_modes_and_byte_accounting(tmp_path,monkeypatch):
+    import os,zipfile,hashlib,stat
+    monkeypatch.syspath_prepend(str(ROOT))
+    import stage_archives
+    archive=tmp_path/'synthetic.zip';content=b'synthetic source bytes, never executable code'
+    with zipfile.ZipFile(archive,'w') as out:out.writestr('same-source',content)
+    archive.chmod(0o444)
+    destinations=['/fixture/contained_driver.py','/runtime/bin/python','/usr/bin/setpriv']
+    rows=[{'source':path.lstrip('/'),'destination':path,'archive':archive.name,'member':'same-source',
+        'size':len(content),'sha256':hashlib.sha256(content).hexdigest(),'mode':0o555} for path in destinations]
+    manifest={'status':'EXACT_REVIEWED_ANDROID_CLOSURE','files':rows}
+    lock={'status':'EXACT_REVIEWED_SIBLING_STAGE_LOCK','sdk_license_reviewed':True,
+        'archives':[{'name':archive.name,'bytes':archive.stat().st_size,'sha256':hashlib.sha256(archive.read_bytes()).hexdigest()}],
+        'roles':{'runtime':manifest}}
+    original_stat=os.fstat
+    class RootPolicyOnly:
+        def __init__(self,meta):self.meta=meta
+        @property
+        def st_uid(self):return 0
+        def __getattr__(self,key):return getattr(self.meta,key)
+    # Only metadata identity policy is mocked. Real byte streaming, filesystem
+    # writes/fsync/chmod and budget accounting operate on tiny synthetic data.
+    monkeypatch.setattr(stage_archives.os,'fstat',lambda fd:RootPolicyOnly(original_stat(fd)))
+    monkeypatch.setattr(stage_archives.os,'geteuid',lambda:0)
+    root=tmp_path/'synthetic-role'
+    monkeypatch.setitem(stage_archives.ROLES,'runtime',(str(root),'/fixture/contained_driver.py'))
+    calls=[];original_stream=stage_archives.Container.stream
+    def counted_stream(self,*args,**kwargs):calls.append(args);return original_stream(self,*args,**kwargs)
+    monkeypatch.setattr(stage_archives.Container,'stream',counted_stream)
+    mask=os.umask(0o077)
+    try:
+        with stage_archives.verify_archives(tmp_path,lock) as (archives,budget):
+            result=stage_archives.stage_role('runtime',lock,archives,budget)
+            assert budget.files==3 and budget.bytes==3*len(content)
+    finally:os.umask(mask)
+    assert len(calls)==1 and result['staging_only_no_code_executed']
+    assert stat.S_IMODE(root.stat().st_mode)==0o755
+    for row in rows:
+        path=root/row['source'];assert path.read_bytes()==content
+        assert stat.S_IMODE(path.stat().st_mode)==0o555
+        assert stat.S_IMODE(path.parent.stat().st_mode)==0o755
+
+
+def test_recover_only_main_stale_workflow_locator_has_no_signal_or_cleanup(tmp_path,monkeypatch):
+    import pytest,sys
+    monkeypatch.syspath_prepend(str(ROOT))
+    import outer_owner
+    fields={'workflow_run_id':'123','workflow_attempt':'2','reviewed_sha':'a'*40}
+    context={**fields,'context_id':'b'*32,'owner_launch_expected':True}
+    stale={'root':'/opt/d061-owned-android-run-'+'c'*32,'run_id':'c'*32,
+        'workflow_context':{**context,'workflow_attempt':'1'},'relay_identity':{'synthetic':True}}
+    monkeypatch.setattr(outer_owner,'APPROVED_FOR_EXECUTION',True)
+    monkeypatch.setattr(outer_owner.os,'geteuid',lambda:0)
+    monkeypatch.setattr(sys,'argv',['outer_owner.py','--recover-only'])
+    monkeypatch.setattr(outer_owner,'workflow_fields',lambda env:fields)
+    monkeypatch.setattr(outer_owner,'trusted_context',lambda f:context)
+    monkeypatch.setattr(outer_owner,'read',lambda *args:json.dumps(stale).encode())
+    effects=[]
+    monkeypatch.setattr(outer_owner,'terminate',lambda *args,**kwargs:effects.append('signal'))
+    monkeypatch.setattr(outer_owner,'recover',lambda *args,**kwargs:effects.append('cleanup'))
+    monkeypatch.setattr(outer_owner,'json_write',lambda *args,**kwargs:effects.append('write'))
+    with pytest.raises(ValueError,match='different workflow'):outer_owner.main()
+    assert not effects

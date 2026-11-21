@@ -22,6 +22,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Refuse before downloads, installation or privileged effects unless exact source is reviewed
+        id: source_gate
         env:
           REVIEWED_SHA: ${{ inputs.reviewed_sha }}
         run: |
@@ -49,20 +50,27 @@ jobs:
           test -f /opt/d061-owned-reviewed-source/source-manifest.json
           test -f /opt/d061-android-closure/closure-lock.json
           test -f /opt/d061-control-closure/closure-lock.json
+      - name: Bind trusted per-workflow recovery intent after gates, before owner invocation
+        id: recovery_context
+        env:
+          REVIEWED_SHA: ${{ inputs.reviewed_sha }}
+        run: |
+          sudo --preserve-env=GITHUB_RUN_ID,GITHUB_RUN_ATTEMPT,GITHUB_SHA,REVIEWED_SHA python /opt/d061-owned-reviewed-source/outer_owner.py --prepare-workflow-context
       - name: One fixed owned fixture owner, not an unrestricted emulator action
         id: owned
+        env:
+          REVIEWED_SHA: ${{ inputs.reviewed_sha }}
         run: |
-          sudo python /opt/d061-owned-reviewed-source/outer_owner.py
+          sudo --preserve-env=GITHUB_RUN_ID,GITHUB_RUN_ATTEMPT,GITHUB_SHA,REVIEWED_SHA python /opt/d061-owned-reviewed-source/outer_owner.py
       - name: Independent exact-locator recovery, even when owner fails or is cancelled
-        if: always()
+        if: always() && steps.recovery_context.outcome == 'success'
         timeout-minutes: 3
+        env:
+          REVIEWED_SHA: ${{ inputs.reviewed_sha }}
         run: |
-          if sudo test -f /opt/d061-owned-android-owner.json; then
-            # recover-only writes UNIQUE attempt/absence records on every call,
-            # preserving prior normal-owner recovery and all original failures.
-            timeout --signal=TERM --kill-after=10s 120s sudo python /opt/d061-owned-reviewed-source/outer_owner.py --recover-only
-          else
-            echo 'Outer owner locator not reached; no cleanup success asserted.'
-          fi
+          # Per-run context and owner locator must match exact run/attempt/SHA.
+          # Missing identity/locator remains UNVERIFIED. Never act on existence
+          # alone and never overwrite earlier original cleanup/failure evidence.
+          timeout --signal=TERM --kill-after=10s 120s sudo --preserve-env=GITHUB_RUN_ID,GITHUB_RUN_ATTEMPT,GITHUB_SHA,REVIEWED_SHA python /opt/d061-owned-reviewed-source/outer_owner.py --recover-only
       # No broad artifact upload from runtime work/build/home is safe. Reviewed
       # allowlisted exporter/archive publication remains a concrete source gap.

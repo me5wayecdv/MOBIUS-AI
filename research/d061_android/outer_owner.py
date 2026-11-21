@@ -23,6 +23,57 @@ LOCATOR=Path('/opt/d061-owned-android-owner.json')
 CLEAN={'PATH':'/usr/sbin:/usr/bin:/sbin:/bin','HOME':'/nonexistent','LANG':'C.UTF-8'}
 
 
+def workflow_fields(env):
+    import re
+    run=env.get('GITHUB_RUN_ID','');attempt=env.get('GITHUB_RUN_ATTEMPT','')
+    reviewed=env.get('REVIEWED_SHA','');actual=env.get('GITHUB_SHA','')
+    if re.fullmatch('[1-9][0-9]{0,19}',run) is None or re.fullmatch('[1-9][0-9]{0,5}',attempt) is None:
+        raise ValueError('exact workflow run/attempt required')
+    if re.fullmatch('[0-9a-f]{40}',reviewed) is None or reviewed!=actual:
+        raise ValueError('workflow source SHA must equal reviewed SHA')
+    return {'workflow_run_id':run,'workflow_attempt':attempt,'reviewed_sha':reviewed}
+
+
+def workflow_context_path(fields):
+    return Path('/opt')/('d061-owned-context-'+fields['workflow_run_id']+'-'+fields['workflow_attempt']+'.json')
+
+
+def trusted_context(fields):
+    path=workflow_context_path(fields)
+    from handoff_io import parent_fd
+    import stat
+    with parent_fd(path) as (parent,leaf):
+        fd=os.open(leaf,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=parent)
+        try:
+            meta=os.fstat(fd)
+            if not stat.S_ISREG(meta.st_mode) or meta.st_uid!=0 or meta.st_mode&0o222 or meta.st_size>65536:
+                raise ValueError('immutable root-owned per-workflow context required')
+            with os.fdopen(fd,'rb',closefd=False) as stream:data=stream.read(65537)
+            if len(data)>65536:raise ValueError('workflow context grew beyond limit')
+        finally:os.close(fd)
+    context=json.loads(data)
+    if any(context.get(key)!=value for key,value in fields.items()) or context.get('owner_launch_expected') is not True:
+        raise ValueError('workflow launch context differs')
+    import re
+    if not isinstance(context.get('context_id'),str) or re.fullmatch('[0-9a-f]{32}',context['context_id']) is None:
+        raise ValueError('exact per-workflow context identity required')
+    return context
+
+
+def validate_workflow_owner(fields,context,owner):
+    # Refuse stale/other-run locators BEFORE signals, cleanup or attempt records.
+    if any(context.get(key)!=value for key,value in fields.items()):raise ValueError('workflow context differs')
+    if context.get('owner_launch_expected') is not True or owner.get('workflow_context')!=context:
+        raise ValueError('owner belongs to a different workflow run/attempt/source')
+    import re
+    if not isinstance(owner.get('run_id'),str) or re.fullmatch('[0-9a-f]{32}',owner['run_id']) is None:
+        raise ValueError('exact owner run ID required')
+    root=Path(owner['root'])
+    if root.parent!=Path('/opt') or root.name!='d061-owned-android-run-'+owner['run_id']:
+        raise ValueError('exact independent recovery locator differs')
+    return root
+
+
 def terminate(record,seconds=10):
     # Identity before and after pidfd open, never signal a reused numeric PID.
     try:
@@ -81,19 +132,30 @@ def main():
     if not APPROVED_FOR_EXECUTION:raise SystemExit('HELD exact complete outer/relay/closure review required')
     if os.geteuid()!=0:raise RuntimeError('disposable CI root owner only')
     import argparse
-    parser=argparse.ArgumentParser();parser.add_argument('--recover-only',action='store_true');args=parser.parse_args()
+    parser=argparse.ArgumentParser()
+    action=parser.add_mutually_exclusive_group()
+    action.add_argument('--recover-only',action='store_true')
+    action.add_argument('--prepare-workflow-context',action='store_true')
+    args=parser.parse_args()
+    fields=workflow_fields(os.environ)
+    if args.prepare_workflow_context:
+        # Called by a fixed trusted workflow step ONLY after exact source/lock
+        # gates pass, before invoking the owner. One shot, no ambient recovery.
+        context={**fields,'context_id':secrets.token_hex(16),'owner_launch_expected':True,
+            'stage':'before_owner_invocation','not_owner_permission':True}
+        json_write(workflow_context_path(fields),context)
+        return
+    context=trusted_context(fields)
     if args.recover_only:
         owner=json.loads(read(LOCATOR,65536))
-        root=Path(owner['root'])
-        if root.parent!=Path('/opt') or root.name!='d061-owned-android-run-'+owner['run_id']:
-            raise ValueError('exact independent recovery locator differs')
+        root=validate_workflow_owner(fields,context,owner)
         result=recover(root,relay_identity=owner.get('relay_identity'))
         if not result['complete']:raise RuntimeError('independent outer recovery incomplete')
         return
     os.umask(0o077);run_id=secrets.token_hex(16);provisioning_id=secrets.token_hex(16)
     root=Path('/opt')/('d061-owned-android-run-'+run_id)
     owner={'version':'owned-android-owner/1','run_id':run_id,'provisioning_id':provisioning_id,
-        'root':str(root),'owner_identity':process_identity(os.getpid()),'stage':'before_root_creation',
+        'root':str(root),'workflow_context':context,'owner_identity':process_identity(os.getpid()),'stage':'before_root_creation',
         'relay_launch_expected':False,'relay_identity':None}
     # Exact external locator created BEFORE the run-root or any relay effect.
     # One-shot publication refuses another active owner, never silently replaces.
