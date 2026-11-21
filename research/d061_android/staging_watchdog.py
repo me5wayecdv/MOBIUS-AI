@@ -345,7 +345,11 @@ def stop_and_reap(child, sid):
     remaining = kill_session_stable(sid)
     if child.poll() is None:
         child.kill()  # Popen-guarded kill of the still-unreaped leader (fallback when pidfd signalling failed)
-        remaining = [m for m in session_members(sid)] if remaining else remaining
+        end = time.monotonic() + ABSENCE_WAIT
+        remaining = session_members(sid)
+        while remaining and time.monotonic() < end:
+            time.sleep(0.02)
+            remaining = session_members(sid)
     code = None
     try:
         code = child.wait(timeout=REAP_WAIT)
