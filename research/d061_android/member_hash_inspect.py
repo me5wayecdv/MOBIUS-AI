@@ -10,12 +10,13 @@ Outer limits are applied before the archive is opened: RLIMIT_AS/CPU/FSIZE/NOFIL
 and a wall-clock alarm. Requires the reviewed APPROVED flag to run as a CLI.
 Caller must still pin expected container sha256/size from committed candidates.
 """
-import argparse,hashlib,json,os,resource,signal,stat,sys,tarfile,zipfile
+import argparse,hashlib,json,os,re,resource,select,signal,stat,subprocess,sys,tarfile,time,zipfile
 from pathlib import PurePosixPath
 from zip_preflight import preflight
 
 APPROVED_FOR_EXECUTION=False
 MAX_FILES=50000;MAX_MEMBER=4*1024**3;MAX_TOTAL=16*1024**3;MAX_LINK=4096
+MAX_CONTAINER=2*1024**3;MAX_OUTPUT=64*1024**2
 LIMITS={'as':3*1024**3,'cpu':900,'wall':1200,'nofile':16}
 
 
@@ -69,9 +70,50 @@ class Book:
         self.rows.append(row);return row
 
 
-def inspect_fd(fd,expected_sha256=None,expected_size=None):
-    st=os.fstat(fd)
-    if not stat.S_ISREG(st.st_mode):raise ValueError('regular file fd required')
+def identity(st):
+    return (st.st_dev,st.st_ino,st.st_size,st.st_mtime_ns,st.st_ctime_ns,st.st_nlink,st.st_uid,st.st_mode)
+
+
+def open_anchored(path):
+    """Every component opened with O_NOFOLLOW from '/'; every directory and the
+    leaf must be owned by root or the effective user and not group/other writable."""
+    path=os.fspath(path)
+    if not path.startswith('/') or '//' in path or '\x00' in path:raise ValueError('absolute canonical path required')
+    parts=[x for x in path.split('/') if x]
+    if not parts or any(x in ('.','..') for x in parts):raise ValueError('canonical path required')
+    cur=os.open('/',os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC)
+    try:
+        for i,part in enumerate(parts):
+            last=i==len(parts)-1
+            flags=os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC|(os.O_NONBLOCK if last else os.O_DIRECTORY)
+            nxt=os.open(part,flags,dir_fd=cur);os.close(cur);cur=nxt
+            st=os.fstat(cur)
+            sticky_root=stat.S_ISDIR(st.st_mode) and st.st_mode&stat.S_ISVTX and st.st_uid==0
+            if st.st_uid not in (0,os.geteuid()) or (st.st_mode&0o022 and not sticky_root):raise ValueError('immutable-owner/mode required on every component')
+        if not stat.S_ISREG(os.fstat(cur).st_mode) or os.fstat(cur).st_nlink!=1:raise ValueError('single-link regular file required')
+        out=cur;cur=None;return out
+    finally:
+        if cur is not None:os.close(cur)
+
+
+def inspect_fd(fd,expected_sha256,expected_size):
+    if not (isinstance(expected_sha256,str) and re.fullmatch('[0-9a-f]{64}',expected_sha256)):raise ValueError('pinned canonical sha256 required')
+    if not (isinstance(expected_size,int) and not isinstance(expected_size,bool) and 0<expected_size<=MAX_CONTAINER):raise ValueError('pinned bounded size required')
+    st=os.fstat(fd);ident=identity(st)
+    if not stat.S_ISREG(st.st_mode) or st.st_size!=expected_size:raise ValueError('regular file of pinned size required')
+    h=hashlib.sha256();n=0;off=0
+    while n<expected_size+1:
+        d=os.pread(fd,1048576,off)
+        if not d:break
+        n+=len(d);off+=len(d);h.update(d)
+        if n>expected_size:raise ValueError('container larger than pinned size')
+    if n!=expected_size or h.hexdigest()!=expected_sha256:raise ValueError('container differs from pinned sha256/size BEFORE parsing')
+    if identity(os.fstat(fd))!=ident:raise ValueError('input changed during pre-hash')
+    try:return _parse(fd,st,expected_sha256,expected_size,ident)
+    finally:pass
+
+
+def _parse(fd,st,expected_sha256,expected_size,ident):
     f=os.fdopen(os.dup(fd),'rb');book=Book()
     try:
         head=f.read(4);f.seek(0)
@@ -115,8 +157,8 @@ def inspect_fd(fd,expected_sha256=None,expected_size=None):
             hr.drain();container=hr.h.hexdigest();size=hr.n
         else:raise ValueError('unsupported container')
         if size!=st.st_size:raise ValueError('container size changed during read')
-        if expected_sha256 and container!=expected_sha256:raise ValueError('container sha256 differs from pinned value')
-        if expected_size is not None and size!=expected_size:raise ValueError('container size differs from pinned value')
+        if container!=expected_sha256 or size!=expected_size:raise ValueError('container differs from pinned value during parse')
+        if identity(os.fstat(fd))!=ident:raise ValueError('input changed during parse')
         return {'container_sha256':container,'container_bytes':size,'member_count':len(book.rows),
             'declared_expanded_bytes':book.total,'members':book.rows,'inspection':'data_only_streaming_hash',
             'member_written':False,'package_code_executed':False,'license_accepted':False,
@@ -124,12 +166,39 @@ def inspect_fd(fd,expected_sha256=None,expected_size=None):
     finally:f.close()
 
 
+def run_child(path,sha256,size,*,wall=1300,python=sys.executable):
+    """Parent: spawn the held CLI, capture stdout through a bounded pipe with a
+    deadline. Anything but exit 0 plus complete JSON is NOT a completed inventory."""
+    p=subprocess.Popen([python,os.path.abspath(__file__),path,'--sha256',sha256,'--size',str(size)],stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,close_fds=True,env={},start_new_session=True)
+    buf=bytearray();end=time.monotonic()+wall
+    try:
+        while True:
+            left=end-time.monotonic()
+            if left<=0:raise TimeoutError('deadline')
+            if not select.select([p.stdout],[],[],min(left,1))[0]:
+                if p.poll() is not None and not select.select([p.stdout],[],[],0)[0]:break
+                continue
+            d=os.read(p.stdout.fileno(),65536)
+            if not d:break
+            buf+=d
+            if len(buf)>MAX_OUTPUT:raise ValueError('output bound')
+        if p.wait(timeout=max(1,end-time.monotonic()))!=0:raise ValueError('child failed')
+        return json.loads(bytes(buf))
+    except BaseException:
+        try:os.killpg(p.pid,signal.SIGKILL)
+        except OSError:pass
+        p.wait();raise
+
+
 def main():
     if not APPROVED_FOR_EXECUTION:raise SystemExit('held: exact program not reviewed/approved')
     p=argparse.ArgumentParser();p.add_argument('archive');p.add_argument('--sha256',required=True);p.add_argument('--size',type=int,required=True)
     a=p.parse_args();apply_outer_limits()
-    fd=os.open(a.archive,os.O_RDONLY|os.O_NOFOLLOW|os.O_CLOEXEC|os.O_NONBLOCK)
-    json.dump(inspect_fd(fd,a.sha256,a.size),sys.stdout,sort_keys=True)
+    fd=open_anchored(a.archive)
+    try:result=inspect_fd(fd,a.sha256,a.size)
+    finally:os.close(fd)
+    json.dump(result,sys.stdout,sort_keys=True)
 
 
 if __name__=='__main__':main()

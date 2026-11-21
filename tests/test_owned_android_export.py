@@ -1231,30 +1231,74 @@ def test_wrong_hostname_refuses_non_keycertsign_anchor_and_profile_checks_apply_
 
 
 def test_member_hash_inspect_streams_zip_and_tar_without_writes(tmp_path,monkeypatch):
-    import hashlib,io,os,sys,tarfile,zipfile
+    import hashlib,io,os,tarfile,zipfile
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1]/'research'/'d061_android'))
     import member_hash_inspect as m
     assert m.APPROVED_FOR_EXECUTION is False
+    def go(path,sha=None,size=None):
+        b=path.read_bytes();fd=os.open(path,os.O_RDONLY)
+        try:return m.inspect_fd(fd,sha or hashlib.sha256(b).hexdigest(),len(b) if size is None else size)
+        finally:os.close(fd)
     z=tmp_path/'a.zip'
     with zipfile.ZipFile(z,'w',zipfile.ZIP_DEFLATED) as w:w.writestr('p/x.txt',b'hello')
-    fd=os.open(z,os.O_RDONLY);out=m.inspect_fd(fd,hashlib.sha256(z.read_bytes()).hexdigest(),z.stat().st_size);os.close(fd)
-    assert out['members'][0]['sha256']==hashlib.sha256(b'hello').hexdigest() and out['license_accepted'] is False
+    out=go(z);assert out['members'][0]['sha256']==hashlib.sha256(b'hello').hexdigest() and out['license_accepted'] is False
     t=tmp_path/'a.tar.gz'
     with tarfile.open(t,'w:gz') as w:
         i=tarfile.TarInfo('j/f');i.size=3;w.addfile(i,io.BytesIO(b'abc'))
         l=tarfile.TarInfo('j/l');l.type=tarfile.SYMTYPE;l.linkname='f';w.addfile(l)
-    fd=os.open(t,os.O_RDONLY);out=m.inspect_fd(fd,hashlib.sha256(t.read_bytes()).hexdigest());os.close(fd)
-    assert out['members'][0]['sha256']==hashlib.sha256(b'abc').hexdigest() and out['members'][1]['target']=='f'
+    out=go(t);assert out['members'][0]['sha256']==hashlib.sha256(b'abc').hexdigest() and out['members'][1]['target']=='f'
+    for bad in (('0'*64,None),(None,1),(None,m.MAX_CONTAINER+1),('xyz',None)):
+        with pytest.raises(ValueError):go(t,*bad)
     fd=os.open(t,os.O_RDONLY)
-    with pytest.raises(ValueError):m.inspect_fd(fd,'0'*64)
+    for args in ((None,5),(5,5),(hashlib.sha256(b'').hexdigest(),None)):
+        with pytest.raises((ValueError,TypeError)):m.inspect_fd(fd,*args)
     os.close(fd)
+    # mandatory pins refuse BEFORE parsing: a garbage container never reaches a parser
+    g=tmp_path/'g.bin';g.write_bytes(b'PK'+b'x'*50)
+    with pytest.raises(ValueError,match='BEFORE parsing'):go(g,'0'*64)
     bad=tmp_path/'b.zip'
     with zipfile.ZipFile(bad,'w') as w:w.writestr('../e',b'x')
-    fd=os.open(bad,os.O_RDONLY)
-    with pytest.raises(ValueError):m.inspect_fd(fd)
-    os.close(fd)
+    with pytest.raises(ValueError):go(bad)
+    # in-place mutation during parse is refused
+    orig=m._parse
+    def mutating(fd,*a):
+        os.utime(z,ns=(1,1));return orig(fd,*a)
+    monkeypatch.setattr(m,'_parse',mutating)
+    with pytest.raises(ValueError,match='changed'):go(z)
     assert not (tmp_path/'p').exists() and not (tmp_path/'j').exists()
     with pytest.raises(SystemExit):m.main()
+
+
+def test_member_hash_inspect_anchored_open_and_outer_limits_in_child(tmp_path,monkeypatch):
+    import os,subprocess,sys,hashlib
+    root=Path(__file__).resolve().parents[1]/'research'/'d061_android'
+    monkeypatch.syspath_prepend(str(root))
+    import member_hash_inspect as m
+    d=tmp_path/'d';d.mkdir(mode=0o700);f=d/'f';f.write_bytes(b'z');os.chmod(f,0o600);os.chmod(tmp_path,0o700)
+    fd=m.open_anchored(str(f));os.close(fd)
+    (d/'ln').symlink_to(f)
+    with pytest.raises(OSError):m.open_anchored(str(d/'ln'))
+    link=tmp_path/'dl';link.symlink_to(d)
+    with pytest.raises(OSError):m.open_anchored(str(link/'f'))
+    os.chmod(f,0o666)
+    with pytest.raises(ValueError):m.open_anchored(str(f))
+    os.chmod(f,0o600);os.link(f,d/'h')
+    with pytest.raises(ValueError):m.open_anchored(str(f))
+    os.mkfifo(d/'q')
+    with pytest.raises((ValueError,OSError)):m.open_anchored(str(d/'q'))
+    # real outer limits enforced in a child process (not the in-process unit path)
+    code=("import sys;sys.path.insert(0,%r);import member_hash_inspect as m;"
+          "m.apply_outer_limits({'as':512*1024**2,'cpu':5,'wall':3,'nofile':16});r=[]\n"
+          "try:\n with open(%r,'wb') as q:q.write(b'x')\nexcept OSError:r.append('nowrite')\n"
+          "try:bytearray(1024**3)\nexcept MemoryError:r.append('noalloc')\n"
+          "print(','.join(r))\n")%(str(root),str(tmp_path/'w'))
+    out=subprocess.run([sys.executable,'-c',code],capture_output=True,text=True,timeout=30)
+    assert out.stdout.strip()=='nowrite,noalloc',out
+    hang=subprocess.run([sys.executable,'-c',"import sys;sys.path.insert(0,%r);import member_hash_inspect as m,time;m.apply_outer_limits({'as':512*1024**2,'cpu':5,'wall':1,'nofile':16});time.sleep(10)"%str(root)],timeout=30)
+    assert hang.returncode==70
+    # parent capture: held CLI exits nonzero, so no inventory is returned
+    with pytest.raises(ValueError):m.run_child(str(f),hashlib.sha256(b'z').hexdigest(),1,wall=20)
+    assert (tmp_path/'w').stat().st_size==0
 
 
 def test_runner_capability_probe_is_readonly_and_held(tmp_path,monkeypatch):
