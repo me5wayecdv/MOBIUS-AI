@@ -56,6 +56,12 @@
   }
  ],
  "declared_expanded_total_bytes": 4878087554,
+ "field_notes": {
+  "declared_expanded_total_bytes": "Sum of earlier inventory declarations only. Excludes temp/alias copies, build, AVD images, store/export; not a runner fit proof.",
+  "official_sha1": "Google-published SHA-1 from repository2-3.xml / sys-img2-3.xml.",
+  "official_sha256": "Temurin published SHA-256 sidecar.",
+  "sha256": "Previously observed container SHA-256 of the retrieved bytes. For Google archives this is NOT a Google-published checksum."
+ },
  "license_basis": "UNRESOLVED",
  "private_output_destination": "UNSET",
  "status": "PROPOSED_ALLOWLIST_FOR_REVIEW_NOT_AUTHORIZATION"
