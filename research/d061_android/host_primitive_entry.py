@@ -19,7 +19,7 @@ Measured here and placed in the envelope by this module (never taken from argume
 
 Output: ONE private local file via audience_gate.publish_private under /run/d061-hp-<run_id>, a
 directory this process creates itself (mkdir 0700, exclusive) under the root-owned /run. It vanishes
-with the VM, so it is NOT a retained or retrievable route. Nothing is printed. There is no public
+with the VM, so it is NOT a retained or retrievable route. The entry's logic prints nothing (it exits via os._exit); Python parse/startup and top-level imports of this file run before its catch and are not covered. There is no public
 fallback. A result that was never committed is dropped. A COMMITTED result is never dropped or
 reported as ordinary success when publication flags are incomplete (exit 4).
 

@@ -7,8 +7,10 @@ Scope: F1 plus one natural F2 (host_primitive_probe). Package inspection is sepa
 ## 1. Teardown: documented vs observable
 - Documented (provider): each standard multi-CPU GitHub-hosted runner is a new VM per job
   (https://docs.github.com/en/actions/reference/runners/github-hosted-runners), and the VM is automatically
-  decommissioned when the job finishes (https://docs.github.com/en/actions/how-tos/manage-runners/github-hosted-runners/use-github-hosted-runners,
-  reviewer-read and re-confirmed by main; my own text search of that page did not reproduce the sentence).
+  decommissioned when the job finishes (https://docs.github.com/en/actions/how-tos/manage-runners/github-hosted-runners/use-github-hosted-runners).
+  Provenance: the independent reviewer fetched that live official page directly (most recently 14:07:27 Cairo, 2026-11-21).
+  I did not reproduce the sentence with my own text search, and main did not independently re-fetch it. Provider
+  documentation, not a per-run timing or attestation.
 - Not provided: an in-job destruction receipt, a per-run attestation, or timing of decommissioning.
   The 10-minute job timeout bounds the intended job lifetime, not teardown time.
 - Basis for a benign sleep-only probe: provider decommissioning (independent lifecycle) + job timeout +
@@ -45,9 +47,13 @@ Scope: F1 plus one natural F2 (host_primitive_probe). Package inspection is sepa
   Deleting this probe's own temporary outputs is execution cleanup; it does not undo a disclosure.
 
 ## 4. Public log paths
-- Entry never prints: arguments, imports, startup and run are inside one catch, argparse usage is suppressed, exit via
-  os._exit. Workflow setup and entry output are redirected to /dev/null. NOT contained: the checkout action's own log
-  lines, step names, and job conclusion.
+- Entry code wraps argument parsing, source binding, run and publication in one catch with no traceback, and exits via
+  os._exit. That does NOT cover Python parse/startup or top-level imports of the entry file itself, which run before the
+  catch, nor the git subprocess's own startup behavior.
+- What the template does: stdout and stderr of the setup and entry processes are redirected to /dev/null. This contains
+  those process streams only. NOT contained: the checkout action's own log lines, step names, the job conclusion and the
+  exit-code distinctions, all outsider-readable in a public repo.
+- Do not generalize the recursive workspace chown beyond this disposable job; never apply it to a persistent checkout.
 
 ## 5. Claim distinctions
 - No intentional workload network (child env empty, no connection made), not network isolation.
