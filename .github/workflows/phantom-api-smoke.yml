@@ -1,0 +1,84 @@
+# PHANTOM API smoke (D-060 integration slice): boots a hardware-accelerated
+# Android emulator, installs the sha256-pinned public Allsafe lab APK, starts
+# the Mobius API on sqlite with the PHANTOM adapter configured, and executes
+# a real read_only emulator PoC plan through the API end-to-end - proving the
+# runtime evidence lands as persisted Mobius evidence, not a standalone log.
+#
+# Constraints honoured:
+# - lab target only, public intentionally-vulnerable training app, ephemeral
+#   emulator, no external targets, no credentials, read-only probes;
+# - no image publication (nothing is built or pushed; run artifacts only);
+# - free: public-repo GitHub-hosted runner.
+name: PHANTOM API smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/phantom-api-smoke.yml"
+      - "scripts/phantom_api_smoke.py"
+      - "scripts/phantom_api_smoke.sh"
+      - "src/mobius/services/phantom.py"
+      - "src/mobius/services/poc_runner.py"
+      - "src/mobius/services/poc_execution.py"
+  pull_request:
+    paths:
+      - ".github/workflows/phantom-api-smoke.yml"
+      - "scripts/phantom_api_smoke.py"
+      - "scripts/phantom_api_smoke.sh"
+      - "src/mobius/services/phantom.py"
+      - "src/mobius/services/poc_runner.py"
+      - "src/mobius/services/poc_execution.py"
+
+concurrency:
+  group: phantom-api-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  phantom-api-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Mobius
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Enable KVM group perms
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Download pinned Allsafe lab APK
+        run: |
+          curl -sSfL -o allsafe.apk \
+            https://github.com/t0thkr1s/allsafe/releases/download/v.1.6/allsafe.apk
+          echo "d6792d6634a033f048f935f1269179d3c27b859c4c34b1e9e5b008a88375efd9  allsafe.apk" | sha256sum -c -
+
+      - name: Run PHANTOM API smoke on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 29
+          target: default
+          arch: x86_64
+          profile: Nexus 6
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          disable-animations: true
+          script: bash scripts/phantom_api_smoke.sh
+
+      - name: Upload smoke outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phantom-api-smoke
+          path: phantom-smoke/
+          retention-days: 30
