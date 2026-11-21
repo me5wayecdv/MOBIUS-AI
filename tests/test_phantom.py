@@ -391,3 +391,99 @@ def test_emulator_step_expected_value_types_enforced():
     with pytest.raises(ValueError, match="non-negative integer"):
         PoCStep(action="assert_emulator_provider_rows", target_ref="a.b/x",
                 expected_value=True)
+
+
+def test_wait_for_boot_success():
+    adapter = _adapter({
+        ("wait-for-device",): (0, b"", b""),
+        ("shell", "getprop", "sys.boot_completed"): (0, b"1\n", b""),
+    })
+    assert adapter.wait_for_boot() is True
+
+
+def test_wait_for_boot_times_out_bounded(monkeypatch):
+    monkeypatch.setattr("mobius.services.phantom.time.sleep", lambda _s: None)
+    adapter = _adapter({
+        ("wait-for-device",): (0, b"", b""),
+        ("shell", "getprop", "sys.boot_completed"): (0, b"\n", b""),
+    })
+    assert adapter.wait_for_boot(budget_seconds=10, poll_seconds=2) is False
+
+
+def test_wait_for_boot_fail_closed_when_device_never_returns():
+    adapter = _adapter({
+        ("wait-for-device",): (1, b"", b"error: closed"),
+        ("shell", "getprop", "sys.boot_completed"): (0, b"1\n", b""),
+    })
+    assert adapter.wait_for_boot() is False
+
+
+def _server_file(tmp_path, payload=b"fake-frida-server-bytes"):
+    path = tmp_path / "mobius-frida-server"
+    path.write_bytes(payload)
+    import hashlib
+    return str(path), hashlib.sha256(payload).hexdigest()
+
+
+def test_start_instrumentation_refuses_digest_mismatch(tmp_path):
+    path, _ = _server_file(tmp_path)
+    calls = []
+
+    def runner(argv, timeout):
+        calls.append(tuple(argv))
+        return (0, b"", b"")
+
+    adapter = PhantomEmulatorAdapter(
+        adb_path="/fake/adb", serial=None, runner=runner,
+        emulator_check=lambda: True)
+    with pytest.raises(PoCAdapterUnavailable, match="pinned sha256"):
+        adapter.start_instrumentation(path, "0" * 64)
+    assert not any(c[0:1] == ("/fake/adb",) and "push" in c for c in calls), \
+        "no device traffic may happen before digest verification passes"
+
+
+def test_start_instrumentation_happy_path(tmp_path, monkeypatch):
+    path, digest = _server_file(tmp_path)
+    monkeypatch.setattr("mobius.services.phantom.time.sleep", lambda _s: None)
+    adapter = _adapter({
+        ("root",): (0, b"restarting adbd as root\n", b""),
+        ("wait-for-device",): (0, b"", b""),
+        ("push", path, "/data/local/tmp/mobius-frida-server"): (0, b"", b""),
+        ("shell", "chmod", "755", "/data/local/tmp/mobius-frida-server"):
+            (0, b"", b""),
+        ("shell", "nohup", "/data/local/tmp/mobius-frida-server",
+         ">/dev/null", "2>&1", "&"): (0, b"", b""),
+        ("shell", "pidof", "mobius-frida-server"): (0, b"4321\n", b""),
+    })
+    detail = adapter.start_instrumentation(path, digest)
+    assert "started" in detail
+
+
+def test_start_instrumentation_fail_closed_on_push_failure(tmp_path, monkeypatch):
+    path, digest = _server_file(tmp_path)
+    monkeypatch.setattr("mobius.services.phantom.time.sleep", lambda _s: None)
+    adapter = _adapter({
+        ("root",): (0, b"", b""),
+        ("wait-for-device",): (0, b"", b""),
+        ("push", path, "/data/local/tmp/mobius-frida-server"):
+            (1, b"", b"error"),
+    })
+    with pytest.raises(PoCAdapterUnavailable, match="push failed"):
+        adapter.start_instrumentation(path, digest)
+
+
+def test_start_instrumentation_fail_closed_when_server_dies(tmp_path, monkeypatch):
+    path, digest = _server_file(tmp_path)
+    monkeypatch.setattr("mobius.services.phantom.time.sleep", lambda _s: None)
+    adapter = _adapter({
+        ("root",): (0, b"", b""),
+        ("wait-for-device",): (0, b"", b""),
+        ("push", path, "/data/local/tmp/mobius-frida-server"): (0, b"", b""),
+        ("shell", "chmod", "755", "/data/local/tmp/mobius-frida-server"):
+            (0, b"", b""),
+        ("shell", "nohup", "/data/local/tmp/mobius-frida-server",
+         ">/dev/null", "2>&1", "&"): (0, b"", b""),
+        ("shell", "pidof", "mobius-frida-server"): (1, b"", b""),
+    })
+    with pytest.raises(PoCAdapterUnavailable, match="did not stay up"):
+        adapter.start_instrumentation(path, digest)

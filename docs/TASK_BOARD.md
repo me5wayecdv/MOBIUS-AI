@@ -81,7 +81,7 @@
 
 | # | Task | Owner | State | Condition |
 |---|---|---|---|---|
-| D-060 | PHANTOM emulator/runtime adapter | M3 | [-] | Implement only if host has working emulator/KVM and it improves demo |
+| D-060 | PHANTOM emulator/runtime adapter | M3 | [x] | PR #101/#102/#103/#106 merged: read-only adb probes + approval-gated observation-only Frida instrumentation CI-verified on the real emulator (runs 44855421235, post-merge 44857880298; 11361 classes enumerated on the pinned Allsafe lab APK). Phantom-lifecycle PR adds Mobius-managed boot verification + pinned frida-server lifecycle (scripts/phantom_emulator_lifecycle.py). | AVD creation remains action-managed; physical devices refused |
 | D-061 | VECTOR API/network adapter | M4 | [-] | Implement only against the controlled lab backend |
 | D-062 | PDF export | M6 | [-] | Only if report print/Markdown is insufficient |
 | D-063 | Broader vulnerability catalogue | M2 + M5 | [-] | After the end-to-end slice is reliable |
