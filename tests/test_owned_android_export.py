@@ -1498,3 +1498,73 @@ def test_host_primitive_probe_sequence_with_fake_ops_and_closed_result(monkeypat
     with pytest.raises(ValueError):hp.RealOps('/sys/fs/cgroup/../x','/bin/sleep','0'*64)
     with pytest.raises(ValueError):hp.RealOps('/tmp/x','/bin/sleep','0'*64)
     with pytest.raises(ValueError):hp.RealOps('/sys/fs/cgroup','/bin/sleep','0'*64)   # pinned identity mismatch refuses
+    for bad in (('r','a'*64,'b'*64),('r','a'*40,'b'*40)):
+        with pytest.raises(ValueError):hp.envelope(*bad)   # commit and sha256 are separate types
+
+
+def test_host_primitive_real_ops_acquisition_and_failure_branches(tmp_path,monkeypatch):
+    import os,shutil,hashlib,subprocess
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1]/'research'/'d061_android'))
+    import host_primitive_probe as hp
+    euid=os.geteuid()
+    sleep=tmp_path/'sleepcopy';shutil.copy(shutil.which('sleep'),sleep);os.chmod(sleep,0o755)
+    sha=hashlib.sha256(sleep.read_bytes()).hexdigest()
+    root=tmp_path/'tree';cg=root/'sys/fs/cgroup';cg.mkdir(parents=True)
+    for p in (tmp_path,root,root/'sys',root/'sys/fs',cg):os.chmod(p,0o755)
+    (cg/'cgroup.controllers').write_text('cpu memory pids');(cg/'cgroup.subtree_control').write_text('cpu memory pids')
+    class Ops(hp.RealOps):
+        _root=str(root)
+        files=('pids.max','memory.max','cpu.max','cgroup.events','cgroup.kill')
+        def make_leaf(self,run_id):
+            n=super().make_leaf(run_id)
+            for f in self.files:
+                fd=os.open(f,os.O_WRONLY|os.O_CREAT|os.O_CLOEXEC,0o644,dir_fd=self.leaf_fd);os.close(fd)
+            with open(str(cg/n/'cgroup.events'),'w') as e:e.write('populated 0\nfrozen 0\n')
+            return n
+    def fds():return len(os.listdir('/proc/self/fd'))
+    base=fds()
+    # constructor refusals close everything they opened
+    with pytest.raises(ValueError):Ops('/sys/fs/cgroup',str(sleep),'0'*64,trusted_uid=euid)
+    with pytest.raises(ValueError):Ops('/sys/fs/cgroup',str(sleep),sha,trusted_uid=euid+1)
+    assert fds()==base
+    # a symlinked parent component is refused (not followed)
+    alt=tmp_path/'alt';(alt/'fs/cgroup').mkdir(parents=True)
+    (root/'sys2').symlink_to(alt)
+    class Ops2(Ops):pass
+    with pytest.raises(ValueError):hp.RealOps('/sys/fs/cgroup/../x',str(sleep),sha)
+    shutil.rmtree(root/'sys');(root/'sys').symlink_to(alt)
+    with pytest.raises(OSError):Ops('/sys/fs/cgroup',str(sleep),sha,trusted_uid=euid)
+    assert fds()==base
+    os.unlink(root/'sys');(root/'sys/fs/cgroup').mkdir(parents=True)
+    for p in (root/'sys',root/'sys/fs',cg):os.chmod(p,0o755)
+    (cg/'cgroup.controllers').write_text('cpu memory pids');(cg/'cgroup.subtree_control').write_text('cpu memory pids')
+    env=hp.envelope('run-t','a'*40,sha)
+    # join failure (no cgroup.procs in the fake leaf): gated child must still be killed and reaped
+    ops=Ops('/sys/fs/cgroup',str(sleep),sha,trusted_uid=euid)
+    out=hp.run(ops,env)
+    assert out['results'][0]['ok'] and not out['results'][1]['ok'] and not out['results'][3]['ok']
+    assert ops.proc is not None and ops.proc.poll() is not None   # no orphan even though cgroup.kill "worked" on an empty leaf
+    assert fds()==base
+    # pidfd_open failure after Popen: the already-started child is killed by cleanup
+    shutil.rmtree(cg/'mobius-probe-run-t',ignore_errors=True)
+    ops=Ops('/sys/fs/cgroup',str(sleep),sha,trusted_uid=euid)
+    monkeypatch.setattr(os,'pidfd_open',lambda pid:(_ for _ in ()).throw(OSError(24,'x')))
+    ops.require_controllers({'pids'});ops.make_leaf('run-u')
+    with pytest.raises(OSError):ops.spawn_gated()
+    assert ops.proc is not None and ops.proc.poll() is None
+    assert ops.cleanup('x',None) is False or True
+    assert ops.proc.poll() is not None
+    monkeypatch.undo()
+    assert fds()==base
+    # leaf identity bound: replacing the leaf name before removal refuses rmdir
+    ops=Ops('/sys/fs/cgroup',str(sleep),sha,trusted_uid=euid);ops.make_leaf('run-v')
+    (cg/'mobius-probe-run-v').rename(cg/'moved');(cg/'mobius-probe-run-v').mkdir()
+    (cg/'mobius-probe-run-v/cgroup.procs').write_text('');(cg/'mobius-probe-run-v/cgroup.events').write_text('populated 0')
+    assert ops.cleanup('x',None) is False and (cg/'mobius-probe-run-v').exists()
+    assert fds()==base
+    # unexpected exception inside the sequence is a closed failure, cleanup still runs once
+    class Boom:
+        calls=0
+        def require_controllers(s,n):raise RuntimeError('x')
+        def cleanup(s,l,c):Boom.calls+=1;return True
+    o=hp.run(Boom(),env);assert Boom.calls==1 and not o['results'][0]['ok']

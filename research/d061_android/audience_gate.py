@@ -128,9 +128,10 @@ def validate_content(content_class,obj,*,sha256=None,size=None):
         checks=('limit_readback','pidns_create','child_exit','cleanup_absence')
         if not isinstance(obj,dict) or set(obj)!={'envelope','results'}:raise ValueError('closed host result keys required')
         e=obj['envelope']
-        if (not isinstance(e,dict) or set(e)!={'run_id','source_sha','sleep_sha256','probe'} or e['probe']!='host_primitive_v1'
+        if (not isinstance(e,dict) or set(e)!={'run_id','source_commit','sleep_sha256','probe'} or e['probe']!='host_primitive_v1'
             or not isinstance(e['run_id'],str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,31}',e['run_id'])
-            or any(not isinstance(e[k],str) or not re.fullmatch('[0-9a-f]{40}|[0-9a-f]{64}',e[k]) for k in ('source_sha','sleep_sha256'))):raise ValueError('closed envelope required')
+            or not isinstance(e['source_commit'],str) or not re.fullmatch('[0-9a-f]{40}',e['source_commit'])
+            or not isinstance(e['sleep_sha256'],str) or not re.fullmatch('[0-9a-f]{64}',e['sleep_sha256'])):raise ValueError('closed envelope required')
         r=obj['results']
         if not isinstance(r,list) or len(r)!=4:raise ValueError('four results required')
         for c,row in zip(checks,r):
