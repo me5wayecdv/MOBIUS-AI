@@ -162,21 +162,25 @@ def main():
     def interrupted(sig,frame):raise SystemExit(128+sig)
     for sig in (signal.SIGTERM,signal.SIGINT,signal.SIGHUP):old_handlers[sig]=signal.signal(sig,interrupted)
     docker_owners={}
+    def prepare_docker_pair():
+        # BOTH exports and inventories finish before either live role. Export remains HELD without a daemon resource guard.
+        import docker_owner
+        spec=owner['docker']
+        if set(spec['images'])!={'runtime','control'} or spec['images']['runtime']==spec['images']['control']:
+            raise ValueError('distinct role-bound pinned images required')
+        for role in ('runtime','control'):
+            params={k:spec[k] for k in ('mem_mb','pids','cpus')};params['kvm_gid']=spec.get('kvm_gid') if role=='runtime' else None
+            def lock_loader(r):
+                return json.loads(root_file('/opt/d061-docker-closure/%s/closure-lock.json'%r,16*1024**2))
+            docker_owners[role]=docker_owner.RoleOwner(root,role,run_id,spec['images'][role],params,docker_owner.DockerCli(),
+                docker_owner.HostProc(),lock_loader=lock_loader)
+        docker_owner.prepare_pair(docker_owners)
     def launch_docker(role):
-        # Docker backend: the trusted owner module binds identity before release; call sites below keep the same child-like shape.
-        import docker_owner,docker_lifecycle
-        spec=owner['docker']   # {'images':{runtime,control},'mem_mb','pids','cpus','kvm_gid'} from the root-owned owner intent, never from a payload
-        if spec['images']['runtime']==spec['images']['control'] or set(spec['images'])!={'runtime','control'}:raise ValueError('distinct role-bound pinned images required')
-        params={k:spec[k] for k in ('mem_mb','pids','cpus')};params['kvm_gid']=spec.get('kvm_gid') if role=='runtime' else None
-        proc=docker_owner.HostProc()
-        other=docker_owners.get('control' if role=='runtime' else 'runtime')
-        sibling=None if other is None else {k:other.bound[k] for k in docker_lifecycle.NS_KEYS}
-        def lock_loader(r):
-            return json.loads(root_file('/opt/d061-docker-closure/%s/closure-lock.json'%r,16*1024**2))
-        o=docker_owner.RoleOwner(root,role,run_id,spec['images'][role],params,docker_owner.DockerCli(),proc,sibling_ns=sibling,lock_loader=lock_loader)
-        docker_owners[role]=o
-        handle=o.launch()
-        return handle
+        import docker_lifecycle
+        o=docker_owners[role]
+        other=docker_owners['control' if role=='runtime' else 'runtime']
+        o.sibling_ns=None if other.bound is None else {k:other.bound[k] for k in docker_lifecycle.NS_KEYS}
+        return o.launch()
     def launch(role):
         nonlocal launch_count
         if role in children:raise RuntimeError('fixed sibling launch already consumed')
@@ -215,6 +219,7 @@ def main():
         if 'control' in children and exists(root/'control/work/cancel.json'):
             raise RuntimeError('fixed one-shot control cancellation')
     try:
+        if backend=='docker':prepare_docker_pair()
         started=time.monotonic();runtime=launch('runtime')
         raw=wait(root/'runtime/work/provision/ready.json',deadline=started+240,child=runtime,pump=pump)
         ready=json.loads(raw);expected.accept_ready(ready)

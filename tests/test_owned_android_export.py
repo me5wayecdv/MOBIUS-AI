@@ -2087,6 +2087,12 @@ class _FakeDocker:
         self.dl, self.role, self.run_id, self.img, self.iid, self.archive, self.root, self.log, self.kv = dl, role, run, img, iid, archive, root, log, kv
         self.st = {'removed': False, 'exited': False, 'create_out': ('c' * 64 + '\n').encode(), 'mutate': None, 'pid': 4242, 'save_rc': 0}
         self.cmds = []
+    @__import__('contextlib').contextmanager
+    def export_scratch(self, parent):
+        import tempfile, shutil
+        p=Path(tempfile.mkdtemp(dir=parent))
+        try: yield p
+        finally: shutil.rmtree(p)
     def save(self, image_id, path):
         self.log.append('docker_save'); self.cmds.append(['save', image_id])
         if self.st['save_rc'] == 0: Path(path).write_bytes(self.archive)
@@ -2153,9 +2159,14 @@ def _owner(monkeypatch, tmp_path, role='runtime', use_image=None, **over):
     return dl, do, o, fd, log, root
 
 
+def _launch(o):
+    if o.prepared_image_id is None: o.prepare_image()
+    return o.launch()
+
+
 def test_docker_owner_call_path_order_and_evidence(monkeypatch, tmp_path):
     dl, do, o, fd, log, root = _owner(monkeypatch, tmp_path)
-    h = o.launch()
+    h = _launch(o)
     assert log.index('docker_image') < log.index('docker_save') < log.index('docker_create') < log.index('docker_start') < log.index('acquire') < log.index('gate_byte')
     assert (root / 'runtime-launch.json').exists() and (root / 'runtime/namespace-setup.json').exists()
     assert not (root / 'runtime-image-save.tar').exists()
@@ -2171,7 +2182,7 @@ def test_docker_owner_call_path_order_and_evidence(monkeypatch, tmp_path):
     assert wr['container_absent'] is True and wr['complete'] is True and wr['verdict'] == 'VERIFIED_ABSENT_RECORD'
     assert ['rm', '--volumes', 'c' * 64] in fd.cmds and not any(c[0] == 'kill' for c in fd.cmds)
     assert dl.wrapper_problems(setup, wr, role='runtime', run_id='a' * 32) == []
-    with pytest.raises(do.OwnerError): o.launch()
+    with pytest.raises(do.OwnerError): _launch(o)
     assert 'pump' in log                                   # attach drained on every poll
 
 
@@ -2179,34 +2190,34 @@ def test_docker_owner_fail_closed_branches(monkeypatch, tmp_path):
     def mk(name, **kw):
         d = tmp_path / name; d.mkdir(); return _owner(monkeypatch, d, **kw)
     dl, do, o, fd, log, root = mk('a', create_out=b'garbled')
-    with pytest.raises(do.OwnerError, match='ambiguous'): o.launch()
+    with pytest.raises(do.OwnerError, match='ambiguous'): _launch(o)
     assert 'docker_rm' not in log and 'docker_start' not in log
     dl, do, o, fd, log, root = mk('b', mutate=lambda r: r['HostConfig'].update(Privileged=True))
-    with pytest.raises(do.OwnerError, match='failed closed'): o.launch()
+    with pytest.raises(do.OwnerError, match='failed closed'): _launch(o)
     assert 'docker_start' not in log and ['rm', '--force', '--volumes', 'c' * 64] in fd.cmds
     dl, do, o, fd, log, root = mk('c')
     orig = o.proc.acquire
     def racy(pid):
         h = orig(pid); h.t1 = h.t0 + 1; return h
     o.proc.acquire = racy
-    with pytest.raises(do.OwnerError, match='failed closed'): o.launch()
+    with pytest.raises(do.OwnerError, match='failed closed'): _launch(o)
     assert 'gate_byte' not in log and any(c[0] == 'kill' for c in fd.cmds) and ['rm', '--force', '--volumes', 'c' * 64] in fd.cmds
     assert 'identity_close' in log and 'cgroup_close' in log and 'attach_close' in log and not (root / 'runtime-launch.json').exists()
     dl, do, o, fd, log, root = mk('d', role='control')
     o.sibling_ns = {'pid_ns_inode': 1, 'mnt_ns_inode': 12, 'net_ns_inode': 13}
-    with pytest.raises(do.OwnerError): o.launch()
+    with pytest.raises(do.OwnerError): _launch(o)
     assert 'gate_byte' not in log and ['rm', '--force', '--volumes', 'c' * 64] in fd.cmds
     # attach itself fails after a successful create: one cleanup path removes the container by ID
     dl, do, o, fd, log, root = mk('e', attach_raises=True)
-    with pytest.raises(do.OwnerError, match='failed closed'): o.launch()
+    with pytest.raises(do.OwnerError, match='failed closed'): _launch(o)
     assert ['rm', '--force', '--volumes', 'c' * 64] in fd.cmds and (root / 'runtime-launch-failure.json').exists()
     # failed launch is still reachable by the relay's final cleanup (cleanup(None))
     dl, do, o, fd, log, root = mk('e2', attach_raises=True)
-    with pytest.raises(do.OwnerError): o.launch()
+    with pytest.raises(do.OwnerError): _launch(o)
     assert o.cleanup(None) is None
     # a control launch with the RUNTIME image: locked inventory/lock binding refuses before any container exists
     dl, do, o, fd, log, root = mk('f', role='control', use_image='runtime')
-    with pytest.raises(do.OwnerError, match='lock not bound|differs'): o.launch()
+    with pytest.raises(do.OwnerError, match='lock not bound|differs'): _launch(o)
     assert 'docker_create' not in log and not (root / 'control-image-save.tar').exists()
     # lock loader for the wrong role, wrong image id, missing loader, save failure, mutated lock rows
     import image_closure as ic
@@ -2216,12 +2227,12 @@ def test_docker_owner_fail_closed_branches(monkeypatch, tmp_path):
                 lambda r: dict(good(r), files=[dict(x, mode=0o4755) if x['path'].endswith('python') else x for x in good(r)['files']])):
         d = tmp_path / ('g%d' % id(bad)); d.mkdir()
         _, _, o2, fd2, log2, _ = _owner(monkeypatch, d); o2.lock_loader = bad
-        with pytest.raises(do.OwnerError): o2.launch()
+        with pytest.raises(do.OwnerError): _launch(o2)
         assert 'docker_create' not in log2
     o.lock_loader = None
-    with pytest.raises(do.OwnerError, match='loader required'): o.launch()
+    with pytest.raises(do.OwnerError, match='loader required'): _launch(o)
     dl, do, o, fd, log, root = mk('h', save_rc=1)
-    with pytest.raises(do.OwnerError, match='save failed'): o.launch()
+    with pytest.raises(do.OwnerError, match='save failed'): _launch(o)
     assert 'docker_create' not in log
 
 
@@ -2230,30 +2241,30 @@ def test_docker_owner_attach_death_exit_lag_and_unverified_absence(monkeypatch, 
         d = tmp_path / name; d.mkdir(); return _owner(monkeypatch, d, **kw)
     # attach client dies while the workload (pidfd) is still live: NOT an exit, still killable by bound ID, then verified absent
     dl, do, o, fd, log, root = mk('a')
-    h = o.launch(); fd.st['attach_rc'] = 1
+    h = _launch(o); fd.st['attach_rc'] = 1
     assert h.poll() is None and h.poll() is None and o.attach_lost is True and h.returncode is None
     wr = o.cleanup(h)
     assert ['kill', '--signal', 'KILL', 'c' * 64] in fd.cmds and wr['container_absent'] is True and log.index('docker_kill') < log.index('docker_rm')
     # daemon exit record lags the pidfd: not terminal, then terminal
     dl, do, o, fd, log, root = mk('b', daemon_knows_exit=False)
-    h = o.launch(); fd.st['exited'] = True
+    h = _launch(o); fd.st['exited'] = True
     assert h.poll() is None and not (root / 'runtime/namespace-driver-result.json').exists()
     fd.st['daemon_knows_exit'] = True
     assert h.poll() == 0 and (root / 'runtime/namespace-driver-result.json').exists()
     # daemon never reports exit: bounded retries then 255 UNVERIFIED, forced removal, verdict not verified
     dl, do, o, fd, log, root = mk('c', daemon_knows_exit=False)
-    h = o.launch(); fd.st['exited'] = True
+    h = _launch(o); fd.st['exited'] = True
     wr = o.cleanup(h)
     assert h.returncode == 255 and wr['container_absent'] is False and 'exit_unverified' in wr['errors'] and ['rm', '--force', '--volumes', 'c' * 64] in fd.cmds
     for k, v, key in (('cg_populated', True, 'cgroup_unpopulated_or_gone'), ('path_gone', False, 'cgroup_unpopulated_or_gone'), ('members', ['/proc/9/ns/net'], 'ns_members_empty'),
                       ('hlinks', ['/proc/9/fd/3'], 'handles_absent')):
         dl, do, o, fd, log, root = mk('d' + k)
-        h = o.launch(); fd.st['exited'] = True; fd.st[k] = v
+        h = _launch(o); fd.st['exited'] = True; fd.st[k] = v
         wr = o.cleanup(h)
         assert wr['absence'][key] is False and wr['container_absent'] is False and wr['verdict'] == 'PRESENT'
     # unreadable scan entries stay UNVERIFIED, never clean
     dl, do, o, fd, log, root = mk('e')
-    h = o.launch(); fd.st['exited'] = True; fd.st['scan_errors'] = 2
+    h = _launch(o); fd.st['exited'] = True; fd.st['scan_errors'] = 2
     wr = o.cleanup(h)
     assert wr['absence']['ns_members_empty'] is None and wr['absence']['handles_absent'] is None and wr['verdict'] == 'UNVERIFIED' and wr['container_absent'] is False
 
@@ -2362,7 +2373,7 @@ def _collect(monkeypatch, tmp_path, wrapper, setup):
 def _docker_records(monkeypatch, tmp_path):
     d = tmp_path / 'owner'; d.mkdir()
     dl, do, o, fd, log, root = _owner(monkeypatch, d)
-    h = o.launch(); fd.st['exited'] = True; h.wait(timeout=1); wr = o.cleanup(h)
+    h = _launch(o); fd.st['exited'] = True; h.wait(timeout=1); wr = o.cleanup(h)
     return dl, json.loads((root / 'runtime/namespace-setup.json').read_text()), wr, (h, o, fd, root)
 
 
@@ -2413,3 +2424,134 @@ def test_docker_backend_consumers_and_check_absent(monkeypatch, tmp_path):
     with pytest.raises(RuntimeError): ss.check_absent(rr / 'runtime')
     (rr / 'runtime/wrapper-cleanup.json').write_text(json.dumps({'errors': [], 'jail_absent': True})); (rr / 'runtime/trusted-final-absence.json').unlink()
     with pytest.raises(RuntimeError): ss.check_absent(rr / 'runtime')
+
+
+def test_v6_pair_preverification_precedes_any_live_role(monkeypatch, tmp_path):
+    a=tmp_path/'a';b=tmp_path/'b';a.mkdir();b.mkdir()
+    dl,do,r,rd,rl,rr=_owner(monkeypatch,a)
+    _,_,c,cd,cl,cr=_owner(monkeypatch,b,role='control')
+    c.image=cd.img='registry.invalid/control@sha256:'+'e'*64
+    common=[]
+    for backend,owner in ((rd,r),(cd,c)):
+        backend.log=common
+        owner.proc.log=common
+    do.prepare_pair({'runtime':r,'control':c})
+    assert common.count('docker_save')==2 and 'docker_create' not in common
+    h=r.launch()
+    assert common.index('docker_start')>max(i for i,v in enumerate(common) if v=='docker_save')
+    c.proc.ns={'pid_ns_inode':11,'mnt_ns_inode':12,'net_ns_inode':13}
+    c.sibling_ns={k:r.bound[k] for k in dl.NS_KEYS}
+    hc=c.launch()
+    assert common.count('docker_save')==2                     # never exports with a live runtime
+    rd.st['exited']=cd.st['exited']=True;r.cleanup(h);c.cleanup(hc)
+    # Same textual image or same actual ID refuses, no create.
+    a=tmp_path/'same';a.mkdir()
+    _,_,o,fd,log,_=_owner(monkeypatch,a)
+    with pytest.raises(do.OwnerError):do.prepare_pair({'runtime':o,'control':o})
+    assert 'docker_create' not in log
+
+
+def test_v6_postcreate_failures_and_cleanup_are_idempotent(monkeypatch,tmp_path):
+    import docker_owner as do
+    real=do._jw
+    for i,suffix in enumerate(('-container-record.json','.docker.log','-launch.json')):
+        d=tmp_path/str(i);d.mkdir()
+        _,_,o,fd,log,root=_owner(monkeypatch,d)
+        if suffix=='.docker.log':(root/'runtime.docker.log').write_bytes(b'preexisting')
+        def fail(path,obj,replace=False):
+            if str(path).endswith(suffix):raise OSError('test persistence failure')
+            return real(path,obj,replace)
+        monkeypatch.setattr(do,'_jw',fail)
+        with pytest.raises(do.OwnerError):_launch(o)
+        assert ['rm','--force','--volumes','c'*64] in fd.cmds
+        assert o.cleaned and o.terminal_failure
+        n=len(fd.cmds);assert o.cleanup() is None;assert len(fd.cmds)==n
+        monkeypatch.setattr(do,'_jw',real)
+    for i,stage in enumerate(('inspect','probe','wrapper_write','attach_close')):
+        d=tmp_path/('cl'+str(i));d.mkdir()
+        _,_,o,fd,log,root=_owner(monkeypatch,d);h=_launch(o);fd.st['exited']=True;h.wait(1)
+        if stage=='probe':
+            def fail_probe(ids):raise OSError('scan failure')
+            o.proc.ns_scan=fail_probe
+        elif stage=='inspect':
+            def fail_inspect(*args,**kw):raise OSError('inspect failure')
+            o._inspect=fail_inspect
+        elif stage=='wrapper_write':
+            def fail_write(path,obj,replace=False):
+                if str(path).endswith('wrapper-cleanup.json'):raise OSError('write failure')
+                return real(path,obj,replace)
+            monkeypatch.setattr(do,'_jw',fail_write)
+        else:
+            def fail_close():raise OSError('attach close failure')
+            o.attach.close=fail_close
+        with pytest.raises(OSError):o.cleanup(h)
+        assert o.handles.closed and o.cleaned and o.terminal_failure
+        assert o.emergency_removal and not (root/'runtime/wrapper-cleanup.json').exists()
+        n=len(fd.cmds);o.cleanup(h);assert len(fd.cmds)==n
+        monkeypatch.setattr(do,'_jw',real)
+
+
+def test_v6_deadline_and_infinite_writer_pump_quantum(monkeypatch,tmp_path):
+    dl,do,o,fd,log,root=_owner(monkeypatch,tmp_path)
+    o.prepare_image();clock=[0.0];o.clock=lambda:clock[0]
+    run=fd.run;timeouts=[]
+    def slow(args,timeout=30):
+        timeouts.append(timeout)
+        # Every started inspect fails to make progress; each call consumes its allowed time.
+        if args[0]=='inspect' and fd.st.get('started'):
+            clock[0]+=timeout
+            return 0,json.dumps([{'Id':'c'*64,'State':{'Pid':0,'Running':False}}]).encode(),b''
+        return run(args,timeout)
+    fd.run=slow
+    with pytest.raises(do.OwnerError):o.launch()
+    assert 'gate_byte' not in log and clock[0]<=10
+    assert all(t<=1 for t in timeouts)                     # clamped to the absolute deadline, never 30s*100
+    class Stream:
+        def fileno(self):return 123
+    class P:
+        stdout=Stream()
+    a=do._Attach.__new__(do._Attach);a.p=P();a.bytes=0;a.truncated=False
+    calls=[]
+    def endless(fd,n):calls.append(n);return b'x'*n
+    monkeypatch.setattr(do.os,'read',endless)
+    sink=_io.BytesIO();a.pump(sink)
+    assert sum(calls)==a.QUANTUM and len(calls)==16         # finite even when read NEVER raises EAGAIN
+    a.pump(sink);assert sum(calls)==2*a.QUANTUM and len(sink.getvalue())==a.CEILING and a.truncated
+
+
+def test_v6_extensions_rejected_before_tarfile_allocation(monkeypatch):
+    _dl(monkeypatch);import image_closure as ic
+    def header(typ,size):
+        h=_tarfile.TarInfo('extension');h.type=typ;h.size=size
+        return h.tobuf(format=_tarfile.USTAR_FORMAT)
+    original=ic.tarfile.open
+    for typ in (b'x',b'g',b'L',b'K',b'S'):
+        # Declares enormous extension with no body; raw header must reject before Python tarfile reads/allocates it.
+        raw=header(typ,4*1024**3)+bytes(1024)
+        calls=[]
+        def forbidden(*a,**kw):calls.append(1);raise AssertionError('tarfile saw extension')
+        monkeypatch.setattr(ic.tarfile,'open',forbidden)
+        with pytest.raises(ic.ClosureError,match='extension'):ic.inventory_from_save_file(_w(raw),'sha256:'+'1'*64)
+        assert calls==[]
+        monkeypatch.setattr(ic.tarfile,'open',original)
+        sv,iid=_save([raw])
+        with pytest.raises(ic.ClosureError,match='extension'):ic.inventory_from_save_file(_w(sv),iid)
+
+
+def test_v6_export_scratch_cleans_cli_temp_on_failure(monkeypatch,tmp_path):
+    _dl(monkeypatch);import docker_owner as do
+    # Exercise the real scratch context, mocking ONLY mount/umount. No Docker or mount call is made.
+    calls=[]
+    monkeypatch.setattr(do.subprocess,'run',lambda argv,**kw:calls.append(argv))
+    cli=do.DockerCli()
+    with pytest.raises(OSError):
+        with cli.export_scratch(tmp_path) as p:
+            (p/'.docker_temp_123').write_bytes(b'partial')
+            (p/'image.tar').write_bytes(b'data')
+            raise OSError('save timeout')
+    assert list(tmp_path.iterdir())==[]
+    assert calls[0][0]=='/usr/bin/mount' and calls[-1][0]=='/usr/bin/umount'
+    # Client limit is not daemon budget: default real save fails BEFORE any docker command.
+    calls.clear()
+    with pytest.raises(do.OwnerError,match='daemon export budget'):cli.save('sha256:'+'1'*64,tmp_path/'never')
+    assert calls==[]

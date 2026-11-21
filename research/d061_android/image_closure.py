@@ -52,6 +52,39 @@ def _under(p, root):
     return p == root or p.startswith(root.rstrip('/') + '/')
 
 
+def raw_tar_guard(f, total_bytes, lim, outer=False):
+    """Fixed 512-byte headers only, before tarfile sees anything. Reject extensions BEFORE their declared payload can be allocated.
+    No PAX (including xattrs/capabilities), GNU longname/longlink/sparse, base-256 numeric fields or unknown types. Constant buffer.
+    Input is seekable and caller-bounded. We reject trailing nonzero bytes, truncated bodies and noncanonical end markers."""
+    start = f.tell(); offset = 0; count = 0
+    maximum = lim['outer_members'] if outer else lim['layer_members']
+    while offset + 512 <= total_bytes:
+        h = f.read(512); offset += 512
+        if len(h) != 512: raise ClosureError('truncated raw header')
+        if h == bytes(512):
+            # Only zero padding may follow the first end marker.
+            while offset < total_bytes:
+                d = f.read(min(65536, total_bytes-offset)); offset += len(d)
+                if not d or any(d): raise ClosureError('nonzero or truncated tar trailer')
+            f.seek(start); return
+        count += 1
+        if count > maximum: raise ClosureError('raw member count')
+        if h[156:157] not in (b'0', b'\0', b'1', b'2', b'5'): raise ClosureError('PAX/GNU/sparse/unknown extension rejected before allocation')
+        if outer and h[156:157] not in (b'0', b'\0', b'5'): raise ClosureError('outer member type')
+        rawsize = h[124:136].strip(b'\0 ')
+        if any(c not in b'01234567' for c in rawsize): raise ClosureError('non-octal size unsupported')
+        n = int(rawsize or b'0',8)
+        cap = lim['layer_bytes'] if outer else lim['file']
+        if n > cap: raise ClosureError('raw member size')
+        if h[156:157] not in (b'0',b'\0') and n != 0: raise ClosureError('non-file payload unsupported')
+        name = h[:100].split(b'\0')[0]; prefix = h[345:500].split(b'\0')[0]; link = h[157:257].split(b'\0')[0]
+        if len(name)+len(prefix)+1 > lim['name'] or len(link) > lim['name']: raise ClosureError('raw name length')
+        padded = (n+511)//512*512
+        if offset+padded > total_bytes: raise ClosureError('raw body outside archive')
+        f.seek(padded,1); offset += padded
+    raise ClosureError('tar end marker missing')
+
+
 def _outer_index(tf, lim):
     idx = {}
     while True:
@@ -78,6 +111,8 @@ def _inventory(path, image_id, limits=None):
     import os
     if not isinstance(image_id, str) or not image_id.startswith('sha256:') or len(image_id) != 71: raise ClosureError('image id')
     if os.path.getsize(path) > lim['archive']: raise ClosureError('archive over limit')
+    with open(path, 'rb') as raw:
+        raw_tar_guard(raw, os.path.getsize(path), lim, outer=True)
     with tarfile.open(path, 'r:') as tf:
         idx = _outer_index(tf, lim)
         def small(name):
@@ -96,6 +131,7 @@ def _inventory(path, image_id, limits=None):
         for name, diff in zip(layers, diff_ids):
             m = idx.get(name)
             if m is None or not m.isreg() or m.size > lim['layer_bytes']: raise ClosureError('layer missing or over limit')
+            raw_tar_guard(tf.extractfile(m), m.size, lim)
             _apply_layer(fs, tf.extractfile(m), diff, lim, budget)
     return {p: dict(e) for p, e in fs.items()}
 
