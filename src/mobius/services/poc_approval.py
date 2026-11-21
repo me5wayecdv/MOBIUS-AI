@@ -57,6 +57,7 @@ class PoCApprovalService:
             raise PoCApprovalError(f"approval is already {row.state}")
         if datetime.fromisoformat(row.expires_at.replace("Z", "+00:00")) <= datetime.now(timezone.utc):
             row.state = "expired"
+            row.decided_by = decided_by
             row.decided_at = utcnow()
             row.decision_note = "Approval request expired before decision"
             SqlEventStore(self.session).emit(investigation_id, "approval_resolved", {
@@ -66,6 +67,7 @@ class PoCApprovalService:
         if decision not in {"granted", "rejected"}:
             raise PoCApprovalError("decision must be granted or rejected")
         row.state = decision
+        row.decided_by = decided_by
         row.intensity_granted = row.intensity_required if decision == "granted" else None
         row.decided_at = utcnow()
         row.decision_note = note
@@ -81,6 +83,7 @@ class PoCApprovalService:
         if row.state != "pending":
             raise PoCApprovalError(f"approval is already {row.state}")
         row.state = "revoked"
+        row.decided_by = cancelled_by
         row.decided_at = utcnow()
         row.decision_note = "Cancelled by requester"
         SqlEventStore(self.session).emit(investigation_id, "approval_resolved", {

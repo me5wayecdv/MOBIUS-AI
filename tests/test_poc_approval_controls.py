@@ -11,6 +11,8 @@ from test_poc_execution import _context
 
 def _approval_plan(session, store, future_iso):
     scan, base = _context(session, store, future_iso)
+    from mobius.services.intake import IntakeService
+    IntakeService(session,store)._ensure_user("reviewer-1")
     plan = base.model_copy(update={
         "safety_class": "non_destructive",
         "requires_approval": True,
@@ -68,6 +70,8 @@ def test_cooperative_cancel_runs_cleanup(session, store, future_iso):
 
 def test_step_timeout_runs_cleanup(session, store, future_iso):
     scan, base = _context(session, store, future_iso)
+    from mobius.services.intake import IntakeService
+    IntakeService(session,store)._ensure_user("reviewer-1")
     plan = base.model_copy(update={
         "safety_class": "non_destructive",
         "requires_approval": True,
@@ -111,3 +115,33 @@ def test_poc_runs_list_exposes_hypothesis_binding(session, store, future_iso):
     payload = list_poc_runs(scan.id, session=session, who="analyst-1")
     assert payload["items"], "a persisted run must be listed"
     assert payload["items"][0]["hypothesis_ids"] == list(plan.hypothesis_ids)
+
+
+@pytest.mark.parametrize('decision',['granted','rejected'])
+def test_resolution_retains_deciding_actor_on_row_and_event(session,store,future_iso,decision):
+    from sqlalchemy import select
+    from sqlalchemy.orm import Session
+    from mobius.adapters.models import ApprovalRow,EventRow
+    scan,plan,approval=_approval_plan(session,store,future_iso)
+    row=PoCApprovalService(session).resolve(approval.id,investigation_id=scan.id,
+        decision=decision,decided_by='reviewer-1',note='UNIT TEST actor attribution')
+    assert row.decided_by=='reviewer-1'
+    session.commit()
+    with Session(bind=session.get_bind()) as fresh:
+        stored=fresh.get(ApprovalRow,approval.id)
+        assert stored.decided_by=='reviewer-1' and stored.state==decision
+        event=fresh.execute(select(EventRow).where(EventRow.investigation_id==scan.id,
+            EventRow.type=='approval_resolved')).scalar_one()
+        assert event.actor==stored.decided_by
+        assert event.payload['approval_id']==approval.id and event.payload['decision']==decision
+
+
+def test_expiry_and_cancellation_preserve_actual_resolving_actor(session,store,future_iso):
+    scan,plan,approval=_approval_plan(session,store,future_iso)
+    approval.expires_at='2026-01-01T00:00:00Z'
+    row=PoCApprovalService(session).resolve(approval.id,investigation_id=scan.id,
+        decision='granted',decided_by='reviewer-1',note='UNIT TEST expired attempt')
+    assert row.state=='expired' and row.decided_by=='reviewer-1'
+    scan,plan,approval=_approval_plan(session,store,future_iso)
+    row=PoCApprovalService(session).cancel(approval.id,investigation_id=scan.id,cancelled_by='analyst-1')
+    assert row.state=='revoked' and row.decided_by=='analyst-1'
