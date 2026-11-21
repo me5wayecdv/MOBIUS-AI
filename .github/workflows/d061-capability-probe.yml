@@ -36,5 +36,15 @@ jobs:
           ls /lib/modules/$(uname -r)/kernel/net/core/ 2>/dev/null | grep -i cgroup || true
       - name: nft syntax validation only (nft --check applies nothing)
         run: |
-          printf '%s\n' 'table inet probe_check { chain out { type filter hook output priority 0; policy drop; socket cgroupv2 level 1 "probe.slice" ip daddr 127.0.0.1 tcp dport 9999 accept } }' > /tmp/probe.nft
+          cat > /tmp/probe.nft <<'NFT'
+table inet probe_check {
+  chain out {
+    type filter hook output priority 0; policy drop;
+    socket cgroupv2 level 1 "probe.slice" ip daddr 127.0.0.1 tcp dport 9999 accept
+    socket cgroupv2 level 1 "probe.slice" ip6 daddr ::1 tcp dport 9999 accept
+  }
+}
+NFT
           sudo nft --check --file /tmp/probe.nft && echo NFT_CHECK_OK || echo NFT_CHECK_FAILED
+          sudo modprobe nft_socket 2>/dev/null && echo MODPROBE_NFT_SOCKET_OK || echo MODPROBE_FAILED_OR_BUILT_IN
+          sudo nft --check --file /tmp/probe.nft && echo NFT_CHECK2_OK || echo NFT_CHECK2_FAILED
