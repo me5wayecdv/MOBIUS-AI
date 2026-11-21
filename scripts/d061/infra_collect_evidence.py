@@ -16,7 +16,7 @@ FIXED = {
     'host-before.json', 'host-after.json', 'host-before-normalized.json',
     'host-after-normalized.json', 'namespace.json', 'namespace-final.json',
     'final-pids.json', 'summary.json', 'workload.log', 'original-traceback.txt',
-    'ownership.json', 'phase.json',
+    'ownership.json', 'phase.json', 'final-name-absence.json',
 }
 
 
