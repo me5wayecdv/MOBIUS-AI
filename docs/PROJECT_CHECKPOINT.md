@@ -40,8 +40,10 @@ and runtime copies activated through the exact orchestrator. See
   honest failure, not a desired-result retry. Exact payload reconstructed to
   stored input hash: public Allsafe manifest facts/metadata and fixed product
   instructions/schema, no raw APK/private code/user messages/credentials in
-  matching payload. Provider-reported10808input/184output tokens; conservative
-  accounting14186prompt bytes differs. Free-labelled route, billing unverified.
+  matching payload. Provider-reported10808prompt/184completion tokens;
+  conservative prompt-token accounting14186 is not actual provider usage.
+  Reconstructed compact input7094UTF8bytes is a separate measurement.
+  Free-labelled route, billing unverified.
   Cancelled connected runs stopped pre-script/model; unintended initial Frida
   run44884058267 observed public Allsafe classes11361 with recorded cleanup.
   PR119 safety merged34680b4 removes advisory PR/mainpush triggers, intentional
