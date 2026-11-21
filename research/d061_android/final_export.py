@@ -22,7 +22,7 @@ ROOT_FILES=frozenset({'outer-owner-intent.json','outer-owner-progress.json','out
     'runtime-launch-intent.json','runtime-launch.json','control-launch-intent.json','control-launch.json',
     'relay.log','runtime.log','control.log'})
 ROLE_FILES=frozenset({'namespace-setup.json','namespace-driver-result.json','wrapper-cleanup.json',
-    'trusted-final-absence.json','root-jail-intent.json'})
+    'trusted-final-absence.json','root-jail-intent.json'})   # docker backend writes the SAME names (backend-tagged); no new required file
 CONTROL_FILES=frozenset({'control-privileges.json','execute-response.json','api-readback.json','report.md',
     'control-result.json','export-manifest.json','setup/approved-plan.json','setup/fixture-provenance.json'})
 PUBLIC_FILES=frozenset({'owned-fixture.apk','public-ca.der','build-result.json','ready.json'})

@@ -112,7 +112,12 @@ def recover(root,*,attempt_id=None,relay_identity=None):
             if not exists(launched):raise RuntimeError('launch identity missing after launch intent')
             stage_path=root/'runtime-root-stage.json'
             stage=json.loads(read(stage_path,65536)) if role=='runtime' and exists(stage_path) else None
-            identity=json.loads(read(launched,65536))['identity']
+            launch_record=json.loads(read(launched,65536));identity=launch_record['identity']
+            if launch_record.get('backend')=='docker':
+                # Docker: no independent signal. Only the live owner kills; here records are checked, never mutated.
+                state['termination']={'state':'docker_no_independent_signal'}
+                state['absence']=check_absent(root/role,stage if role=='runtime' else None,record_name='outer-independent-absence-'+attempt_id+'.json')
+                state['state']='verified_absent';roles.append(state);continue
             state['termination']=terminate(identity)
             # Parent-death closes unshare PID1. Membership/FD absence is checked
             # independently; a missing setup record remains unverified, not clean.
@@ -156,7 +161,10 @@ def main():
     root=Path('/opt')/('d061-owned-android-run-'+run_id)
     owner={'version':'owned-android-owner/1','run_id':run_id,'provisioning_id':provisioning_id,
         'root':str(root),'workflow_context':context,'owner_identity':process_identity(os.getpid()),'stage':'before_root_creation',
-        'relay_launch_expected':False,'relay_identity':None}
+        'relay_launch_expected':False,'relay_identity':None,
+        'backend':context.get('backend','jail')}
+    if owner['backend']=='docker':owner['docker']=context['docker']   # root-owned immutable per-workflow context only
+    elif owner['backend']!='jail':raise ValueError('closed backend set')
     # Exact external locator created BEFORE the run-root or any relay effect.
     # One-shot publication refuses another active owner, never silently replaces.
     json_write(LOCATOR,owner)

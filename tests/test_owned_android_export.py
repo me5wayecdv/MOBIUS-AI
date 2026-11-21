@@ -1952,6 +1952,14 @@ def test_docker_lifecycle_v2_exact_spec_and_lifecycle(monkeypatch):
                 dict(ns_fds_held=False),dict(cgroup_fd_held=None),dict(net_ns_inode=13)):
         with pytest.raises(dl.SpecError):dl.bind_started(cr,started,dict(obs,**bad),host,sibling_ns={'pid_ns_inode':11,'mnt_ns_inode':12,'net_ns_inode':13})
     with pytest.raises(dl.SpecError):dl.bind_started(cr,started,obs,{'pid_ns_inode':91})       # host net inode required
+    sib={'pid_ns_inode':11,'mnt_ns_inode':12,'net_ns_inode':13}
+    for bad_host in (93,{'net_ns_inode':93},{'pid_ns_inode':91,'mnt_ns_inode':92},dict(host,extra=1),dict(host,net_ns_inode='93'),None):
+        with pytest.raises(dl.SpecError):dl.bind_started(cr,started,obs,bad_host,sibling_ns=sib)
+    with pytest.raises(dl.SpecError):dl.bind_started(cr,started,obs,host)                      # sibling must be explicit
+    for bad_sib in ({'net_ns_inode':13},dict(sib,net_ns_inode=0),{'pid_ns_inode':1,'mnt_ns_inode':12,'net_ns_inode':13},dict(sib,x=1),5):
+        with pytest.raises(dl.SpecError):dl.bind_started(cr,started,obs,host,sibling_ns=bad_sib)
+    assert dl.bind_started(cr,started,obs,host,sibling_ns=None)['stage']=='started_gated'    # explicit 'no sibling yet'
+    assert ('nproc',512) in dl.ULIMITS and '--ulimit' in dl.create_argv('control','a'*32,'img@sha256:'+'1'*64,mem_mb=512,pids=64,cpus=1) 
     with pytest.raises(dl.SpecError):dl.bind_started(dl.after_create(it,'x'),started,obs,host)
     with pytest.raises(dl.SpecError):dl.bind_started(cr,{'Id':cid,'State':{'Running':False,'Pid':0}},obs,host)
     ex={'Id':cid,'State':{'Running':False,'Status':'exited','Pid':0,'ExitCode':0}}
@@ -1961,7 +1969,7 @@ def test_docker_lifecycle_v2_exact_spec_and_lifecycle(monkeypatch):
                            ({'Id':'f'*64,'State':ex['State']},True,True),({'Id':cid,'State':dict(ex['State'],ExitCode=None)},True,True),(ex,True,True)):
         r=dl.leader_exit_observed(bad_ex,b if bad_ex is not ex or (pf,gone)!=(True,True) else dict(b,stage='created'),pf,gone)
         assert r['leader_exit_observed'] is False
-    assert dl.driver_result_record(dl.leader_exit_observed(ex,b,True,False))=={'complete':True,'driver_rc':0,'scope':'translated_daemon_exit_plus_owner_pidfd_not_waitpid'}
+    assert dl.driver_result_record(dl.leader_exit_observed(ex,b,True,False))=={'complete':True,'driver_rc':0,'backend':'docker','scope':'translated_daemon_exit_plus_owner_pidfd_not_waitpid'}
     assert dl.driver_result_record({'leader_exit_observed':False,'scope':'x'})['complete'] is False
     rec_ns=dl.namespace_setup_record(b);assert rec_ns['namespaces']=={'net':'net:[3]','mnt':'mnt:[2]','pid':'pid:[1]'}
     with pytest.raises(dl.SpecError):dl.namespace_setup_record(cr)
@@ -1976,12 +1984,16 @@ def test_docker_lifecycle_v2_exact_spec_and_lifecycle(monkeypatch):
     assert not dl.role_closure_ok('control',ok+['/usr/bin/qemu-system-x86_64']) and not dl.role_closure_ok('control',[dl.DRIVER['control']])
     assert dl.role_closure_ok('runtime',[dl.GATE,dl.DRIVER['runtime'],'/opt/android/emulator/emulator'])
     inv={dl.GATE:'1'*64,dl.DRIVER['control']:'2'*64,'/runtime/bin/python':'3'*64}
-    rows=[{'path':k,'sha256':v} for k,v in inv.items()]
+    inv={k:{'type':'file','mode':0o755,'uid':0,'gid':0,'size':1,'sha256':v} for k,v in inv.items()}
+    rows=[{'path':k,**v} for k,v in inv.items()]
     assert dl.inventory_matches('control',inv,rows)
-    assert not dl.inventory_matches('control',dict(inv,**{'/extra':'4'*64}),rows)
+    ent=lambda h:{'type':'file','mode':0o755,'uid':0,'gid':0,'size':1,'sha256':h}
+    assert not dl.inventory_matches('control',dict(inv,**{'/extra':ent('4'*64)}),rows)
     assert not dl.inventory_matches('control',inv,rows[:-1])
-    assert not dl.inventory_matches('control',dict(inv,**{dl.GATE:'9'*64}),rows)
-    assert not dl.inventory_matches('control',dict(inv,**{'/opt/android/x':'4'*64}),rows+[{'path':'/opt/android/x','sha256':'4'*64}])
+    assert not dl.inventory_matches('control',dict(inv,**{dl.GATE:ent('9'*64)}),rows)
+    assert not dl.inventory_matches('control',dict(inv,**{dl.GATE:dict(inv[dl.GATE],mode=0o4755)}),rows)    # mode is compared
+    assert not dl.inventory_matches('control',dict(inv,**{dl.GATE:dict(inv[dl.GATE],type='symlink')}),rows)
+    assert not dl.inventory_matches('control',dict(inv,**{'/opt/android/x':ent('4'*64)}),rows+[{'path':'/opt/android/x',**ent('4'*64)}])
     assert not dl.inventory_matches('control',inv,[{'path':'x'}])
 
 
@@ -2005,3 +2017,230 @@ def test_container_gate_blocks_until_owner_byte(monkeypatch):
     import docker_lifecycle as dl
     assert g.GATE_SECONDS==dl.GATE_SECONDS
     assert run(b'\x01')==4 and calls==[(sys.executable,[sys.executable,'/fixture/contained_driver.py','/work'])]
+
+
+# ---- v4: owner call path with FAKE backends (order and fail-closed branches only; no daemon/kernel evidence) ----
+class _FakeAttach:
+    def __init__(self, log, st): self.log, self.st, self.writes = log, st, []
+    def write(self, b): self.log.append('gate_byte'); self.writes.append(b)
+    def poll(self): return self.st.get('attach_rc')
+    def pump(self, sink, ceiling=65536): pass
+    def close(self): self.log.append('attach_close')
+
+
+class _FakeDocker:
+    docker = '/usr/bin/docker'
+    def __init__(self, dl, role, run, img, iid, root, log, kv):
+        self.dl, self.role, self.run_id, self.img, self.iid, self.root, self.log = dl, role, run, img, iid, root, log
+        self.st = {'removed': False, 'exited': False, 'create_out': ('c' * 64 + '\n').encode(), 'mutate': None, 'pid': 4242}
+        self.kv = kv; self.cmds = []
+    def run(self, args, timeout=30):
+        import copy
+        self.cmds.append(list(args)); a = args[0]; self.log.append('docker_' + a)
+        if a == 'image': return 0, json.dumps([{'Id': self.iid, 'RepoDigests': [self.img]}]).encode(), b''
+        if a == 'create':
+            assert (self.root / 'runtime-launch-intent.json').exists() or (self.root / 'control-launch-intent.json').exists()
+            return 0, self.st['create_out'], b''
+        if a == 'inspect':
+            if self.st['removed']: return 1, b'', b'Error: No such container: ' + args[-1].encode()
+            rec = _fixture(self.dl, self.role, self.run_id, self.img, self.iid, kvm=self.kv)
+            if self.st.get('started'): rec['State'] = {'Status': 'running', 'Running': True, 'Pid': self.st['pid']}
+            if self.st['exited']: rec['State'] = {'Status': 'exited', 'Running': False, 'Pid': 0, 'ExitCode': self.st.get('exit_code', 0)}
+            if self.st['mutate'] and not self.st.get('started'): self.st['mutate'](rec)
+            return 0, json.dumps([rec]).encode(), b''
+        if a == 'kill': self.st['exited'] = True; return 0, b'', b''
+        if a == 'rm': self.st['removed'] = True; return 0, b'', b''
+        raise AssertionError(args)
+    def attach(self, args):
+        assert args[:3] == ['start', '--attach', '--interactive'] and args[3] == 'c' * 64
+        self.st['started'] = True; self.log.append('docker_start'); return _FakeAttach(self.log, self.st)
+
+
+class _FakeProc:
+    def __init__(self, log, st, dl): self.log, self.st, self.dl = log, st, dl; self.ns = {'pid_ns_inode': 1, 'mnt_ns_inode': 2, 'net_ns_inode': 3}
+    def host_ns(self): return {'pid_ns_inode': 91, 'mnt_ns_inode': 92, 'net_ns_inode': 93}
+    def acquire(self, pid):
+        import docker_owner as do
+        self.log.append('acquire')
+        h = do.Handles.__new__(do.Handles)
+        h.pid, h.pidfd, h.ns_fds, h.cgroup_fd, h.cgroup_path = pid, 1, {'pid': 1, 'mnt': 2, 'net': 3}, 4, '/system.slice/docker-%s.scope' % ('c' * 64)
+        h.t0 = h.t1 = self.st.get('t1', 777); h.closed = False
+        h.ns_inodes = lambda: dict(self.ns); h.exited = lambda: self.st['exited']
+        def close(): self.log.append('handles_close'); h.closed = True
+        h.close = close; return h
+    def identity_gone(self, pid, start): return self.st['exited']
+    def cgroup_unpopulated_or_gone(self, cg): self.log.append('cgroup_probe'); return self.st.get('cgroup_gone', True)
+    def ns_members(self, ids): self.log.append('ns_scan'); return self.st.get('members', [])
+
+
+def _owner(monkeypatch, tmp_path, role='runtime', **over):
+    dl = _dl(monkeypatch); import docker_owner as do
+    run = 'a' * 32; img = 'registry.invalid/x@sha256:' + 'b' * 64; iid = 'sha256:' + 'd' * 64
+    log = []; kv = 108 if role == 'runtime' else None
+    root = tmp_path / 'run'; (root).mkdir(); (root / (role + '-in')).mkdir()
+    fd = _FakeDocker(dl, role, run, img, iid, root, log, kv); fd.st.update(over)
+    pr = _FakeProc(log, fd.st, dl)
+    params = dict(mem_mb=2048, pids=256, cpus=2, kvm_gid=kv)
+    o = do.RoleOwner(root, role, run, img, params, fd, pr, sibling_ns=over.pop('sib', None), sleep=lambda s: None, chown=lambda *a: log.append('chown'))
+    import io; o.log = None
+    return dl, do, o, fd, log, root
+
+
+def test_docker_owner_call_path_order_and_evidence(monkeypatch, tmp_path):
+    dl, do, o, fd, log, root = _owner(monkeypatch, tmp_path)
+    h = o.launch()
+    assert log.index('docker_image') < log.index('docker_create') < log.index('docker_start') < log.index('acquire') < log.index('gate_byte')
+    assert (root / 'runtime-launch.json').exists() and (root / 'runtime/namespace-setup.json').exists()   # durable BEFORE release
+    setup = json.loads((root / 'runtime/namespace-setup.json').read_text())
+    assert setup['backend'] == 'docker' and setup['container_id'] == 'c' * 64 and setup['namespaces']['net'] == 'net:[3]'
+    assert json.loads((root / 'runtime-launch.json').read_text())['backend'] == 'docker'
+    assert h.poll() is None and not (root / 'runtime/namespace-driver-result.json').exists()
+    fd.st['exited'] = True; fd.st['exit_code'] = 0
+    assert h.wait(timeout=1) == 0
+    assert json.loads((root / 'runtime/namespace-driver-result.json').read_text())['driver_rc'] == 0
+    n = len(log); wr = o.cleanup(h)
+    tail = log[n:]
+    assert tail.index('handles_close') < tail.index('docker_rm') < tail.index('ns_scan')       # handles closed before scan; removal after exit capture
+    assert log.index('docker_inspect') < log.index('docker_rm')
+    assert wr['container_absent'] is True and wr['backend'] == 'docker' and wr['verdict'] == 'VERIFIED_ABSENT_RECORD'
+    assert all(c[1] != 'd061-runtime-' + 'a' * 32 for c in fd.cmds if c[0] in ('rm', 'kill'))      # removal/kill by bound ID only
+    assert ['rm', '--volumes', 'c' * 64] in fd.cmds and not any(c[0] == 'kill' for c in fd.cmds)
+    assert dl.wrapper_problems(setup, wr, role='runtime', run_id='a' * 32) == []
+    with pytest.raises(do.OwnerError): o.launch()                                                  # single launch
+
+
+def test_docker_owner_fail_closed_branches(monkeypatch, tmp_path):
+    # ambiguous create output: UNVERIFIED, nothing removed (no ID, never by name), nothing started
+    dl, do, o, fd, log, root = _owner(monkeypatch, tmp_path, create_out=b'garbled')
+    with pytest.raises(do.OwnerError, match='ambiguous'): o.launch()
+    assert 'docker_rm' not in log and 'docker_start' not in log
+    assert json.loads((root / 'runtime-container-record.json').read_text())['state'] == 'UNVERIFIED'
+    # inspect differs from spec: removed by bound ID, never started
+    (tmp_path / 'b').mkdir()
+    dl, do, o, fd, log, root = _owner(monkeypatch, tmp_path / 'b', mutate=lambda r: r['HostConfig'].update(Privileged=True))
+    with pytest.raises(do.OwnerError, match='differs'): o.launch()
+    assert 'docker_start' not in log and ['rm', '--force', '--volumes', 'c' * 64] in fd.cmds
+    # starttime changed while acquiring handles: bind refused, gate byte never written, kill by ID then remove
+    (tmp_path / 'c').mkdir()
+    dl, do, o, fd, log, root = _owner(monkeypatch, tmp_path / 'c')
+    orig = o.proc.acquire
+    def racy(pid):
+        h = orig(pid); h.t1 = h.t0 + 1; return h
+    o.proc.acquire = racy
+    with pytest.raises(do.OwnerError, match='failed closed'): o.launch()
+    assert 'gate_byte' not in log and any(c[0] == 'kill' for c in fd.cmds) and ['rm', '--force', '--volumes', 'c' * 64] in fd.cmds
+    assert not (root / 'runtime-launch.json').exists()
+    # sibling sharing a namespace identity is refused before release
+    (tmp_path / 'd').mkdir()
+    dl, do, o, fd, log, root = _owner(monkeypatch, tmp_path / 'd', role='control')
+    o.sibling_ns = {'pid_ns_inode': 1, 'mnt_ns_inode': 12, 'net_ns_inode': 13}
+    with pytest.raises(do.OwnerError): o.launch()
+    assert 'gate_byte' not in log
+
+
+def test_docker_owner_cleanup_absence_failures_stay_unverified(monkeypatch, tmp_path):
+    for k, v in (('cgroup_gone', False), ('members', ['/proc/9/ns/net'])):
+        d = tmp_path / k; d.mkdir()
+        dl, do, o, fd, log, root = _owner(monkeypatch, d)
+        h = o.launch(); fd.st['exited'] = True
+        fd.st[k] = v
+        wr = o.cleanup(h)
+        assert wr['container_absent'] is False and wr['verdict'] == 'PRESENT'
+    # live runtime killed by bound ID only, exit still captured before removal
+    d = tmp_path / 'k'; d.mkdir()
+    dl, do, o, fd, log, root = _owner(monkeypatch, d)
+    h = o.launch()
+    assert o.kill_bound() is True and ['kill', '--signal', 'KILL', 'c' * 64] in fd.cmds
+    wr = o.cleanup(h)
+    assert log.index('docker_kill') < log.index('docker_rm') and wr['container_absent'] is True
+
+
+def test_docker_backend_consumers_and_mixed_records(monkeypatch, tmp_path):
+    dl, do, o, fd, log, root = _owner(monkeypatch, tmp_path)
+    import owned_absence as oa
+    h = o.launch(); fd.st['exited'] = True; h.wait(timeout=1); wr = o.cleanup(h)
+    setup = json.loads((root / 'runtime/namespace-setup.json').read_text())
+    assert dl.wrapper_problems(setup, wr) == []
+    bad = [dict(wr, backend='jail'), dict(wr, role='control'), dict(wr, run_id='f' * 32), dict(wr, container_id='e' * 64),
+           dict(wr, container_absent=False), dict(wr, errors=['x']), dict(wr, verdict='UNVERIFIED'),
+           dict(wr, absence=dict(wr['absence'], handles_absent=None))]
+    for b in bad: assert dl.wrapper_problems(setup, b)
+    assert dl.wrapper_problems(dict(setup, backend='jail'), wr)                      # mixed tag
+    assert dl.wrapper_problems(dict(setup, run_id='f' * 32), wr)
+    # owned_absence consumes docker-tagged records; a jail-shaped wrapper beside a docker setup is rejected
+    rr = tmp_path / ('d061-owned-android-run-' + 'a' * 32)
+    (rr / 'runtime/work/evidence').mkdir(parents=True)
+    for n, v in (('namespace-setup.json', setup), ('wrapper-cleanup.json', wr)): (rr / 'runtime' / n).write_text(json.dumps(v))
+    st = oa.inspect(rr / 'runtime', root_stage={'runtime_launched': True, 'emulator_expected': False, 'app_expected': False})
+    assert not [e for e in st['errors'] if e.get('stage') == 'wrapper']
+    (rr / 'runtime/wrapper-cleanup.json').write_text(json.dumps({'errors': [], 'jail_absent': True, 'jail': '/opt/d061-owned-android-jail-x'}))
+    st = oa.inspect(rr / 'runtime', root_stage={'runtime_launched': True, 'emulator_expected': False, 'app_expected': False})
+    assert any(e.get('stage') == 'wrapper' for e in st['errors']) and st['complete'] is False
+
+
+def test_image_closure_from_save_binds_config_digest_and_layers(monkeypatch):
+    import io, tarfile
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1] / 'research' / 'd061_android'))
+    import image_closure as ic
+    def tar(entries):
+        b = io.BytesIO()
+        with tarfile.open(fileobj=b, mode='w') as t:
+            for name, kind, data, extra in entries:
+                ti = tarfile.TarInfo(name); ti.mode = extra.get('mode', 0o644); ti.uid = 0; ti.gid = 0
+                if kind == 'file': ti.size = len(data); t.addfile(ti, io.BytesIO(data))
+                elif kind == 'dir': ti.type = tarfile.DIRTYPE; ti.mode = 0o755; t.addfile(ti)
+                elif kind == 'sym': ti.type = tarfile.SYMTYPE; ti.linkname = data; t.addfile(ti)
+                elif kind == 'hard': ti.type = tarfile.LNKTYPE; ti.linkname = data; t.addfile(ti)
+                elif kind == 'fifo': ti.type = tarfile.FIFOTYPE; t.addfile(ti)
+        return b.getvalue()
+    def save(layers, tamper_cfg=False, wrong_diff=False):
+        ds = ['sha256:' + hashlib.sha256(l).hexdigest() for l in layers]
+        if wrong_diff: ds[0] = 'sha256:' + '0' * 64
+        cfg = json.dumps({'rootfs': {'type': 'layers', 'diff_ids': ds}}).encode()
+        iid = 'sha256:' + hashlib.sha256(cfg).hexdigest()
+        if tamper_cfg: cfg = cfg + b' '
+        b = io.BytesIO()
+        with tarfile.open(fileobj=b, mode='w') as t:
+            def add(n, d):
+                ti = tarfile.TarInfo(n); ti.size = len(d); t.addfile(ti, io.BytesIO(d))
+            add('manifest.json', json.dumps([{'Config': 'cfg.json', 'Layers': ['l%d.tar' % i for i in range(len(layers))]}]).encode()); add('cfg.json', cfg)
+            for i, l in enumerate(layers): add('l%d.tar' % i, l)
+        return b.getvalue(), iid
+    l1 = tar([('runtime', 'dir', b'', {}), ('runtime/bin', 'dir', b'', {}), ('runtime/bin/python', 'file', b'PY', {'mode': 0o755}),
+              ('etc', 'dir', b'', {}), ('etc/old', 'file', b'x', {}), ('etc/keep', 'file', b'k', {}), ('fixture', 'dir', b'', {}), ('fixture/a', 'file', b'a', {})])
+    l2 = tar([('etc/.wh.old', 'file', b'', {}), ('runtime/bin/py', 'sym', 'python', {}), ('runtime/bin/hl', 'hard', 'runtime/bin/python', {}),
+              ('fixture/.wh..wh..opq', 'file', b'', {}), ('fixture/b', 'file', b'b', {})])
+    sv, iid = save([l1, l2]); inv = ic.inventory_from_save(sv, iid)
+    assert '/etc/old' not in inv and '/etc/keep' in inv and '/fixture/a' not in inv and inv['/fixture/b']['sha256'] == hashlib.sha256(b'b').hexdigest()
+    assert inv['/runtime/bin/py'] == {'mode': 0o644, 'uid': 0, 'gid': 0, 'type': 'symlink', 'link': 'python'}
+    assert inv['/runtime/bin/hl']['sha256'] == inv['/runtime/bin/python']['sha256'] and inv['/runtime/bin/hl']['type'] == 'hardlink'
+    assert inv['/runtime/bin/python']['mode'] == 0o755
+    dl = _dl(monkeypatch); rows = ic.lock_rows(inv)
+    inv2 = dict(inv); inv2.pop('/runtime/bin/hl'); rows2 = ic.lock_rows(inv2)
+    assert not dl.inventory_matches('control', inv, rows2) and not dl.inventory_matches('control', inv, rows)   # no gate/driver in this toy image
+    for bad in (save([l1, l2], tamper_cfg=True), save([l1, l2], wrong_diff=True)):
+        with pytest.raises(ic.ClosureError): ic.inventory_from_save(bad[0], bad[1])
+    with pytest.raises(ic.ClosureError): ic.inventory_from_save(sv, 'sha256:' + '1' * 64)
+    for evil in ([('../x', 'file', b'', {})], [('/abs', 'file', b'', {})], [('f', 'fifo', b'', {})], [('h', 'hard', 'nope', {})]):
+        s2, i2 = save([tar(evil)])
+        with pytest.raises(ic.ClosureError): ic.inventory_from_save(s2, i2)
+    assert ic.APPROVED_FOR_EXECUTION is False
+
+
+def test_sibling_check_absent_docker_branch_and_recovery_unverified(monkeypatch, tmp_path):
+    dl, do, o, fd, log, root = _owner(monkeypatch, tmp_path)
+    import sibling_supervisor as ss
+    h = o.launch(); fd.st['exited'] = True; h.wait(timeout=1); o.cleanup(h)
+    rr = tmp_path / ('d061-owned-android-run-' + 'a' * 32); rr.mkdir()
+    (rr / 'runtime').mkdir()
+    for n in ('namespace-setup.json', 'wrapper-cleanup.json'): (rr / 'runtime' / n).write_text((root / 'runtime' / n).read_text())
+    # recovery after owner death: no independent signal, never accepted as verified
+    with pytest.raises(RuntimeError): ss.check_absent(rr / 'runtime', recover_missing_wrapper=True)
+    state = json.loads((rr / 'runtime/trusted-final-absence.json').read_text())
+    assert 'docker_recovery_unverified_no_independent_signal' in state['errors'] and state['complete'] is False
+    # missing wrapper record stays unverified
+    (rr / 'runtime/wrapper-cleanup.json').unlink(); (rr / 'runtime/trusted-final-absence.json').unlink()
+    with pytest.raises(RuntimeError): ss.check_absent(rr / 'runtime')
+    # mixed: jail-shaped wrapper beside docker setup
+    (rr / 'runtime/wrapper-cleanup.json').write_text(json.dumps({'errors': [], 'jail_absent': True})); (rr / 'runtime/trusted-final-absence.json').unlink()
+    with pytest.raises(RuntimeError): ss.check_absent(rr / 'runtime')

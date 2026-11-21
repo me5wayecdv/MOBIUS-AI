@@ -70,7 +70,15 @@ def inspect(root,*,require_launched=True,proc=Path('/proc'),root_stage=None):
                         except PermissionError:state['errors'].append({'stage':'namespace_fd_scan','class':'unreadable'})
                 except FileNotFoundError:pass
                 except PermissionError:state['errors'].append({'stage':'namespace_fd_directory','class':'unreadable'})
-    if wrapper:
+    if wrapper and (wrapper.get('backend')=='docker' or (setup or {}).get('backend')=='docker'):
+        import docker_lifecycle
+        problems=docker_lifecycle.wrapper_problems(setup,wrapper,role=root.name,run_id=root.parent.name.rsplit('-',1)[-1])
+        if problems:state['errors'].append({'stage':'wrapper','class':'docker_'+'_'.join(problems)})
+        sensitive=('work/build/private-build-home','work/evidence/origin.key','work/evidence/home','work/home','work/build/disposable-signing.p12')
+        remaining=[name for name in sensitive if anchored_exists(root/name)]
+        state['private_material_absent']=not remaining
+        if remaining:state['errors'].append({'stage':'private_material','remaining':remaining})
+    elif wrapper:
         if wrapper.get('errors')!=[] or wrapper.get('jail_absent') is not True:
             state['errors'].append({'stage':'wrapper','class':'incomplete'})
         jail=wrapper.get('jail')

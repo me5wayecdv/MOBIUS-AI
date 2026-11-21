@@ -32,17 +32,20 @@ def root_file(path,limit):
     return read(path,limit)
 
 
-def verify_root_inputs():
+def verify_root_inputs(backend='jail'):
     # File closure content is verified again by each fixed wrapper, never trust
     # archive SHA256 as a staged executable/library closure. No licenses accepted.
-    runtime=root_file('/opt/d061-android-closure/closure-lock.json',16*1024**2)
-    control=root_file('/opt/d061-control-closure/closure-lock.json',16*1024**2)
+    # Docker backend: the image-inventory lock (typed rows, see image_closure/docker_lifecycle.inventory_matches) replaces the jail lock.
+    lock_dirs=('/opt/d061-android-closure','/opt/d061-control-closure') if backend=='jail' else ('/opt/d061-docker-closure/runtime','/opt/d061-docker-closure/control')
+    runtime=root_file(lock_dirs[0]+'/closure-lock.json',16*1024**2)
+    control=root_file(lock_dirs[1]+'/closure-lock.json',16*1024**2)
     source=root_file(SOURCE/'source-manifest.json',1048576)
     lock=json.loads(source)
     if lock.get('status')!='EXACT_REVIEWED_SIBLING_SOURCE_LOCK':raise ValueError('source lock unresolved')
     required={'sibling_supervisor.py','namespace_supervisor.py','contained_driver.py','control_driver.py',
         'handoff_protocol.py','handoff_io.py','owned_collect.py','owned_absence.py','owned_product_setup.py',
         'adb_scope.py','emulator_scope.py','build_owned.py','app_negative_preparation.py','profile.py','product_contract.py','outer_owner.py'}
+    if backend=='docker':required=required|{'docker_lifecycle.py','docker_owner.py','image_closure.py','container_gate.py'}
     rows=lock.get('files',[])
     if len(rows)!=len(required) or {row['path'] for row in rows}!=required:raise ValueError('fixed complete relay source set required')
     for row in rows:
@@ -75,7 +78,16 @@ def check_absent(output,root_stage=None,record_name="trusted-final-absence.json"
         except PermissionError:errors.append('fd_directory_unreadable')
     wrapper_path=Path(output)/'wrapper-cleanup.json'
     original_cleanup_present=exists(wrapper_path)
-    if original_cleanup_present:
+    if setup.get('backend')=='docker':
+        # Backend-tagged branch. Jail validation below is untouched for untagged records.
+        import docker_lifecycle
+        if recover_missing_wrapper:
+            errors.append('docker_recovery_unverified_no_independent_signal')
+        elif original_cleanup_present:
+            problems=docker_lifecycle.wrapper_problems(setup,json.loads(read(wrapper_path,65536)),role=Path(output).name,run_id=Path(output).parent.name.rsplit('-',1)[-1])
+            if problems:errors.extend('docker_'+x for x in problems)
+        else:errors.append('wrapper_cleanup_missing_unverified')
+    elif original_cleanup_present:
         wrapper=json.loads(read(wrapper_path,65536))
         if wrapper.get('errors') or not wrapper.get('jail_absent'):errors.append('wrapper_cleanup_incomplete')
     elif not recover_missing_wrapper:errors.append('wrapper_cleanup_missing_unverified')
@@ -132,7 +144,9 @@ def main():
     owner=json.loads(root_file(root/'outer-owner-intent.json',65536))
     run_id=owner['run_id'];provisioning_id=owner['provisioning_id']
     if root.name!='d061-owned-android-run-'+run_id:raise ValueError('outer root identity differs')
-    inputs=verify_root_inputs()
+    backend=owner.get('backend','jail')
+    if backend not in ('jail','docker'):raise ValueError('closed backend set')
+    inputs=verify_root_inputs(backend)
     expected=ExpectedContext(run_id=run_id,provisioning_id=provisioning_id,
         closure_sha256=inputs['closure_sha256'],source_manifest_sha256=inputs['source_manifest_sha256'])
     ctx={**inputs,'run_id':run_id,'provisioning_id':provisioning_id,'host_netns':os.readlink('/proc/self/ns/net')}
@@ -147,9 +161,28 @@ def main():
     old_handlers={}
     def interrupted(sig,frame):raise SystemExit(128+sig)
     for sig in (signal.SIGTERM,signal.SIGINT,signal.SIGHUP):old_handlers[sig]=signal.signal(sig,interrupted)
+    docker_owners={}
+    def launch_docker(role):
+        # Docker backend: the trusted owner module binds identity before release; call sites below keep the same child-like shape.
+        import docker_owner,docker_lifecycle
+        spec=owner['docker']   # {'image','mem_mb','pids','cpus','kvm_gid'} from the root-owned owner intent, never from a payload
+        params={k:spec[k] for k in ('mem_mb','pids','cpus')};params['kvm_gid']=spec.get('kvm_gid') if role=='runtime' else None
+        proc=docker_owner.HostProc()
+        other=docker_owners.get('control' if role=='runtime' else 'runtime')
+        sibling=None if other is None else {k:other.bound[k] for k in docker_lifecycle.NS_KEYS}
+        o=docker_owner.RoleOwner(root,role,run_id,spec['image'],params,docker_owner.DockerCli(),proc,sibling_ns=sibling)
+        docker_owners[role]=o
+        handle=o.launch()
+        return handle
     def launch(role):
         nonlocal launch_count
         if role in children:raise RuntimeError('fixed sibling launch already consumed')
+        if backend=='docker':
+            launch_count+=1;run_intent['launches']=launch_count
+            json_write(root/'trusted-run-intent.json',run_intent,replace=True)
+            children[role]=launch_docker(role)
+            if role=='runtime':root_stage['runtime_launched']=True
+            return children[role]
         closure='/opt/d061-android-closure' if role=='runtime' else '/opt/d061-control-closure'
         launch_count+=1
         run_intent['launches']=launch_count
@@ -223,7 +256,9 @@ def main():
             pump()
             if time.monotonic()-teardown_started>60:raise TimeoutError('root-monotonic runtime teardown ceiling')
             time.sleep(.05)
-        runtime.wait();check_absent(root/'runtime',root_stage)
+        runtime.wait()
+        if backend=='docker':docker_owners['runtime'].cleanup(runtime)
+        check_absent(root/'runtime',root_stage)
         state.advance('runtime_absent',seconds=time.monotonic()-teardown_started)
         collection_started=time.monotonic()
         staged=root/'private-collected-result'
@@ -234,7 +269,9 @@ def main():
             pump()
             if time.monotonic()-collection_started>30:raise TimeoutError('fixed control persistence/report ceiling')
             time.sleep(.05)
-        control.wait();check_absent(root/'control')
+        control.wait()
+        if backend=='docker':docker_owners['control'].cleanup(control)
+        check_absent(root/'control')
         if control.returncode!=0:raise RuntimeError('control product journey failed')
     except BaseException as error:
         failure=error
@@ -246,7 +283,11 @@ def main():
         if request is not None and not result_delivered and 'control' in children:
             runtime=children.get('runtime')
             try:
-                if runtime is not None and runtime.poll() is None:
+                if runtime is not None and backend=='docker' and runtime.poll() is None:
+                    # live-owner kill by held identity and bound container ID only, never a group kill
+                    docker_owners['runtime'].kill_bound()
+                    runtime.wait(timeout=45)
+                elif runtime is not None and runtime.poll() is None:
                     os.killpg(runtime.pid,signal.SIGTERM)
                     try:runtime.wait(timeout=45)
                     except subprocess.TimeoutExpired:os.killpg(runtime.pid,signal.SIGKILL);runtime.wait(timeout=5)
@@ -276,6 +317,11 @@ def main():
             except BaseException as error:errors.append({'stage':'failed_product_return','class':type(error).__name__})
         try:producer.stop()
         except BaseException as error:errors.append({'stage':'siblings_stop','class':type(error).__name__})
+        if backend=='docker':
+            for role,o in docker_owners.items():
+                try:
+                    if not exists(root/role/'wrapper-cleanup.json') and role in children:o.cleanup(children[role])
+                except BaseException as error:errors.append({'stage':role+'_docker_cleanup','class':type(error).__name__})
         for role,child in children.items():
             try:
                 if child.poll() is None:raise RuntimeError('sibling leader not reaped')

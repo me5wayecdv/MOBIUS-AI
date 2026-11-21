@@ -24,7 +24,9 @@ GATE = '/fixture/container_gate.py'
 DRIVER = {'runtime': '/fixture/contained_driver.py', 'control': '/fixture/control_driver.py'}
 ENV = ['PATH=/opt/android/platform-tools:/runtime/bin:/usr/bin:/bin', 'HOME=/home/fixture', 'ANDROID_USER_HOME=/home/fixture',
        'TMPDIR=/tmp', 'LANG=C.UTF-8', 'ADB_SERVER_SOCKET=tcp:127.0.0.1:5037', 'ADB_MDNS_AUTO_CONNECT=0']
-ULIMITS = [('as', 8 * 1024**3), ('core', 0), ('cpu', 300), ('fsize', 4 * 1024**3), ('nofile', 512)]   # nproc: bounded by --pids-limit instead (no jail nproc rlimit existed)
+ULIMITS = [('as', 8 * 1024**3), ('core', 0), ('cpu', 300), ('fsize', 4 * 1024**3), ('nofile', 512), ('nproc', 512)]
+# nproc=512 restores namespace_supervisor.child_setup. CAVEAT: RLIMIT_NPROC counts per real uid across the HOST, so the two sibling
+# containers (both uid 65534) and any other 65534 process share one budget; --pids-limit is the separate per-container cgroup bound.
 GATE_SECONDS = 30   # container_gate.py deadline; kept in sync by test
 SCRATCH = (('/tmp', 'size=256m,mode=1777'), ('/run', 'size=16m,mode=755'), ('/dev/shm', 'size=512m,mode=1777'), ('/home/fixture', 'size=4g,mode=700'))
 
@@ -189,9 +191,19 @@ def after_create(intent, create_stdout):
     return {**intent, 'stage': 'created', 'container_id': s.strip(), 'may_remove_by_name': False}
 
 
-def bind_started(rec, inspect_started, observed, host_ns, sibling_ns=None):
-    """`observed` = owner's own host-side reads for the leader pid: pid, unified cgroup path from /proc/<pid>/cgroup,
-    pid/mnt/net namespace inodes. Gate is still closed here. Returns the identity record to persist before release."""
+NS_KEYS = ('pid_ns_inode', 'mnt_ns_inode', 'net_ns_inode')
+_UNSET = object()
+
+
+def complete_ns(d):
+    """Typed complete identity: exactly pid/mnt/net namespace inodes, positive ints."""
+    return isinstance(d, dict) and set(d) == set(NS_KEYS) and all(type(d[k]) is int and d[k] > 0 for k in NS_KEYS)
+
+
+def bind_started(rec, inspect_started, observed, host_ns, sibling_ns=_UNSET):
+    """`observed` = owner's reads made FROM ITS HELD HANDLES for the leader pid (built by docker_owner from a Handles object, not
+    caller booleans). `host_ns` must be the complete typed host pid/mnt/net identity. `sibling_ns` is required: None only when the
+    other role has not been launched, otherwise the sibling's complete identity. Gate is still closed here."""
     cid = rec.get('container_id')
     if rec.get('stage') != 'created' or not cid: raise SpecError('created container id required')
     st = (inspect_started or {}).get('State') or {}
@@ -200,15 +212,18 @@ def bind_started(rec, inspect_started, observed, host_ns, sibling_ns=None):
     if observed.get('pid') != pid: raise SpecError('observed pid differs')
     cg = observed.get('cgroup_path')
     if not isinstance(cg, str) or not re.fullmatch(r'/[A-Za-z0-9_./:@-]{1,300}', cg) or '..' in cg or cid not in cg: raise SpecError('cgroup path not bound to this container id')
-    ns = {k: observed.get(k) for k in ('pid_ns_inode', 'mnt_ns_inode', 'net_ns_inode')}
-    if any(type(v) is not int or v <= 0 for v in ns.values()): raise SpecError('namespace inodes required')
+    ns = {k: observed.get(k) for k in NS_KEYS}
+    if not complete_ns(ns): raise SpecError('complete namespace identity required')
     t0, t1 = observed.get('start_ticks_before'), observed.get('start_ticks_after')
     if type(t0) is not int or t0 <= 0 or t0 != t1: raise SpecError('same-process start identity (stat starttime before/after) required')
     if not (observed.get('pidfd_held') is True and observed.get('ns_fds_held') is True and observed.get('cgroup_fd_held') is True):
         raise SpecError('pidfd, namespace fds and cgroup dir fd must be held before release')
-    hostns = host_ns if isinstance(host_ns, dict) else {'net_ns_inode': host_ns}
-    if hostns.get('net_ns_inode') is None or any(ns[k] == v for k, v in hostns.items() if k in ns): raise SpecError('container shares a host namespace')
-    if sibling_ns is not None and any(ns[k] == sibling_ns.get(k) for k in ns): raise SpecError('container shares a namespace with the sibling')
+    if not complete_ns(host_ns): raise SpecError('complete typed host pid/mnt/net identity required')
+    if any(ns[k] == host_ns[k] for k in NS_KEYS): raise SpecError('container shares a host namespace')
+    if sibling_ns is _UNSET: raise SpecError('sibling identity must be given explicitly (None only when no sibling was launched)')
+    if sibling_ns is not None:
+        if not complete_ns(sibling_ns): raise SpecError('complete typed sibling identity required')
+        if any(ns[k] == sibling_ns[k] for k in NS_KEYS): raise SpecError('container shares a namespace with the sibling')
     return {**rec, 'stage': 'started_gated', 'pid': pid, 'start_ticks': t0, 'cgroup_path': cg, **ns,
             'gate_seconds': GATE_SECONDS, 'gate_released': False, 'identity_scope': 'owner_held_fds_and_starttime_not_a_daemon_child'}
 
@@ -240,20 +255,47 @@ def leader_exit_observed(inspect_exited, bound, pidfd_readable, identity_changed
 def namespace_setup_record(bound):
     if bound.get('stage') != 'started_gated': raise SpecError('bound identity required')
     return {'namespaces': {'net': 'net:[%d]' % bound['net_ns_inode'], 'mnt': 'mnt:[%d]' % bound['mnt_ns_inode'], 'pid': 'pid:[%d]' % bound['pid_ns_inode']},
-            'container_id': bound['container_id'], 'cgroup_path': bound['cgroup_path'], 'scope': 'docker_translated_owner_observation'}
+            'backend': 'docker', 'run_id': bound['run_id'], 'role': bound['role'], 'container_id': bound['container_id'],
+            'cgroup_path': bound['cgroup_path'], 'start_ticks': bound['start_ticks'], 'scope': 'docker_translated_owner_observation'}
 
 
 def driver_result_record(exit_obs):
     if not exit_obs.get('leader_exit_observed'): return {'complete': False, 'driver_rc': None, 'scope': exit_obs.get('scope')}
-    return {'complete': exit_obs['exit_code'] == 0, 'driver_rc': exit_obs['exit_code'], 'scope': exit_obs['scope']}
+    return {'complete': exit_obs['exit_code'] == 0, 'driver_rc': exit_obs['exit_code'], 'backend': 'docker', 'scope': exit_obs['scope']}
+
+
+ABSENCE_KEYS = ('inspect_not_found', 'cgroup_unpopulated_or_gone', 'ns_members_empty', 'handles_absent', 'leader_exit_observed')
+
+
+def wrapper_record(bound, absence, errors):
+    """Backend-tagged replacement for wrapper-cleanup.json. `container_absent` is derived from the five-part absence verdict only."""
+    verdict = absence_verdict(absence)
+    return {'backend': 'docker', 'run_id': bound['run_id'], 'role': bound['role'], 'container_id': bound['container_id'],
+            'absence': {k: (absence or {}).get(k) for k in ABSENCE_KEYS}, 'verdict': verdict,
+            'container_absent': verdict == 'VERIFIED_ABSENT_RECORD' and not errors, 'errors': list(errors),
+            'scope': 'docker_translated_owner_observation_not_daemon_enforcement_proof'}
+
+
+def wrapper_problems(setup, wrapper, role=None, run_id=None):
+    """Consumer-side check of backend-tagged records. Empty list = acceptable. Mixed backend/run/role/container records fail."""
+    p = []
+    if not isinstance(setup, dict) or not isinstance(wrapper, dict): return ['records']
+    if setup.get('backend') != 'docker' or wrapper.get('backend') != 'docker': p.append('mixed_or_untagged_backend')
+    if setup.get('container_id') != wrapper.get('container_id') or not CONTAINER_ID.fullmatch(str(wrapper.get('container_id'))): p.append('container_id')
+    if setup.get('run_id') != wrapper.get('run_id') or not RUN_ID.fullmatch(str(wrapper.get('run_id'))): p.append('run_id')
+    if setup.get('role') != wrapper.get('role') or wrapper.get('role') not in ROLES: p.append('role')
+    if role is not None and wrapper.get('role') != role: p.append('role_differs_from_directory')
+    if run_id is not None and wrapper.get('run_id') != run_id: p.append('run_differs_from_root')
+    if wrapper.get('errors') != [] or wrapper.get('container_absent') is not True or absence_verdict(wrapper.get('absence')) != 'VERIFIED_ABSENT_RECORD' or wrapper.get('verdict') != 'VERIFIED_ABSENT_RECORD':
+        p.append('absence_not_verified')
+    return p
 
 
 def inventory_matches(role, inventory, lock_rows):
-    """Exact file-set equality between a SUPPLIED image content inventory ({path: sha256}) and the SUPPLIED closure-lock rows
-    ([{path, sha256}]), plus gate/driver presence and control-lacks-runtime. Acquisition of both inputs (owner reads the pinned
-    image layers from the daemon, hashes per file) is not implemented and unverified."""
+    """Typed equality between an image inventory (image_closure.inventory_from_save: {path: entry}) and independently supplied lock rows
+    ([{path, type, mode, ...}]) including type/mode/link/sha256, plus gate/driver presence and control-lacks-runtime."""
     if role not in ROLES or not isinstance(inventory, dict) or not isinstance(lock_rows, list): return False
-    try: want = {r['path']: r['sha256'] for r in lock_rows}
-    except (KeyError, TypeError): return False
+    try: want = {r['path']: {k: v for k, v in r.items() if k != 'path'} for r in lock_rows}
+    except (KeyError, TypeError, AttributeError): return False
     if len(want) != len(lock_rows) or inventory != want: return False
     return role_closure_ok(role, sorted(inventory))
