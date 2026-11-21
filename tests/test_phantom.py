@@ -183,6 +183,29 @@ def test_frida_enumerate_parsing_and_failures():
         no_frida.probe_frida_enumerate_classes("com.example")
 
 
+def test_frida_failure_detail_uses_fixed_classes_never_target_strings():
+    # Output deliberately stuffed with target-derived strings: the persisted
+    # detail must carry only the fixed class label.
+    leaky = _adapter(
+        {("-q", "-n", "com.example", "-e", _FRIDA_ENUMERATE_SCRIPT):
+            (1, b"", b"Failed to attach: unable to find process with name "
+                      b"com.example and path /data/app/com.example.private/libsecret.so")},
+        frida="/fake/frida",
+    )
+    result = leaky.probe_frida_enumerate_classes("com.example")
+    assert result.actual is None
+    assert "frida-process-not-found" in result.detail
+    assert "libsecret" not in result.detail
+    assert "/data/app" not in result.detail
+    assert "com.example" not in result.detail.split("frida-process-not-found")[-1]
+    unknown = _adapter(
+        {("-q", "-n", "com.example", "-e", _FRIDA_ENUMERATE_SCRIPT):
+            (7, b"weird tool-specific text", b"")},
+        frida="/fake/frida",
+    )
+    assert "frida-error-unclassified" in unknown.probe_frida_enumerate_classes("com.example").detail
+
+
 def test_stop_instrumentation_is_idempotent_cleanup():
     adapter = _adapter({
         ("shell", "pkill", "-f", "frida-server"): (0, b"", b""),

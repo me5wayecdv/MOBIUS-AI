@@ -152,20 +152,10 @@ class PhantomEmulatorAdapter:
                 except ValueError:
                     count = None
         if rc != 0 or count is None:
-            # Surface the tool's own first error line for diagnosability
-            # (tool-generated output, never target data).
-            error_line = ""
-            for line in text.splitlines():
-                lowered = line.lower()
-                if "error" in lowered or "failed" in lowered or "exception" in lowered:
-                    error_line = line.strip()[:300]
-                    break
-            detail = f"frida attach/enumeration failed (rc={rc})"
-            if error_line:
-                detail = f"{detail}: {error_line}"
             return EmulatorProbeResult(
                 "frida_enumerate_classes", package, None,
-                detail, text[:_DETAIL_OUTPUT_BYTES],
+                f"frida attach/enumeration failed (rc={rc}): {_frida_error_class(text)}",
+                text[:_DETAIL_OUTPUT_BYTES],
             )
         return EmulatorProbeResult(
             "frida_enumerate_classes", package, count,
@@ -180,6 +170,31 @@ class PhantomEmulatorAdapter:
         if rc == 0:
             return "frida-server stopped on the emulator"
         return f"no running frida-server found (rc={rc}) or stop refused"
+
+
+# Fixed failure classifications for the frida probe. Persisted step detail
+# must never carry target-derived strings (process names, paths, class names,
+# secrets), so raw tool output is mapped onto this closed set of labels and
+# the raw text stays in-memory only.
+_FRIDA_ERROR_CLASSES = (
+    (("unable to find process", "no such process", "process not found"),
+     "frida-process-not-found"),
+    (("unable to connect", "connection refused", "need Gadget"),
+     "frida-server-unreachable"),
+    (("timed out", "timeout"), "frida-attach-timeout"),
+    (("ambiguous", "multiple processes"), "frida-ambiguous-process"),
+    (("permission", "denied", "not permitted"), "frida-permission-denied"),
+    (("invalid session", "session was detached"), "frida-session-lost"),
+    (("script", "syntax", "referenceerror", "typeerror"), "frida-script-error"),
+)
+
+
+def _frida_error_class(output: str) -> str:
+    lowered = output.lower()
+    for needles, label in _FRIDA_ERROR_CLASSES:
+        if any(needle in lowered for needle in needles):
+            return label
+    return "frida-error-unclassified"
 
 
 def adapter_from_env() -> PhantomEmulatorAdapter | None:
