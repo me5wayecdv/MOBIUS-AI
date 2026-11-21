@@ -36,7 +36,7 @@ granted approval via the PoC approvals API) plus a mandatory
 `stop_emulator_instrumentation` cleanup step. `read_only` is not stretched:
 it remains free of any process attachment.
 
-## Bounded traffic-capture route (mitmproxy-class)
+## Bounded traffic-capture route (mitmproxy-class): NOT ESTABLISHED
 
 Source-grounded (official docs:
 https://docs.mitmproxy.org/stable/howto/install-system-trusted-ca-android/):
@@ -47,9 +47,32 @@ ignore the system store (pinning), the writable-system route does not work on
 Google Play images (Magisk route excluded as too many moving parts), and this
 has not been CI-verified.
 
+Bounded runtime feasibility check (PR #108 probe, closed unmerged after
+review): the D-061 condition is a strictly controlled lab backend - no
+third-party endpoints, no unrelated traffic. Static evidence on the pinned
+Allsafe APK (DEX strings + res/xml): every hardcoded endpoint is third-party
+(https://httpbin.io/json, infosecadventures.io in network_security_config
+with cleartextTrafficPermitted, firebaseappcheck.googleapis.com and
+googleapis scope URLs from the bundled Firebase SDK); okhttp3 with
+CertificatePinner is bundled (library presence, not proof of pinning). A
+guest iptables lockdown could not be independently established as
+all-protocol containment within the bounded probe: an ICMP ping canary is
+not all-protocol proof, IPv4 iptables does not cover IPv6 rule paths, the
+host-alias allowance can reach host services, and /proc/net/tcp socket
+metadata is attempt evidence, not a zero-egress proof. The target app was
+never launched under unproven containment (the run was cancelled first).
+Strictly-controlled traffic capture on the free route is therefore recorded
+as NOT ESTABLISHED - no implemented mitmproxy capability is claimed, and
+compounding firewall experiments was deliberately stopped.
+
 ## What remains genuinely open
 
-- Allsafe pinning posture: unverified.
+- Allsafe pinning posture: unverified (okhttp/CertificatePinner bundled;
+  whether the app configures pins is not established).
+- Strictly-controlled traffic capture: NOT ESTABLISHED on the free route
+  (containment could not be independently proven within bounded scope;
+  third-party-only hardcoded endpoints; TLS visibility additionally needs
+  the unverified CA route).
 - Mobius-managed AVD creation (avdmanager/emulator direct, snapshotting):
   feasible, unimplemented; AVD creation is action-managed today.
 - Full network isolation: unavailable on free hosted runners.
