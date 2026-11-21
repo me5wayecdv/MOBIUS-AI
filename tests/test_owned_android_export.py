@@ -120,3 +120,25 @@ def test_control_driver_writes_export_manifest_after_report_before_result():
     d = text.index("json_write(work/'control-result.json'")
     assert a < b < c < d
     assert 'APPROVED_FOR_EXECUTION' in text and 'APPROVED_FOR_EXECUTION=False' in text.replace(' ', '')
+
+
+def test_manifest_prepare_against_real_db_and_store(ctx, session, store, future_iso):
+    from mobius.adapters.models import EvidenceRow
+    from mobius.services.intake import IntakeService
+    from conftest import make_apk
+    apk = make_apk()
+    intake = IntakeService(session, store)
+    app, _ = intake.create_application(apk, "o.apk", uploaded_by="u")
+    auth = intake.create_authorization(apk_sha256=app.sha256, target_package="com.example", scope_text="Static analysis of the supplied artefact only.", statement="s",
+        max_intensity=2, granted_by="u", expires_at=future_iso)
+    inv = intake.create_investigation(application_id=app.id, authorization_id=auth.id, objective="Owned fixture export manifest test.", intensity=0, created_by="u")
+    data = b'{"evidence": 1}'
+    key, size = ctx.store.put(data)
+    session.add(EvidenceRow(id='ev_x', investigation_id=inv.id, kind='k', sha256=sha(data), object_key=key,
+        byte_size=size, truncated=False, redacted=True, summary='s', produced_by='t', created_at=future_iso))
+    session.commit()
+    plan = NS(id='poc_A1', investigation_id=inv.id, target_sha256=app.sha256)
+    m = pem.prepare(ctx, ready={'run_id': 'r1', 'provisioning_id': 'p1', 'apk_sha256': app.sha256}, plan=plan,
+        run={'plan_id': 'poc_A1', 'run_id': 'pcr_C3'}, report_sha256='1' * 64)
+    assert {o['sha256'] for o in m['objects']} == {sha(data), app.sha256}
+    assert fe.object_rows(m, {'run_id': 'r1', 'provisioning_id': 'p1'})
