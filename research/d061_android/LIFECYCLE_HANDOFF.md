@@ -292,8 +292,9 @@ checks the report content, each role's closure-lock content, the exact reviewed 
 file's size, mode and SHA-256 against the reviewed lock; a regular but invalid lock is quarantined too.
 `recover()` is the independent attributable recovery for a dead watchdog with a unique record.
 
-Honest limits: size scans are polling, not a disk quota; containment is the session plus pidfd signalling, so a
-process that calls setsid escapes it and production still needs a PID namespace or cgroup; RLIMIT_NPROC is per-UID
+Honest limits: size scans are polling, not a disk quota; the main() path now wraps the stager in a fresh PID namespace (`unshare --pid --fork --kill-child`), so setsid escapees die with the
+namespace init; tests show an escapee survives WITHOUT it and dies with it (unprivileged user+PID namespace, not the root production form, and not a cgroup
+memory/process cap); RLIMIT_NPROC is per-UID
 and not claimed; tests use benign stager stand-ins and tmp directories as source evidence only, not real SDK
 staging, a root-owned run, kernel limit enforcement or the real fault chain. `APPROVED_FOR_EXECUTION` is FALSE.
 

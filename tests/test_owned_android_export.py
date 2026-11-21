@@ -581,3 +581,65 @@ def test_watchdog_quarantine_is_anchored_and_never_overwrites(tmp_path):
     other = tmp_path / 'viasym2'
     os.symlink(tmp_path, other)
     assert wd.quarantine_partial([other / 'runtime'], 'bb')[0]['state'].startswith('refused_parent')
+
+
+def _userns_ok():
+    import subprocess as sp
+    try:
+        return sp.run(['unshare', '--user', '--map-root-user', '--pid', '--fork', '--kill-child', '--', 'true'],
+                      capture_output=True, timeout=10).returncode == 0
+    except Exception:
+        return False
+
+
+@pytest.mark.skipif(not _userns_ok(), reason='unprivileged user+PID namespaces unavailable')
+def test_pid_namespace_kills_setsid_escapee_that_session_scan_alone_misses(wd, tmp_path):
+    import time
+    files, roots, lock, lock_bytes, lock_sha, rec, report = _lockset(tmp_path)
+    esc = tmp_path / 'escapee.pid'
+    (tmp_path / 'escapee.py').write_text("import os,sys,time\nos.setsid()\nopen(sys.argv[1],'w').write(str(os.getpid()))\ntime.sleep(60)\n")
+    (tmp_path / 'stager.py').write_text(
+        "import subprocess,sys,time\nsubprocess.Popen([sys.executable,%r,%r])\ntime.sleep(60)\n"
+        % (str(tmp_path / 'escapee.py'), str(esc)))
+    import threading
+    from threading import Event
+    cancel = Event()
+    threading.Timer(1.0, cancel.set).start()
+    r = wd.supervise([PY, str(tmp_path / 'stager.py')], report, role_roots=roots, lock_bytes=lock_bytes,
+                     expected_lock_sha256=lock_sha, record_dir=rec, attempt='ns1', cancel=cancel,
+                     pid_namespace=True, user_namespace=True)
+    assert r['pid_namespace_containment'] is True and r['killed_reason'] == 'cancelled' and r['absence_verified']
+    # the escapee's host PID is recorded by itself inside the namespace (namespace-relative); verify no live
+    # sleeper from this stager remains by scanning for the escapee's marker script.
+    time.sleep(0.5)
+    live = [e.name for e in os.scandir('/proc') if e.name.isdigit() and b'escapee.py' in _cmdline(int(e.name))]
+    assert live == []
+
+
+def _cmdline(pid):
+    try:
+        return Path('/proc/%d/cmdline' % pid).read_bytes()
+    except OSError:
+        return b''
+
+
+def test_without_namespace_a_setsid_escapee_survives_documenting_the_limit(wd, tmp_path):
+    import signal as sg
+    import time
+    from threading import Event
+    import threading
+    files, roots, lock, lock_bytes, lock_sha, rec, report = _lockset(tmp_path)
+    esc = tmp_path / 'escapee.pid'
+    (tmp_path / 'escapee.py').write_text("import os,sys,time\nos.setsid()\nopen(sys.argv[1],'w').write(str(os.getpid()))\ntime.sleep(60)\n")
+    (tmp_path / 'stager.py').write_text(
+        "import subprocess,sys,time\nsubprocess.Popen([sys.executable,%r,%r])\ntime.sleep(60)\n" % (str(tmp_path / 'escapee.py'), str(esc)))
+    cancel = Event()
+    threading.Timer(1.0, cancel.set).start()
+    r = wd.supervise([PY, str(tmp_path / 'stager.py')], report, role_roots=roots, lock_bytes=lock_bytes,
+                     expected_lock_sha256=lock_sha, record_dir=rec, attempt='ns0', cancel=cancel)
+    pid = int(esc.read_text())
+    try:
+        assert r['pid_namespace_containment'] is False
+        assert wd_state(pid) != 'Z' and Path('/proc/%d' % pid).exists()  # escaped: session containment alone is insufficient
+    finally:
+        os.kill(pid, sg.SIGKILL)

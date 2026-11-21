@@ -285,6 +285,19 @@ def kill_session_stable(sid, wait=ABSENCE_WAIT, clock=time.monotonic):
         time.sleep(0.02)
 
 
+def contain_argv(argv, *, user_namespace=False):
+    """Wrap argv in a fresh PID namespace whose init is the stager and which dies with it/unshare.
+
+    Everything the stager spawns, including processes that call setsid, lives in that namespace and is killed
+    when its init (or the unshare parent) is killed. user_namespace is only for unprivileged tests; the
+    production root watchdog uses the plain form.
+    """
+    prefix = ['unshare', '--pid', '--fork', '--kill-child']
+    if user_namespace:
+        prefix = ['unshare', '--user', '--map-root-user', '--pid', '--fork', '--kill-child']
+    return prefix + ['--'] + list(argv)
+
+
 def child_limits(expected_parent):
     def apply():
         os.setsid()
@@ -361,9 +374,11 @@ def stop_and_reap(child, sid):
 def supervise(argv, report_path, *, role_roots, lock_bytes, expected_lock_sha256, attempt=None, record_dir,
               cancel=None, wall=WALL_SECONDS, final_seconds=FINAL_SECONDS, max_bytes=MAX_OUTPUT_BYTES,
               max_files=MAX_OUTPUT_FILES, max_dirs=MAX_OUTPUT_DIRS, clock=time.monotonic, sleep=time.sleep,
-              preexec=None):
+              preexec=None, pid_namespace=False, user_namespace=False):
     if not APPROVED_FOR_EXECUTION:
         raise RuntimeError('staging watchdog HELD')
+    if pid_namespace:
+        argv = contain_argv(argv, user_namespace=user_namespace)
     attempt = attempt or secrets.token_hex(16)
     roots = {r: str(role_roots[r]) for r in ROLE_NAMES if r in role_roots}
     if set(roots) != set(role_roots) or not roots:
@@ -438,7 +453,7 @@ def supervise(argv, report_path, *, role_roots, lock_bytes, expected_lock_sha256
     else:
         dispositions = []
     result = {'version': 'staging-watchdog/3', 'attempt': attempt, 'exit_code': code, 'killed_reason': reason,
-              'setup_error': setup_error, 'absence_verified': absence_verified,
+              'setup_error': setup_error, 'pid_namespace_containment': pid_namespace, 'absence_verified': absence_verified,
               'session_members_remaining': [m if isinstance(m, str) else m['pid'] for m in remaining],
               'final_scan': final, 'final_validation_error': scan_error, 'complete': complete,
               'root_dispositions': dispositions, 'elapsed_seconds': round(clock() - started, 3),
@@ -497,7 +512,7 @@ def main():
                        role_roots={r: ROLES[r][0] for r in ROLE_NAMES},
                        lock_bytes=read_anchored(lock_path, 16 * 1024**2),
                        expected_lock_sha256=os.environ['WATCHDOG_REVIEWED_LOCK_SHA256'],
-                       record_dir=Path(os.environ['WATCHDOG_RECORD_DIR']), cancel=cancel)
+                       record_dir=Path(os.environ['WATCHDOG_RECORD_DIR']), cancel=cancel, pid_namespace=True)
     print(json.dumps(result))
     if not result['complete']:
         raise SystemExit(1)
