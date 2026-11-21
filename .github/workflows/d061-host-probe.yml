@@ -1,0 +1,38 @@
+# ACTIVATION SOURCE for the approved bounded host-capability test. Public exposure approved by the user: run existence and success/failure only.
+# Probe commit (checked out and measured) is the P below; this file lives in a child commit whose tree equals P plus this file only.
+name: D061 host capability check
+on:
+  push:                        # workflow_dispatch needs the file on the default branch (no merge allowed), so a path-filtered push on the PR branch is the trigger
+    branches: [d061-owned-android-contained-preparation]
+    paths: ['.github/workflows/d061-host-probe.yml']
+concurrency:
+  group: d061-host-probe
+  cancel-in-progress: false
+permissions: {}                # no GITHUB_TOKEN scopes. Actions orchestration still uses its own credentials: this is not a credential-free VM.
+jobs:
+  probe:
+    runs-on: ubuntu-24.04      # an OS label, not an immutable image: observed ImageOS/ImageVersion goes in the result
+    timeout-minutes: 10        # bounds intended job lifetime only; provider decommissioning after the job has no attested timing
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2, from api.github.com/repos/actions/checkout/git/ref/tags/v4.2.2
+        with:
+          ref: 5f64bae70fd16f49b57b87c7fc1375dfee5b0f78
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Trusted-owner snapshot (root-owned, not group/other-writable); no global git bypass
+        run: |
+          { sudo -n chown -R root:root "$GITHUB_WORKSPACE" && sudo -n chmod -R go-w "$GITHUB_WORKSPACE"; } >/dev/null 2>&1 || exit 2
+      - name: Run probe entrypoint (prints nothing)
+        run: |
+          SLEEP=/usr/bin/sleep
+          SHA=$(sudo -n /usr/bin/sha256sum "$SLEEP" 2>/dev/null | cut -d' ' -f1)   # measured on the VM and recorded; a measurement, not a reviewed pin
+          sudo -n env -i ImageOS="$ImageOS" ImageVersion="$ImageVersion" \
+            /usr/bin/python3 -I -B "$GITHUB_WORKSPACE/research/d061_android/host_primitive_entry.py" \
+            --repo "$GITHUB_WORKSPACE" --expected-commit 5f64bae70fd16f49b57b87c7fc1375dfee5b0f78 \
+            --sleep-path "$SLEEP" --sleep-sha256 "$SHA" \
+            --parent auto \
+            --run-id "hp$GITHUB_RUN_ID" \
+            --route-evidence-ref user-yes-20261121T161201-public-run-conclusion >/dev/null 2>&1
+      - name: Restore workspace ownership for post-steps
+        if: always()
+        run: sudo -n chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" >/dev/null 2>&1 || true
