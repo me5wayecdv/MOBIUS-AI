@@ -1,0 +1,29 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'local.mobius.d061lab'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'local.mobius.d061lab'
+        minSdk 29
+        targetSdk 34
+        versionCode 1
+        versionName '1.0'
+    }
+
+    flavorDimensions 'trust'
+    productFlavors {
+        trustedCa {
+            dimension 'trust'
+            versionNameSuffix '-trustedCa'
+        }
+        defaultTrust {
+            dimension 'trust'
+            applicationIdSuffix '.defaulttrust'
+            versionNameSuffix '-defaultTrust'
+        }
+    }
+}
