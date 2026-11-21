@@ -75,8 +75,12 @@ slice, not the full PHANTOM adapter.
   hardware-accelerated emulator: upload -> authorization -> scan ->
   RECON -> `poc/execute` -> persisted poc-plan/poc-result/poc-log
   evidence, provider rows actual=4, PHANTOM_API_SMOKE: ALL_PASS).
-  Mobius-managed emulator orchestration and Frida instrumentation
-  remain unimplemented.
+  Limitation of that slice: the plan's referenced hypothesis is seeded
+  directly in sqlite as documented test setup, because hypothesis
+  creation through the API is model-gated (NEXUS consent) and the
+  journey is intentionally no-model; every step under test goes through
+  the API. Mobius-managed emulator orchestration and Frida
+  instrumentation remain unimplemented.
 - JADX OCI image: unpublished by design; the queue returns 503 until an
   approved immutable digest is configured. RECON/DEX/provider OCI worker
   transport is CI-verified (worker pipeline smoke, provider runtime
