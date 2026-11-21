@@ -74,8 +74,9 @@ def _create_owned_temp(dirfd,data):
     fd=os.open(name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW|os.O_CLOEXEC,0o600,dir_fd=dirfd)
     try:return name,fd,_ident(fd)
     except BaseException:                      # created exclusively just above, so this unique name is ours
-        os.close(fd)
-        try:os.unlink(name,dir_fd=dirfd)
+        try:os.unlink(name,dir_fd=dirfd)       # unlink FIRST; a close error must not skip it
+        except OSError:pass
+        try:os.close(fd)                       # closed exactly once, never retried; error ignored to keep the primary
         except OSError:pass
         raise
 
@@ -101,24 +102,31 @@ def publish_private(plan,name,obj,*,sha256=None,size=None):
     validate_content(plan['content_class'],obj,sha256=sha256,size=size)
     data=json.dumps(obj,sort_keys=True,separators=(',',':')).encode()
     dirfd=open_private_destination(plan['destination'])
+    result=None
     try:
         tmp,fd,ident=_create_owned_temp(dirfd,data)
-        committed=False
+        committed=False;fd_close_ok=True
         try:
             view=memoryview(data)
             while view:view=view[os.write(fd,view):]
             os.fsync(fd)
-            try:os.link(tmp,name,src_dir_fd=dirfd,dst_dir_fd=dirfd,follow_symlinks=False)  # no-clobber
-            except FileExistsError:raise   # an existing final name is NOT proof of this run/content; never claimed
+            os.link(tmp,name,src_dir_fd=dirfd,dst_dir_fd=dirfd,follow_symlinks=False)  # no-clobber; FileExistsError claims nothing
             committed=True
         finally:
-            os.close(fd)
-            unlinked=_unlink_if_ours(dirfd,tmp,ident)     # only this attempt's inode
-        try:os.fsync(dirfd);durable=True                  # directory entry durability for the committed link
-        except OSError:durable=False                      # committed but NOT known durable: reported, never raised
-        return {'written_relative_to_plan_destination':True,'committed':True,'temp_removed':unlinked,'bytes':len(data),
-            'route_evidence_ref':plan['route_evidence_ref'],'retention_enforced':False,'durable_dir_fsync':durable}
-    finally:os.close(dirfd)
+            try:os.close(fd)                              # exactly once, never retried (descriptor may already be released)
+            except OSError:fd_close_ok=False
+            unlinked=_unlink_if_ours(dirfd,tmp,ident)     # independent stage; only this attempt's inode; runs on every path
+        # reached only when the link committed; close status never turns a committed publish into an exception
+        try:os.fsync(dirfd);durable=True
+        except OSError:durable=False
+        result={'written_relative_to_plan_destination':True,'committed':committed,'temp_removed':unlinked,'temp_fd_close_ok':fd_close_ok,
+            'bytes':len(data),'route_evidence_ref':plan['route_evidence_ref'],'retention_enforced':False,'durable_dir_fsync':durable}
+    finally:
+        try:os.close(dirfd)
+        except OSError:
+            if result is not None:result['dir_fd_close_ok']=False   # primary outcome preserved either way
+    result.setdefault('dir_fd_close_ok',True)
+    return result
 
 
 def validate_content(content_class,obj,*,sha256=None,size=None):

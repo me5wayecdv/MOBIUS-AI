@@ -85,7 +85,7 @@ class RealOps:
     fake directory tree. `trusted_uid` is 0 in production. Honest limits: cgroup2 is inferred from the
     interface files present in the held parent, not from the filesystem type."""
     def __init__(self,parent,sleep_path,sleep_sha256,*,trusted_uid=0):
-        self.sleep_fd=None;self.parent_fd=None;self.leaf_fd=None;self.leaf_name=None;self.leaf_ident=None;self.leaf_unbound=False
+        self.sleep_fd=None;self.parent_fd=None;self.leaf_fd=None;self.leaf_name=None;self.leaf_ident=None;self.leaf_unbound=False;self.unbound_locator=None
         self.proc=None;self.pidfd=None;self.trusted_uid=trusted_uid
         if not (isinstance(parent,str) and re.fullmatch(r'/sys/fs/cgroup(/[A-Za-z0-9_.-]+){0,6}',parent)) or '..' in parent.split('/'):raise ValueError('canonical cgroup parent required')
         self.parent_rel=parent[len('/sys/fs/cgroup'):] or '/'
@@ -185,16 +185,21 @@ class RealOps:
             try:
                 if self._rd('cgroup.procs')=='' and 'populated 0' in self._rd('cgroup.events').splitlines():return True
             except OSError:return False
-            if time.monotonic()>=end:return False
-            time.sleep(0.05)
+            now=time.monotonic()
+            if now>=end:return False
+            time.sleep(min(0.05,end-now))
     def cleanup(self,leaf,child):
-        """Separate obligations. (1) Acquired leaf: kill it through its held fd INDEPENDENTLY of direct-child liveness, then
-        wait boundedly for empty/populated 0, then remove only the identity-bound empty leaf. (2) The held direct child is
-        always killed if live and reaped. (3) A leaf that was created but never bound to an fd is UNVERIFIED: we try to remove
-        the empty directory by name and still report False. True only if every obligation is verified."""
+        """Separate obligations under ONE budget (CLEANUP_S plus at most one 50 ms poll step of overshoot).
+        (1) Bound leaf (fd open AND identity recorded): kill via the held fd independent of direct-child liveness, bounded wait
+        for empty/populated 0, remove only the identity-bound empty leaf. (2) The held direct child is always killed if live and
+        reaped. (3) A leaf name that was created but never bound (mkdir ok, open or fstat failed) is NON-MUTATING: no cgroup.kill, no
+        rmdir. The locator stays in `unbound_locator` for outer-owner review and cleanup reports False. True only if all verified."""
         ok=True;stop=time.monotonic()+CLEANUP_S
+        remaining=lambda:max(0.0,stop-time.monotonic())
+        bound=self.leaf_fd is not None and not self.leaf_unbound and self.leaf_ident is not None
+        self.unbound_locator=self.leaf_name if (self.leaf_name is not None and not bound) else None
         try:
-            if self.leaf_fd is not None:
+            if bound:
                 try:self.write(leaf,'cgroup.kill','1')
                 except OSError:pass
             self._kill_direct()
@@ -203,20 +208,17 @@ class RealOps:
                     try:
                         if pipe is not None:pipe.close()
                     except OSError:pass
-                try:self.proc.wait(timeout=max(0.1,stop-time.monotonic()))
+                try:self.proc.wait(timeout=remaining())
                 except subprocess.TimeoutExpired:ok=False
-            if self.leaf_fd is not None:
+            if bound:
                 try:
-                    empty=self._wait_empty(max(0.1,stop-time.monotonic()))
+                    empty=self._wait_empty(remaining())
                     st=os.stat(self.leaf_name,dir_fd=self.parent_fd,follow_symlinks=False)
                     if (st.st_dev,st.st_ino)!=self.leaf_ident:raise OSError(1,'leaf identity changed')
                     if not empty:ok=False
                     else:os.rmdir(self.leaf_name,dir_fd=self.parent_fd)
                 except OSError:ok=False
-            elif self.leaf_name is not None:
-                ok=False                                   # UNVERIFIED acquisition, never True
-                try:os.rmdir(self.leaf_name,dir_fd=self.parent_fd)
-                except OSError:pass
+            elif self.leaf_name is not None:ok=False
         finally:self.close()
         return ok
     def close(self):

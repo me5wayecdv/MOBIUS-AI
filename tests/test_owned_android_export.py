@@ -1591,7 +1591,24 @@ def test_host_probe_cleanup_obligations_and_publication_failure_paths(tmp_path,m
     with pytest.raises(OSError):ops.make_leaf('run-w')
     monkeypatch.setattr(os,'open',real_open)
     assert ops.leaf_unbound is True and (cg/'mobius-probe-run-w').exists()
-    assert ops.cleanup('x',None) is False and not (cg/'mobius-probe-run-w').exists()
+    assert ops.cleanup('x',None) is False and (cg/'mobius-probe-run-w').exists()   # NON-mutating: the name is not ours until bound
+    assert ops.unbound_locator=='mobius-probe-run-w'
+    # a replacement directory at the unbound name is never removed; open-ok/fstat-failure is also unbound and no cgroup.kill is written
+    os.rmdir(cg/'mobius-probe-run-w')
+    ops=Ops('/sys/fs/cgroup',str(sleep),sha,trusted_uid=euid)
+    real_fstat=os.fstat
+    state={'n':0}
+    def fstat_fail_on_leaf(fd):
+        if state.get('arm') and os.path.isdir('/proc/self/fd/%d'%fd) and os.readlink('/proc/self/fd/%d'%fd).endswith('mobius-probe-run-z'):raise OSError(5,'x')
+        return real_fstat(fd)
+    monkeypatch.setattr(os,'fstat',fstat_fail_on_leaf);state['arm']=True
+    with pytest.raises(OSError):ops.make_leaf('run-z')
+    state['arm']=False;monkeypatch.setattr(os,'fstat',real_fstat)
+    assert ops.leaf_fd is not None and ops.leaf_unbound is True and ops.leaf_ident is None
+    (cg/'mobius-probe-run-z'/'cgroup.kill').write_text('untouched')
+    assert ops.cleanup('x',None) is False and (cg/'mobius-probe-run-z').exists() and (cg/'mobius-probe-run-z/cgroup.kill').read_text()=='untouched'
+    shutil.rmtree(cg/'mobius-probe-run-z')
+    ops=Ops('/sys/fs/cgroup',str(sleep),sha,trusted_uid=euid)
     # 2. direct child already gone but the leaf stays populated: cgroup.kill is still written; async emptiness is awaited
     ops=Ops('/sys/fs/cgroup',str(sleep),sha,trusted_uid=euid);ops.make_leaf('run-x')
     leaf=cg/'mobius-probe-run-x'
@@ -1640,3 +1657,46 @@ def test_host_probe_cleanup_obligations_and_publication_failure_paths(tmp_path,m
     rows=[{'check':c,'ok':True,'errno':0} for c in hp.CHECKS]
     assert g.validate_content('host_primitive_result',{'envelope':env,'results':rows})
     with pytest.raises(ValueError):g.validate_content('host_primitive_result',{'envelope':bad,'results':rows})
+
+
+def test_publish_close_failures_preserve_committed_state_and_primary_error(tmp_path,monkeypatch):
+    import os,stat as S
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1]/'research'/'d061_android'))
+    import audience_gate as g
+    d=tmp_path/'priv';d.mkdir(mode=0o700);os.chmod(tmp_path,0o700)
+    plan={'route':'local_private_file','destination':str(d),'content_class':'capability_metadata','declared_retention_days':3,'route_evidence_ref':'main-route-0001'}
+    cap={'euid':0,'kvm_present':True,'kvm_rw':False,'disk_free_bytes':1,'disk_total_bytes':2}
+    real_close=os.close
+    def close_fails(kind):
+        calls={'n':0,'armed':False}
+        real_open_dest=g.open_private_destination
+        def armed_open(path):
+            fd=real_open_dest(path);calls['armed']=True;return fd      # only closes AFTER the destination walk can fail
+        monkeypatch.setattr(g,'open_private_destination',armed_open)
+        def c(fd):
+            st=os.fstat(fd);is_dir=S.S_ISDIR(st.st_mode)
+            real_close(fd)                        # the descriptor is released either way (Linux semantics)
+            if calls['armed'] and ((kind=='file' and not is_dir) or (kind=='dir' and is_dir)):
+                calls['n']+=1;raise OSError(5,'x')
+        return c,calls
+    # file close failure after commit: still committed, temp removed, status reported, no exception
+    c,calls=close_fails('file');monkeypatch.setattr(os,'close',c)
+    r=g.publish_private(plan,'a.json',cap);monkeypatch.setattr(os,'close',real_close)
+    assert r['committed'] and r['temp_fd_close_ok'] is False and r['temp_removed'] and (d/'a.json').exists()
+    assert not [x for x in os.listdir(d) if x.startswith('.tmp-')]
+    # dir close failure after commit: success result preserved with a status flag
+    c,calls=close_fails('dir');monkeypatch.setattr(os,'close',c)
+    r=g.publish_private(plan,'b.json',cap);monkeypatch.setattr(os,'close',real_close)
+    assert r['committed'] and r['dir_fd_close_ok'] is False
+    # close failure while a primary error propagates: the primary error wins and the temp is still removed
+    c,calls=close_fails('file');monkeypatch.setattr(os,'close',c)
+    with pytest.raises(FileExistsError):g.publish_private(plan,'a.json',cap)
+    monkeypatch.setattr(os,'close',real_close)
+    assert not [x for x in os.listdir(d) if x.startswith('.tmp-')]
+    # identity failure plus close failure: temp is unlinked before close, primary preserved
+    monkeypatch.setattr(g,'_ident',lambda fd:(_ for _ in ()).throw(OSError(5,'ident')))
+    c,calls=close_fails('file');monkeypatch.setattr(os,'close',c)
+    with pytest.raises(OSError) as e:g.publish_private(plan,'c.json',cap)
+    monkeypatch.setattr(os,'close',real_close)
+    assert 'ident' in str(e.value) and not [x for x in os.listdir(d) if x.startswith('.tmp-')] and not (d/'c.json').exists()
+    assert calls['n']==1                          # closed exactly once, not retried
