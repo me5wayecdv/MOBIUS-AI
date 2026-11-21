@@ -54,7 +54,7 @@ def validate_manifest(lock):
         if name in seen:raise ValueError('duplicate closure destination')
         seen.add(name)
         size=row.get('size')
-        if type(size) is not int or size<0 or size>2*1024**3:raise ValueError('closure size bound')
+        if type(size) is not int or size<0 or size>4*1024**3:raise ValueError('closure size bound')
         total+=size
         if total>12*1024**3:raise ValueError('total closure size bound')
         digest=row.get('sha256','')
@@ -152,7 +152,7 @@ def inside(root,output,kvm_gid,expected_host_netns):
             'ADB_SERVER_SOCKET':'tcp:127.0.0.1:5037','ADB_MDNS_AUTO_CONNECT':'0'}
         child=subprocess.Popen(argv,env=env,stdin=subprocess.DEVNULL,close_fds=True,preexec_fn=child_setup)
         result['driver_pid_namespace']=child.pid
-        result['driver_rc']=child.wait(timeout=360)
+        result['driver_rc']=child.wait(timeout=420)
         result['complete']=result['driver_rc']==0
     finally:
         # PID1 exits after writing result. Kernel PID-namespace teardown then
@@ -207,7 +207,7 @@ def main():
             '--closure-lock',str(lock_path),'--output',str(output),'--inside',str(root),
             '--host-netns',os.readlink('/proc/self/ns/net'),'--kvm-gid',str(kvm.st_gid)],
             env=CLEAN,stdin=subprocess.DEVNULL,close_fds=True,start_new_session=True,preexec_fn=parent_death)
-        rc=child.wait(timeout=420)
+        rc=child.wait(timeout=480)
         cleanup['rc']=rc
         if rc:raise RuntimeError('namespace supervisor failed')
     except BaseException as error:

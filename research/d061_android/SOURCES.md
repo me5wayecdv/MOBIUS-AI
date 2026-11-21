@@ -34,9 +34,9 @@ separately reviewed toolchain verification. No build/emulator was run.
 - https://developer.android.com/tools/apksigner
   Alignment precedes signing, signature verification/certificate output needed.
 
-Current build/ADB sources remain FALSE-gated. Toolchain lock, emulator namespace
-wrapper, product profile registration and attribution/negative-control drivers
-are unfinished. Documentation is not an authorization or an execution result.
+Current build/ADB sources remain FALSE-gated. Runtime closure, complete emulator
+wrapper/control handoff and attribution/negative-control drivers are unfinished.
+Typed product profile/schema/adapter/readback are prepared, default host disabled. Documentation is not an authorization or an execution result.
 
 - https://api.adoptium.net/v3/assets/feature_releases/17/ga?architecture=x64&heap_size=normal&image_type=jdk&jvm_impl=hotspot&os=linux&page=0&page_size=1&project=jdk&sort_method=DATE&sort_order=DESC&vendor=eclipse
   Official Temurin17 Linux x64 JDK metadata selected jdk-17.0.21.1+2. Archive

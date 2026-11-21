@@ -113,12 +113,53 @@ class FixedPrivateADB:
         self.command(['shell','am','start','-W','-n',PACKAGE+'/.FixtureActivity',
             '--es','fixture_nonce',self.request.nonce,'--es','fixture_phase','commit'],timeout=10)
 
-    def completion(self):
+    def attribute_socket_and_release(self,launch):
+        # App commit opens TCP then waits up to10s before sending CONNECT/TLS/GET.
+        # Read actual guest socket table while it exists, correlated with observed
+        # package UID/PID and app-reported tuple. Shell permission failures stay
+        # failures; no root, debug/run-as switch or fabricated socket fallback.
+        deadline=time.monotonic()+5
+        pattern=(r'OWNED_FIXTURE_SOCKET nonce='+self.request.nonce+
+            r' pid=([0-9]+) uid=([0-9]+) local_port=([0-9]+) remote=127\.0\.0\.1:18080')
+        while True:
+            text=self.command(['logcat','-d','-t','100','-s','MobiusOwnedFixture:I','*:S'],timeout=2)
+            matches=re.findall(pattern,text)
+            if matches:break
+            if time.monotonic()>deadline:raise TimeoutError('owned socket corroboration absent')
+            time.sleep(.1)
+        if len(matches)!=1:raise ValueError('exact one original app socket log required')
+        pid,uid,port=map(int,matches[0])
+        if (pid,uid)!=(launch['pid'],launch['guest_uid']) or not 1024<=port<=65535:
+            raise ValueError('actual socket UID/PID/local port mismatch')
+        tcp=self.command(['shell','cat','/proc/net/tcp'],timeout=2)
+        matches=[]
+        for line in tcp.splitlines()[1:]:
+            fields=line.split()
+            if len(fields)<10:raise ValueError('guest TCP evidence malformed')
+            if (fields[1],fields[2],fields[3])==('0100007F:'+format(port,'04X'),'0100007F:46A0','01'):
+                if int(fields[7])!=uid or fields[9]=='0':raise ValueError('guest socket owner evidence mismatch')
+                matches.append(fields)
+        if len(matches)!=1:raise ValueError('owned guest socket tuple missing or ambiguous')
+        record={'pid':pid,'guest_uid':uid,'nonce':self.request.nonce,'local_port':port,
+            'remote_host':'127.0.0.1','remote_port':18080,'guest_proc_socket_uid':int(matches[0][7]),
+            'guest_proc_socket_inode':matches[0][9],'guest_proc_tcp_original':tcp,
+            'app_log_original':text,'attribution':'observed_process_uid_and_live_guest_socket_tuple_with_app_nonce',
+            'adb_reverse_proxy_peer_is_not_app_socket':True}
+        (self.output/'owned-app-socket.json').write_text(json.dumps(record,sort_keys=True))
+        if self.command(['shell','pidof','-s',PACKAGE]).strip()!=str(pid):raise RuntimeError('app PID changed before release')
+        self.command(['shell','am','start','-W','-n',PACKAGE+'/.FixtureActivity',
+            '--es','fixture_nonce',self.request.nonce,'--es','fixture_phase','release'],timeout=5)
+        return record
+
+    def completion(self,launch):
         # Filtered log is corroboration, never sufficient attribution alone.
         text=self.command(['logcat','-d','-t','100','-s','MobiusOwnedFixture:I','*:S'])
         success='OWNED_FIXTURE_REQUEST_COMPLETED nonce='+self.request.nonce
         if text.count(success)!=1 or 'OWNED_FIXTURE_FAILED' in text:raise RuntimeError('owned app did not complete exactly one request')
-        return text
+        record={'pid':launch['pid'],'guest_uid':launch['guest_uid'],'nonce':self.request.nonce,
+            'completed_count':text.count(success),'failed_count':text.count('OWNED_FIXTURE_FAILED'),'app_log_original':text}
+        (self.output/'owned-app-completion.json').write_text(json.dumps(record,sort_keys=True))
+        return record
 
     def cleanup(self):
         errors=[]
@@ -127,8 +168,17 @@ class FixedPrivateADB:
                 self.command(args,check=False)
                 if self.records[-1]['rc']!=0:errors.append({'action':args,'rc':self.records[-1]['rc']})
             except Exception as exc:errors.append({'action':args,'class':type(exc).__name__})
-        try:validate_reverse_list(self.command(['reverse','--list']),expected=False)
+        reverse_after=None;package_absent=False;pid_absent=False
+        try:reverse_after=validate_reverse_list(self.command(['reverse','--list']),expected=False)
         except Exception as exc:errors.append({'stage':'reverse_absence','class':type(exc).__name__})
-        (self.output/'adb-cleanup.json').write_text(json.dumps({'errors':errors,
+        try:
+            package=self.command(['shell','pm','path',PACKAGE],check=False)
+            package_absent=not package.strip() and self.records[-1]['rc'] in (0,1)
+            pid=self.command(['shell','pidof','-s',PACKAGE],check=False)
+            pid_absent=not pid.strip() and self.records[-1]['rc'] in (0,1)
+            if not package_absent or not pid_absent:raise ValueError('app/package still present or unverified')
+        except Exception as exc:errors.append({'stage':'owned_app_absence','class':type(exc).__name__})
+        (self.output/'adb-cleanup.json').write_text(json.dumps({'complete':not errors,'errors':errors,
+            'reverse_after':reverse_after,'package_absent':package_absent,'app_pid_absent':pid_absent,
             'emulator_and_adb_process_teardown':'owned_namespace_supervisor_still_required'},sort_keys=True))
         if errors:raise RuntimeError('owned ADB cleanup incomplete')

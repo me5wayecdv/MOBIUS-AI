@@ -7,9 +7,11 @@ and product registration before any activation. Source flags remain FALSE.
 
 ## Boundary, required topology
 
-One fresh anonymous net+mount+PID namespace and private chroot encloses ALL of:
-owned proxy/origin, emulator/QEMU/slirp, one adb server/client, app-build tools,
-product API test driver and evidence collector. No veth, bridge, host network
+One fresh anonymous net+mount+PID runtime namespace and private chroot encloses
+ALL of: owned proxy/origin, emulator/QEMU/slirp, one adb server/client and app-build
+tools. The product API/control driver must be in a separate no-uplink control
+boundary so it can verify actual runtime namespace absence before persistence.
+See LIFECYCLE_HANDOFF.md for the required correction and still-missing source. No veth, bridge, host network
 namespace, default route or inherited host socket is attached. Only private
 loopback is brought up. Emulator's guest network may exist internally, but its
 slirp/QEMU outer sockets remain in this no-uplink namespace, not the runner's
@@ -117,7 +119,8 @@ bounded allowlisted recovery must retain actual failures and partial originals.
 Staged runtime/library closure, complete fixed contained driver and reviewed
 KVM+chroot+emulator/adb lifecycle (namespace supervisor is FALSE-gated source,
 not runtime proof); offline build-driver certificate parsing/signature validation;
-product typed owned-APK registration; app/host attribution and negative-control driver; independent
+product host/collector/outer handoff wiring (typed schema/adapter/readback are
+now prepared and default-unconfigured); app/host attribution and negative-control driver; independent
 recovery/checker. These are stated gaps, not executable pseudocode. No workflow
 is registered for this directory. Do not invoke an unrestricted existing CI
 emulator as a shortcut. No model, third-party target, production action, image

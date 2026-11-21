@@ -31,6 +31,8 @@ public final class FixtureActivity extends Activity {
     private boolean started = false;
     private String preparedNonce;
     private TextView view;
+    private final java.util.concurrent.CountDownLatch release = new java.util.concurrent.CountDownLatch(1);
+    private boolean released = false;
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
@@ -51,6 +53,12 @@ public final class FixtureActivity extends Activity {
     @Override protected void onNewIntent(Intent intent) {
         super.onNewIntent(intent);
         final String nonce = intent.getStringExtra("fixture_nonce");
+        if ("release".equals(intent.getStringExtra("fixture_phase")) && preparedNonce != null
+                && preparedNonce.equals(nonce) && started && !released) {
+            released = true;
+            release.countDown();
+            return;
+        }
         if (!"commit".equals(intent.getStringExtra("fixture_phase")) || preparedNonce == null
                 || !preparedNonce.equals(nonce) || started) {
             Log.i(TAG, "REFUSED mismatched or repeated commit");
@@ -107,6 +115,10 @@ public final class FixtureActivity extends Activity {
             Log.i(TAG, "OWNED_FIXTURE_SOCKET nonce=" + nonce + " pid=" + android.os.Process.myPid()
                 + " uid=" + android.os.Process.myUid() + " local_port=" + tunnel.getLocalPort()
                 + " remote=127.0.0.1:" + PROXY_PORT);
+            // Keep the connected app socket observable before sending CONNECT or
+            // application bytes. No host-side request substitutes for this one.
+            if (!release.await(10, java.util.concurrent.TimeUnit.SECONDS))
+                throw new java.io.IOException("socket attribution release deadline");
             OutputStream output = tunnel.getOutputStream();
             output.write(("CONNECT 127.0.0.1:" + ORIGIN_PORT + " HTTP/1.1\r\nHost: 127.0.0.1:" + ORIGIN_PORT + "\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
             output.flush();

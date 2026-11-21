@@ -161,7 +161,9 @@ def main():
         names=archive.namelist()
         if len(names)!=len(set(names)):raise ValueError('duplicate APK entries')
         if archive.read('res/raw/fixture_proxy_ca.der')!=ca.read_bytes():raise ValueError('APK public CA differs')
-    record={'apk_sha256':digest(apk),'public_ca_sha256':digest(ca),'package':PACKAGE,
+    signature=re.findall(r'(?m)^Signer #1 certificate SHA-256 digest: ([0-9a-f]{64})$',(out/'verify-signature.log').read_text())
+    if len(signature)!=1:raise ValueError('exact single APK signer certificate identity required')
+    record={'signature_sha256':signature[0],'apk_sha256':digest(apk),'public_ca_sha256':digest(ca),'package':PACKAGE,
         'source_files':[{ 'path':str(path.relative_to(source)),'sha256':digest(path)} for path in sorted(source.rglob('*')) if path.is_file()],
         'toolchain_lock_sha256':digest(a.toolchain_lock),'disposable_key_not_for_upload':True,
         'actual_app_network_not_executed_by_build':True}

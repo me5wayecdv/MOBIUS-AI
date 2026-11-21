@@ -92,7 +92,7 @@ class SafePoCRunner:
 
     def run(self, plan: PoCTestPlan, *, cancel_check: Callable[[], bool] | None = None) -> PoCExecutionResult:
         self.validate_authority(plan)
-        if plan.target_kind == "native_local_fixture":
+        if plan.target_kind in {"native_local_fixture", "owned_android_fixture"}:
             raise PoCAdapterUnavailable("native fixture requires its separately configured host boundary")
         if plan.target_kind == "emulator" and self._emulator_adapter is None:
             raise PoCAdapterUnavailable("no verified Android emulator adapter is configured on this host")

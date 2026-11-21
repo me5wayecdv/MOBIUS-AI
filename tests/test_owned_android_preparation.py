@@ -9,7 +9,7 @@ ROOT=Path(__file__).parents[1]/'research/d061_android'
 
 
 def test_owned_source_and_build_are_held_without_workflow():
-    for name,flags in [('profile.py',['APPROVED_FOR_BUILD','APPROVED_FOR_EXECUTION']),('build_owned.py',['APPROVED_FOR_BUILD']),('namespace_supervisor.py',['APPROVED_FOR_EXECUTION']),('emulator_scope.py',['APPROVED_FOR_EXECUTION'])]:
+    for name,flags in [('profile.py',['APPROVED_FOR_BUILD','APPROVED_FOR_EXECUTION']),('build_owned.py',['APPROVED_FOR_BUILD']),('namespace_supervisor.py',['APPROVED_FOR_EXECUTION']),('emulator_scope.py',['APPROVED_FOR_EXECUTION']),('owned_product_setup.py',['APPROVED_FOR_EXECUTION']),('owned_absence.py',['APPROVED_FOR_EXECUTION'])]:
         tree=ast.parse((ROOT/name).read_text())
         values={target.id:node.value.value for node in tree.body if isinstance(node,ast.Assign) and isinstance(node.value,ast.Constant)
             for target in node.targets if isinstance(target,ast.Name)}
@@ -106,3 +106,38 @@ def test_emulator_listeners_refuse_wildcard_or_implicit_grpc(monkeypatch):
     for bad in (dict(rows[0],port=8554),dict(rows[0],address='00000000')):
         with pytest.raises(ValueError):es.validate_listeners(rows+[bad])
     with pytest.raises(ValueError):es.validate_listeners(rows[1:])
+
+
+def test_unregistered_product_contract_is_disabled_and_rejects_missing_originals(monkeypatch):
+    from dataclasses import asdict,replace
+    import pytest
+    monkeypatch.syspath_prepend(str(ROOT))
+    from profile import OwnedAppRequest
+    from product_contract import OwnedAppAdapter,OwnedAppOutput
+    request=OwnedAppRequest(apk_sha256='a'*64,public_ca_sha256='b'*64,plan_sha256='c'*64,
+        authorization_id='ath_unit',approval_id='apr_unit',investigation_id='scn_unit',plan_id='poc_unit',nonce='d'*32)
+    request.validate()
+    with pytest.raises(RuntimeError):OwnedAppAdapter().execute(request)
+    binding=json.dumps(asdict(request)).encode()
+    failure=OwnedAppOutput(request,{'binding.json':binding,'host-failure.json':b'{"code":"host_timeout"}'},
+        ('unit-refusal-only',),'failed','host_timeout')
+    OwnedAppAdapter.validate(request,failure)
+    with pytest.raises(ValueError):OwnedAppAdapter.validate(request,replace(failure,status='passed',failure_code=None))
+    with pytest.raises(ValueError):OwnedAppAdapter.validate(request,replace(failure,artifacts={'binding.json':binding}))
+    with pytest.raises(ValueError):OwnedAppAdapter.validate(request,replace(failure,failure_code='host_not_executed'))
+    with pytest.raises(ValueError):OwnedAppAdapter.validate(request,replace(failure,artifacts={**failure.artifacts,'arbitrary.txt':b'x'}))
+    with pytest.raises(ValueError):OwnedAppAdapter.validate(request,replace(failure,binding=replace(request,nonce='e'*32)))
+
+
+def test_owned_absence_refuses_missing_postlaunch_evidence(tmp_path,monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT))
+    import owned_absence
+    root=tmp_path/'not-created'
+    assert owned_absence.inspect(root,require_launched=False)['complete']
+    result=owned_absence.inspect(root,require_launched=True)
+    assert not result['complete'] and result['missing_records']==['workflow-root']
+    root.mkdir()
+    result=owned_absence.inspect(root,require_launched=True,proc=tmp_path/'empty-proc')
+    assert not result['complete'] and not result['stage_required_records_complete']
+    assert 'namespace-setup.json' in result['missing_records']
+    assert 'work/evidence/owned-app-launch.json' in result['missing_records']

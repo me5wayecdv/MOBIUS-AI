@@ -1,5 +1,9 @@
 # HELD provisioning-to-approval handoff
 
+Correction: LIFECYCLE_HANDOFF.md supersedes the single-namespace product ordering
+below. The API cannot verify absence of the same runtime namespace it inhabits.
+The remaining sequencing constraints still apply.
+
 This is the chosen source design, not a completed implementation or approval.
 The old native_local_fixture profile cannot be reused: its target APK was only
 an authorization anchor and its traffic was explicitly stdlib, not Android.
@@ -46,7 +50,7 @@ Implemented source, held and unexecuted: owned Java/XML, fixed prepare/commit,
 app-only CA verification and HTTPS endpoint ID; offline build/sign/check driver;
 fixed private ADB helper; exact-copy namespace supervisor with no broad host
 filesystem mounts; fixed emulator/ADB boot/listener/leader teardown helper;
-archive-byte member hashing. Eight static/pure tests pass. Full Python suite
+archive-byte member hashing. Static/pure and failure-only tests pass. Full Python suite
 passed with its normal skips. No Java compilation, SDK binary execution,
 namespace/KVM/emulator boot, APK install/launch or traffic experiment occurred.
 
@@ -62,8 +66,9 @@ Still missing before an activation review:
 - A complete contained_driver.py performing the sequencing above. The wrapper
   requires that exact path in the closure but it does not exist yet, so an honest
   closure cannot be created. This is a deliberate fail-closed missing dependency.
-- Typed product schema/action/adapter, injection, evidence validation/persistence,
-  exact fresh approval flow and readback/report journey for APK-origin identity.
+- Typed product schema/action/adapter, disabled default injection, failure
+  evidence persistence/readback and fixture-only fresh approval setup now exist
+  as source. Real host/collector and actual successful report journey remain untested.
 - App socket-to-UID/PID/nonce correlation and independent capture projection,
   separate app-untrusted-proxy, hostname and untrusted-origin controls.
 - Independent outer stage-aware absence/sanitation/recovery, fault tests and

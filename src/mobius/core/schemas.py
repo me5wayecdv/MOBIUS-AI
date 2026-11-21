@@ -19,6 +19,8 @@ they raise.
 
 from __future__ import annotations
 
+import re
+
 from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -69,6 +71,7 @@ class PoCStep(_Model):
         "assert_emulator_provider_rows",
         "assert_emulator_frida_classes",
         "capture_native_local_fixture_v1",
+        "capture_owned_android_fixture_v1",
     ]
     target_ref: str = Field(min_length=1, max_length=500)
     expected_value: str | bool | int | None = None
@@ -83,6 +86,11 @@ class PoCStep(_Model):
             url = self.input_values.get("url")
             if url is not None and (not isinstance(url, str) or len(url) > 2048):
                 raise ValueError("local harness url input must be a string of at most 2048 chars")
+        elif self.action == "capture_owned_android_fixture_v1":
+            value=self.input_values.get("public_ca_sha256")
+            if (set(self.input_values)!={"public_ca_sha256"} or not isinstance(value,str)
+                or not re.fullmatch(r"[0-9a-f]{64}",value)):
+                raise ValueError("owned fixture accepts only its exact public CA digest")
         elif self.input_values:
             raise ValueError("input_values are allowed only for invoke_local_harness")
         if self.action == "assert_local_harness_result" and self.target_ref not in {
@@ -102,7 +110,7 @@ class PoCStep(_Model):
 
 
 class PoCCleanupStep(_Model):
-    action: Literal["remove_temporary_workspace", "reset_local_harness", "stop_emulator_instrumentation", "stop_native_local_fixture"]
+    action: Literal["remove_temporary_workspace", "reset_local_harness", "stop_emulator_instrumentation", "stop_native_local_fixture", "stop_owned_android_fixture"]
     target_ref: str = Field(min_length=1, max_length=300)
     timeout_seconds: int = Field(default=15, ge=1, le=60)
 
@@ -118,7 +126,7 @@ class PoCTestPlan(_Model):
     authorization_id: str = Field(min_length=1)
     target_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
     target_package: str = Field(min_length=1, max_length=255)
-    target_kind: Literal["lab_apk", "local_harness", "emulator", "native_local_fixture"]
+    target_kind: Literal["lab_apk", "local_harness", "emulator", "native_local_fixture", "owned_android_fixture"]
     hypothesis_ids: tuple[str, ...] = Field(min_length=1, max_length=20)
     prerequisites: tuple[str, ...] = Field(default=(), max_length=30)
     steps: tuple[PoCStep, ...] = Field(min_length=1, max_length=20)
@@ -132,6 +140,20 @@ class PoCTestPlan(_Model):
 
     @model_validator(mode="after")
     def _bounded_and_approved(self) -> PoCTestPlan:
+        if self.target_kind == "owned_android_fixture":
+            if (self.target_package != "org.mobius.ownedfixture"
+                or self.safety_class != "non_destructive" or not self.requires_approval
+                or len(self.steps) != 1 or self.steps[0].action != "capture_owned_android_fixture_v1"
+                or self.steps[0].target_ref != "owned-android-fixed-loopback-v1"
+                or self.steps[0].timeout_seconds != 60 or self.steps[0].expected_value is not None
+                or len(self.cleanup_steps) != 1 or self.cleanup_steps[0].action != "stop_owned_android_fixture"
+                or self.cleanup_steps[0].target_ref != "owned-android-fixed-loopback-v1"
+                or self.cleanup_steps[0].timeout_seconds != 60 or self.max_duration_seconds != 130
+                or self.max_output_bytes != 1048576):
+                raise ValueError("owned Android fixture requires exact APK/package/CA/profile/approved budget")
+        elif (any(s.action == "capture_owned_android_fixture_v1" for s in self.steps)
+              or any(c.action == "stop_owned_android_fixture" for c in self.cleanup_steps)):
+            raise ValueError("owned Android actions require the explicit owned_android_fixture target")
         if self.target_kind == "native_local_fixture":
             if (self.safety_class != "non_destructive" or not self.requires_approval
                 or len(self.steps) != 1

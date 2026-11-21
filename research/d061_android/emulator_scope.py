@@ -49,6 +49,21 @@ def socket_rows():
     return rows
 
 
+def validate_no_udp_broker():
+    # The closed fixture needs no host-side UDP service. Guest background traffic
+    # may produce connected UDP sockets, but unconnected/wildcard UDP bindings
+    # are not silently admitted as emulator infrastructure.
+    records=[]
+    for family in ('udp','udp6'):
+        for line in Path('/proc/net/'+family).read_text().splitlines()[1:]:
+            fields=line.split()
+            record={'family':family,'local':fields[1],'remote':fields[2],'state':fields[3]}
+            records.append(record)
+            if int(fields[2].split(':')[1],16)==0:
+                raise ValueError('unexpected unconnected UDP binding')
+    return records
+
+
 class PrivateEmulator:
     def __init__(self,output,*,host_netns):
         if not APPROVED_FOR_EXECUTION:raise RuntimeError('emulator lifecycle HELD')
@@ -121,8 +136,9 @@ class PrivateEmulator:
             try:
                 ready=adb.verify_ready()
                 rows=socket_rows();validate_listeners(rows)
+                udp_rows=validate_no_udp_broker()
                 record={'boot_state':ready,'socket_rows':rows,'identities':self.records,
-                    'namespace':os.readlink('/proc/self/ns/net'),'actual_apk_launched':False,
+                    'namespace':os.readlink('/proc/self/ns/net'),'udp_socket_rows':udp_rows,'actual_apk_launched':False,
                     'actual_network_experiment_executed':False}
                 (self.output/'emulator-readiness.json').write_text(json.dumps(record,sort_keys=True))
                 return record

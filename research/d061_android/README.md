@@ -41,8 +41,8 @@ owned-app trust, not bypassing another app's certificate pinning.
   receipts. Host stdlib client is not a substitute. Bind product auth/approval/
   plan/run/evidence/report provenance to the actual APK/traffic source explicitly.
 - No inherited approval from stdlib-local profile. Existing profile explicitly
-  excludes APK traffic. A separately reviewed typed profile/schema/harness is
-  needed before execution. Do not silently reuse that identity or promise a run
+  excludes APK traffic. A distinct typed owned_android_fixture schema/adapter is prepared with default
+  host injection disabled. A separately reviewed complete harness is needed before execution. Do not silently reuse that identity or promise a run
   fits60seconds. Research the actual stage budget without executing it.
 - Identity-scoped tracked teardown includes app stop/uninstall, adb reverse
   removal, emulator/adb shutdown, proxy/origin shutdown, keys/homes/jail cleanup,
@@ -56,6 +56,13 @@ and verified as bytes only. No archive was extracted, installed or executed.
 Archive hashes are not a valid runtime closure lock. A FALSE-gated namespace
 supervisor now supplies exact-copy closure/chroot/no-uplink/KVM/drop/timeout source,
 not a proven namespace or emulator result. Runtime dependency closure, fixed
-contained driver, emulator lifecycle and product registration still require implementation. Build/harness/runtime remain
+contained driver, complete emulator lifecycle and outer control/runtime handoff still require implementation. Build/harness/runtime remain
 held pending exact review. No third-party egress, system-CA changes, pinning
 bypass, production activation, new model request or paid spend is implied.
+
+`LIFECYCLE_HANDOFF.md` corrects the original single-namespace product sequence:
+a separate no-uplink control boundary must outlive the Android runtime child
+long enough to verify that child's real absence before product persistence.
+The current supervisor is only a held inner-runtime candidate, not that full
+harness. Product source now has distinct owned-APK schema/adapter/readback and
+fixture-only setup preparation, never an enabled host or Android experiment.
