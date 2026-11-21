@@ -1,0 +1,259 @@
+"""Scope/gating regressions, no host launch or fabricated positive evidence."""
+from dataclasses import replace
+
+import pytest
+from pydantic import ValidationError
+
+from mobius.core.schemas import PoCTestPlan
+from mobius.services.native_local_fixture import NativeFixtureRequest, NativeLocalFixtureAdapter
+from mobius.services.poc_approval import PoCApprovalService
+from mobius.services.poc_execution import PoCExecutionService
+from mobius.services.poc_runner import PoCAdapterUnavailable, PoCApprovalRequired, PoCScopeRejected, PoCExecutionError
+from test_poc_execution import _context
+
+
+def native_plan(session,store,future_iso):
+    _,old=_context(session,store,future_iso)
+    data=old.model_dump()
+    data.update(target_kind='native_local_fixture',safety_class='non_destructive',requires_approval=True,max_output_bytes=65536,
+        steps=[{'action':'capture_native_local_fixture_v1','target_ref':'trusted-local-positive-v1','timeout_seconds':60}],
+        cleanup_steps=[{'action':'stop_native_local_fixture','target_ref':'trusted-local-positive-v1'}])
+    return PoCTestPlan.model_validate(data)
+
+
+def grant(session,plan,future_iso):
+    service=PoCApprovalService(session)
+    row=service.request(plan,requested_by='analyst-1',justification='Unit gate regression only',
+        risk_summary='No real execution in this test',expires_at=future_iso)
+    service.resolve(row.id,investigation_id=plan.investigation_id,decision='granted',
+                    decided_by='analyst-1',note='UNIT TEST ONLY, not an execution approval')
+    return plan.model_copy(update={'approval_id':row.id})
+
+
+def test_native_plan_cannot_disguise_as_simulated_harness(session,store,future_iso):
+    plan=native_plan(session,store,future_iso)
+    for field,value in [('target_kind','local_harness'),('safety_class','read_only'),('requires_approval',False)]:
+        with pytest.raises(ValidationError):PoCTestPlan.model_validate({**plan.model_dump(),field:value})
+    data=plan.model_dump()
+    data['steps'][0]['target_ref']='http://thirdparty.invalid'
+    with pytest.raises(ValidationError):PoCTestPlan.model_validate(data)
+
+
+def test_native_host_not_called_without_grant_and_disabled_after_valid_grant(session,store,future_iso):
+    plan=native_plan(session,store,future_iso)
+    with pytest.raises(PoCApprovalRequired):PoCExecutionService(session,store).execute_and_persist(plan)
+    approved=grant(session,plan,future_iso)
+    with pytest.raises(PoCAdapterUnavailable):PoCExecutionService(session,store).execute_and_persist(approved)
+    request=NativeFixtureRequest.from_plan(approved)
+    with pytest.raises(PoCAdapterUnavailable):NativeLocalFixtureAdapter().execute(request)
+
+
+def test_native_scope_revocation_blocks_before_host(session,store,future_iso):
+    plan=grant(session,native_plan(session,store,future_iso),future_iso)
+    from mobius.adapters.models import AuthorizationRow
+    session.get(AuthorizationRow,plan.authorization_id).revoked_at='2026-01-01T00:00:00Z'
+    with pytest.raises(PoCScopeRejected):PoCExecutionService(session,store).execute_and_persist(plan)
+
+
+def test_existing_run_readback_rehashes_original_persisted_bytes(session,store,future_iso):
+    scan,plan=_context(session,store,future_iso)
+    service=PoCExecutionService(session,store)
+    run=service.execute_and_persist(plan)
+    result=service.readback(run.run_id,investigation_id=scan.id)
+    assert result['input_sha256']==run.input_sha256 and len(result['evidence'])==3
+    with pytest.raises(LookupError):service.readback(run.run_id,investigation_id='another-case')
+
+
+def test_second_session_revocation_seen_after_pending_host(session,store,future_iso):
+    from sqlalchemy.orm import Session
+    from mobius.adapters.models import AuthorizationRow
+    plan=grant(session,native_plan(session,store,future_iso),future_iso)
+    session.commit()
+    # Prime the first identity map before an independently committed revocation.
+    cached=session.get(AuthorizationRow,plan.authorization_id)
+    assert cached.revoked_at is None
+    class PendingHost:
+        VERSION='unit-refusal-only'
+        def execute(self,request,**kwargs):
+            with Session(bind=session.get_bind()) as other:
+                row=other.get(AuthorizationRow,plan.authorization_id)
+                row.revoked_at='2026-01-01T00:00:00Z'
+                other.commit()
+            return None  # Deliberately no fabricated native evidence/result.
+    result=PoCExecutionService(session,store,native_adapter=PendingHost()).execute_and_persist(plan)
+    assert result.status=='failed'
+    session.commit()
+    assert PoCExecutionService(session,store).readback(result.run_id,investigation_id=plan.investigation_id)['status']=='failed'
+
+
+def test_missing_or_substituted_plan_result_links_fail_readback(session,store,future_iso):
+    from mobius.adapters.models import PoCRunEvidenceRow
+    scan,plan=_context(session,store,future_iso)
+    service=PoCExecutionService(session,store)
+    run=service.execute_and_persist(plan)
+    link=session.query(PoCRunEvidenceRow).filter_by(run_id=run.run_id,kind='plan').one()
+    session.delete(link)
+    session.flush()
+    with pytest.raises(ValueError,match='plan/result/log'):
+        service.readback(run.run_id,investigation_id=scan.id)
+
+
+def test_native_failed_host_is_persisted_not_promoted_and_manifest_links_required(session,store,future_iso):
+    import json
+    from dataclasses import asdict
+    from mobius.adapters.models import PoCRunEvidenceRow
+    from mobius.services.native_local_fixture import NativeFixtureOutput
+    plan=grant(session,native_plan(session,store,future_iso),future_iso)
+    session.commit()
+    def host_failure(request,**kwargs):
+        artifacts={'binding.json':json.dumps(asdict(request),sort_keys=True).encode(),
+                   'host-failure.json':b'{"code":"host_timeout","source":"UNIT FAILURE PATH ONLY"}'}
+        return NativeFixtureOutput(request,artifacts,('unit-failure-only',),'failed','host_timeout')
+    service=PoCExecutionService(session,store,native_adapter=NativeLocalFixtureAdapter(host_failure))
+    run=service.execute_and_persist(plan)
+    assert run.status=='failed'
+    session.commit()
+    result=service.readback(run.run_id,investigation_id=plan.investigation_id)
+    assert result['status']=='failed'
+    manifest=result['output']['output_json']['native_artifacts']
+    assert {x['name'] for x in manifest}=={'binding.json','host-failure.json'}
+    link=session.query(PoCRunEvidenceRow).filter_by(run_id=run.run_id,kind='native-local').first()
+    session.delete(link)
+    session.flush()
+    with pytest.raises(ValueError,match='links incomplete'):
+        service.readback(run.run_id,investigation_id=plan.investigation_id)
+
+
+def test_committed_revocation_seen_before_host_despite_cached_authority(session,store,future_iso):
+    from sqlalchemy.orm import Session
+    from mobius.adapters.models import AuthorizationRow
+    plan=grant(session,native_plan(session,store,future_iso),future_iso)
+    session.commit()
+    cached=session.get(AuthorizationRow,plan.authorization_id)
+    assert cached.revoked_at is None
+    with Session(bind=session.get_bind()) as other:
+        other.get(AuthorizationRow,plan.authorization_id).revoked_at='2026-01-01T00:00:00Z'
+        other.commit()
+    class Host:
+        VERSION='must-not-run'
+        def execute(self,*args,**kwargs):pytest.fail('stale authority launched host')
+    with pytest.raises(PoCScopeRejected):
+        PoCExecutionService(session,store,native_adapter=Host()).execute_and_persist(plan)
+
+
+def test_native_rejects_total_output_before_any_store_write(session,store,future_iso,monkeypatch):
+    import json
+    from dataclasses import asdict
+    from mobius.services.native_local_fixture import NativeFixtureOutput
+    plan=native_plan(session,store,future_iso).model_copy(update={'max_output_bytes':2000})
+    plan=grant(session,plan,future_iso)
+    session.commit()
+    def host(request,**kwargs):
+        return NativeFixtureOutput(request,{'binding.json':json.dumps(asdict(request)).encode(),
+            'host-failure.json':b'{"code":"host_timeout"}'},('unit-failure',),'failed','host_timeout')
+    writes=[]
+    monkeypatch.setattr(store,'put',lambda *a,**kw:writes.append(a) or pytest.fail('store write before full budget check'))
+    with pytest.raises(PoCExecutionError,match='reserve'):
+        PoCExecutionService(session,store,native_adapter=NativeLocalFixtureAdapter(host)).execute_and_persist(plan)
+    assert writes==[]
+
+
+def test_teardown_minimum_and_collection_reserve(session,store,future_iso):
+    data=native_plan(session,store,future_iso).model_dump()
+    data['cleanup_steps'][0]['timeout_seconds']=1
+    with pytest.raises(ValidationError,match='15 seconds'):PoCTestPlan.model_validate(data)
+    data['cleanup_steps'][0]['timeout_seconds']=15
+    data['max_duration_seconds']=75
+    with pytest.raises(ValidationError,match='reserve'):PoCTestPlan.model_validate(data)
+
+
+@pytest.mark.parametrize('mode',['exception','invalid','budget'])
+def test_actual_host_rejections_persist_failed_attempts_without_fake_proof(session,store,future_iso,mode):
+    import json
+    from dataclasses import asdict
+    from mobius.services.native_local_fixture import NativeFixtureOutput
+    plan=native_plan(session,store,future_iso).model_copy(update={'max_output_bytes':16384})
+    plan=grant(session,plan,future_iso)
+    session.commit()
+    def host(request,**kwargs):
+        if mode=='exception':raise OSError('unit collection failure')
+        files={'binding.json':json.dumps(asdict(request)).encode(),
+            'host-failure.json':b'{"code":"host_failed","original":"UNIT_FAILURE_ONLY"}'}
+        if mode=='budget':files['proxy.log']=b'x'*17000
+        return NativeFixtureOutput(request,files,('unit-failure-only',),
+            'passed' if mode=='invalid' else 'failed',None if mode=='invalid' else 'host_failed')
+    service=PoCExecutionService(session,store,native_adapter=NativeLocalFixtureAdapter(host))
+    run=service.execute_and_persist(plan)
+    assert run.status=='failed'
+    session.commit()
+    data=service.readback(run.run_id,investigation_id=plan.investigation_id)
+    assert data['status']=='failed'
+    payload=data['output']['output_json']
+    assert payload['host_failure_code']=='product_rejected'
+    names={x['name'] for x in payload['native_artifacts']}
+    assert 'product-rejection.json' in names
+    if mode=='invalid':assert 'host-failure.json' in names
+    if mode=='budget':assert 'proxy.log' not in names
+    assert sum(x['bytes'] for x in data['evidence'])<=plan.max_output_bytes
+
+
+def test_independent_absence_never_calls_missing_records_clean_after_launch(tmp_path,monkeypatch):
+    import sys
+    from pathlib import Path
+    monkeypatch.syspath_prepend(str(Path(__file__).parents[1]/'research/d061_native'))
+    from absence import inspect
+    raw=tmp_path/'raw'
+    assert inspect(raw)['complete']
+    data=inspect(raw,require_launched=True)
+    assert not data['complete']
+    assert data['missing_launch_records']
+
+
+def test_exact_consolidated_workflow_is_reviewed_manual_and_other_source_held():
+    import ast
+    from pathlib import Path
+    import yaml
+    root=Path(__file__).parents[1]
+    source=root/'research/d061_native'
+    workflow=source/'product-integration.yml'
+    registered=root/'.github/workflows/d061-product-integration.yml'
+    assert registered.read_bytes()==workflow.read_bytes()
+    data=yaml.safe_load(workflow.read_text())
+    assert set(data.get('on',data.get(True)))=={'workflow_dispatch'}
+    for name in ('stage_product.py','product_setup.py','product_http_journey.py','run_product_owned.py','tls_driver.py','tls_controls.py','product_host.py'):
+        values={target.id:node.value.value for node in ast.parse((source/name).read_text()).body
+            if isinstance(node,ast.Assign) and isinstance(node.value,ast.Constant)
+            for target in node.targets if isinstance(target,ast.Name)}
+        assert values['APPROVED_FOR_EXECUTION'] is (name=='stage_product.py')
+
+
+def test_held_setup_actual_plan_obeys_existing_operation_cap(monkeypatch):
+    import sys
+    from pathlib import Path
+    monkeypatch.syspath_prepend(str(Path(__file__).parents[1]/'research/d061_native'))
+    from product_setup import build_plan
+    plan=build_plan('scn_unit','ath_unit',['hyp_unit'])
+    assert plan.steps[0].timeout_seconds==60
+    assert plan.cleanup_steps[0].timeout_seconds==60
+    assert plan.max_duration_seconds==130
+    assert plan.steps[0].timeout_seconds+plan.cleanup_steps[0].timeout_seconds+10==plan.max_duration_seconds
+
+
+def test_cleanup_context_executes_in_real_sync_worker_without_signal_mutation(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from pathlib import Path
+    import signal
+    monkeypatch.syspath_prepend(str(Path(__file__).parents[1]/'research/d061_native'))
+    from cleanup import ordinary_signals_ignored
+    before={sig:signal.getsignal(sig) for sig in (signal.SIGINT,signal.SIGTERM,signal.SIGHUP)}
+    actions=[]
+    def worker():
+        try:
+            raise OSError('unit failure before cleanup')
+        finally:
+            with ordinary_signals_ignored():
+                actions.extend(['TERM-or-reap-seam','emergency-seam','summary-seam'])
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        with pytest.raises(OSError,match='unit failure'):pool.submit(worker).result()
+    assert actions==['TERM-or-reap-seam','emergency-seam','summary-seam']
+    assert {sig:signal.getsignal(sig) for sig in before}==before

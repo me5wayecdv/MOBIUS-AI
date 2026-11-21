@@ -1731,7 +1731,7 @@ def execute_poc(
     if payload.investigation_id != scan_id:
         raise HTTPException(status_code=422, detail="plan investigation_id must match route")
     ctx = get_context()
-    result = PoCExecutionService(session, ctx.store).execute_and_persist(payload)
+    result = PoCExecutionService(session, ctx.store, native_adapter=ctx.native_fixture_adapter).execute_and_persist(payload)
     return {"run_id": result.run_id, "plan_id": result.plan_id, "status": result.status,
             "evidence_ids": list(result.evidence_ids), "input_sha256": result.input_sha256,
             "output_sha256": result.output_sha256, "output": result.result.output_json}
@@ -1765,6 +1765,17 @@ def list_poc_runs(scan_id: str, session=SessionDep, who: str = Depends(analyst_i
         "duration_ms": row.duration_ms, "cleanup": row.cleanup_json,
         "hypothesis_ids": list(row.hypothesis_ids or []),
     } for row in rows]}
+
+
+@router.get("/scans/{scan_id}/poc/runs/{run_id}/evidence", tags=["poc"])
+def readback_poc_run(scan_id: str, run_id: str, session=SessionDep, who: str = Depends(analyst_id)):
+    _require_scan_owner(session, scan_id, who)
+    ctx=get_context()
+    service=PoCExecutionService(session,ctx.store)
+    try:row=service.get(run_id)
+    except LookupError as exc:raise HTTPException(status_code=404,detail="PoC run not found") from exc
+    if row.investigation_id!=scan_id:raise HTTPException(status_code=404,detail="PoC run not found")
+    return service.readback(run_id,investigation_id=scan_id)
 
 
 # ------------------------------------------------------------------------------------

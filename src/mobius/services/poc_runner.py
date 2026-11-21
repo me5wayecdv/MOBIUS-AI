@@ -91,21 +91,9 @@ class SafePoCRunner:
         }
 
     def run(self, plan: PoCTestPlan, *, cancel_check: Callable[[], bool] | None = None) -> PoCExecutionResult:
-        self._validate_scope(plan)
-        if plan.safety_class == "state_changing":
-            raise PoCExecutionError("state-changing actions remain disabled; no state-changing adapter is registered")
-        if plan.requires_approval:
-            approval = self.session.get(ApprovalRow, plan.approval_id) if plan.approval_id else None
-            if (approval is None or approval.investigation_id != plan.investigation_id
-                or approval.requested_action != "poc.execute" or approval.state != "granted"
-                or approval.plan_sha256 != hashlib.sha256(json.dumps(
-                    plan.model_dump(mode="json", exclude={"approval_id"}),
-                    sort_keys=True, separators=(",", ":"),
-                ).encode("utf-8")).hexdigest()
-                or datetime.fromisoformat(approval.expires_at.replace("Z", "+00:00")) <= datetime.now(timezone.utc)):
-                raise PoCApprovalRequired("a matching, unexpired granted PoC approval is required")
-        elif plan.safety_class != "read_only":
-            raise PoCApprovalRequired("non-read-only plans require explicit approval")
+        self.validate_authority(plan)
+        if plan.target_kind == "native_local_fixture":
+            raise PoCAdapterUnavailable("native fixture requires its separately configured host boundary")
         if plan.target_kind == "emulator" and self._emulator_adapter is None:
             raise PoCAdapterUnavailable("no verified Android emulator adapter is configured on this host")
         if plan.cleanup_steps and plan.target_kind != "local_harness":
@@ -221,6 +209,23 @@ class SafePoCRunner:
                  "No shell, subprocess, network, emulator, or state-changing action is available."),
                 "Cancellation is cooperative between bounded allowlisted steps; it cannot interrupt a running step."),
             cleanup_results=tuple(cleanup_results))
+
+    def validate_authority(self, plan: PoCTestPlan) -> None:
+        self._validate_scope(plan)
+        if plan.safety_class == "state_changing":
+            raise PoCExecutionError("state-changing actions remain disabled; no state-changing adapter is registered")
+        if plan.requires_approval:
+            approval = self.session.get(ApprovalRow, plan.approval_id) if plan.approval_id else None
+            if (approval is None or approval.investigation_id != plan.investigation_id
+                or approval.requested_action != "poc.execute" or approval.state != "granted"
+                or approval.plan_sha256 != hashlib.sha256(json.dumps(
+                    plan.model_dump(mode="json", exclude={"approval_id"}),
+                    sort_keys=True, separators=(",", ":"),
+                ).encode("utf-8")).hexdigest()
+                or datetime.fromisoformat(approval.expires_at.replace("Z", "+00:00")) <= datetime.now(timezone.utc)):
+                raise PoCApprovalRequired("a matching, unexpired granted PoC approval is required")
+        elif plan.safety_class != "read_only":
+            raise PoCApprovalRequired("non-read-only plans require explicit approval")
 
     def _validate_scope(self, plan: PoCTestPlan) -> None:
         investigation = self.session.get(InvestigationRow, plan.investigation_id)

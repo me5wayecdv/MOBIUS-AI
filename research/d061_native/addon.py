@@ -83,6 +83,11 @@ class Slice:
         replay = flows[0]
         if self.validate(replay)!=fingerprint:raise ValueError('loaded_policy')
         if replay.request.get_state()!=flow.request.get_state():raise ValueError('saved_request')
+        atomic_json(self.out/'native-proof.json',{'extractor':'mitmproxy.io.FlowReader',
+            'version':'12.3.1','wheel_sha256':'87afb808ac8d55383dbe6aa30eadeb0fedaeffd26210e7e23c25c9cd43bdb36a',
+            'capture_sha256':hashlib.sha256(capture.read_bytes()).hexdigest(),
+            'flow_count':1,'flow_id':replay.id,'canonical':self.validate(replay),
+            'loaded_request_state_equal':True,'raw_content_present':replay.request.raw_content is not None})
         playback = ctx.master.addons.get('clientplayback')
         if playback is None:raise ValueError('missing_clientplayback')
         eligibility_error = playback.check(replay)

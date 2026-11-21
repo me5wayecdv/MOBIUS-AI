@@ -1,11 +1,18 @@
 """Bounded ordinary-signal-resistant cleanup helpers, no execution at import."""
 from contextlib import contextmanager
 import signal
+import threading
 
 SIGNALS = (signal.SIGINT,signal.SIGTERM,signal.SIGHUP)
 
 @contextmanager
 def ordinary_signals_ignored():
+    # Python owns process signal handlers on its main thread only. API worker
+    # threads still execute cleanup, with process signal ownership retained by
+    # the independent workflow supervisor. No handler install or restoration.
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
     previous={sig:signal.signal(sig,signal.SIG_IGN) for sig in SIGNALS}
     try:yield
     finally:

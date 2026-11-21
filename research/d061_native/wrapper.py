@@ -117,6 +117,7 @@ def main():
     p.add_argument('--base-prefix',required=True)
     p.add_argument('--output',required=True)
     p.add_argument('--inside')
+    p.add_argument('--binding')
     a=p.parse_args()
     source,runtime,base,output=(Path(x).resolve() for x in (a.source,a.runtime,a.base_prefix,a.output))
     if a.inside:
@@ -125,6 +126,14 @@ def main():
     if runtime!=Path('/opt/d061-runtime'):raise RuntimeError('exact staged runtime path required')
     if any(x.is_symlink() for x in (source,runtime,base)):raise RuntimeError('symlink input root')
     output.mkdir(mode=0o700,parents=False,exist_ok=False)
+    if a.binding:
+        from lifecycle import lexical
+        binding_path=lexical(a.binding)
+        binding=json.loads(binding_path.read_text())
+        if binding.get('profile')!='trusted-local-positive-v1' or binding.get('traffic_source')!='owned-stdlib-loopback-client-not-apk':
+            raise RuntimeError('fixed product fixture binding required')
+        atomic_json(output/'binding.json',binding)
+        os.chmod(output/'binding.json',0o644)
     root=Path(tempfile.mkdtemp(prefix='d061-jail-',dir='/opt'))
     # No open namespace, host service or credential descriptors survive exec.
     env=dict(CLEAN,D061_WRAPPER_OUTPUT=str(output))
