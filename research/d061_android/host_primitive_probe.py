@@ -1,7 +1,7 @@
 """HELD, unwired, NEVER RUN: smallest benign host-primitive probe (F1 + one natural F2).
 
 Establishes, on a disposable root-capable Linux host and only if it is ever authorized,
-four separate observations: cgroup limit readback, PID-namespace creation, natural exit of
+four separate observations: cgroup limit readback, a NARROW PID-namespace observation (child unshare returned 0 and the parent saw a distinct pid_for_children id; no PID1 membership or namespace-wide absence), natural exit of
 `sleep 1`, and bounded cleanup absence. No SDK/JDK, APK, member reads, model, network, KVM,
 pressure, cancel injection or owner SIGKILL. Denials are failures, never capability passes.
 Parent death is NOT handled here: a separate disposable-host teardown/evidence owner is a
@@ -11,6 +11,7 @@ prints nothing and never touches stdout/stderr text from children.
 import hashlib,os,re,select,signal,stat,subprocess,sys,time
 
 APPROVED_FOR_EXECUTION=False
+PIDNS_CLAIM='child_unshare_ok_and_parent_saw_distinct_pid_for_children_id'
 CHECKS=('limit_readback','pidns_create','child_exit','cleanup_absence')
 LIMITS={'pids.max':'16','memory.max':str(64*1024**2),'cpu.max':'20000 100000'}
 NEEDED_CONTROLLERS={'pids','memory','cpu'}
@@ -26,7 +27,7 @@ def envelope(run_id,source_commit,sleep_sha256):
     if not (isinstance(run_id,str) and RUN_ID.fullmatch(run_id)):raise ValueError('canonical run id required')
     if not (isinstance(source_commit,str) and re.fullmatch('[0-9a-f]{40}',source_commit)):raise ValueError('40-hex git commit required')
     if not (isinstance(sleep_sha256,str) and re.fullmatch('[0-9a-f]{64}',sleep_sha256)):raise ValueError('64-hex sha256 required')
-    return {'run_id':run_id,'source_commit':source_commit,'sleep_sha256':sleep_sha256,'probe':'host_primitive_v1'}
+    return {'run_id':run_id,'source_commit':source_commit,'sleep_sha256':sleep_sha256,'probe':'host_primitive_v1','pidns_claim':PIDNS_CLAIM}
 
 
 def run(ops,env,*,clock=time.monotonic):
@@ -84,7 +85,7 @@ class RealOps:
     fake directory tree. `trusted_uid` is 0 in production. Honest limits: cgroup2 is inferred from the
     interface files present in the held parent, not from the filesystem type."""
     def __init__(self,parent,sleep_path,sleep_sha256,*,trusted_uid=0):
-        self.sleep_fd=None;self.parent_fd=None;self.leaf_fd=None;self.leaf_name=None;self.leaf_ident=None
+        self.sleep_fd=None;self.parent_fd=None;self.leaf_fd=None;self.leaf_name=None;self.leaf_ident=None;self.leaf_unbound=False
         self.proc=None;self.pidfd=None;self.trusted_uid=trusted_uid
         if not (isinstance(parent,str) and re.fullmatch(r'/sys/fs/cgroup(/[A-Za-z0-9_.-]+){0,6}',parent)) or '..' in parent.split('/'):raise ValueError('canonical cgroup parent required')
         self.parent_rel=parent[len('/sys/fs/cgroup'):] or '/'
@@ -130,8 +131,9 @@ class RealOps:
         name='mobius-probe-%s'%run_id
         os.mkdir(name,0o700,dir_fd=self.parent_fd)
         self.leaf_name=name                       # acquired state recorded BEFORE any further fallible step
+        self.leaf_unbound=True                    # acquired but identity not yet bound: cleanup can only be UNVERIFIED
         self.leaf_fd=os.open(name,os.O_RDONLY|os.O_DIRECTORY|os.O_CLOEXEC|os.O_NOFOLLOW,dir_fd=self.parent_fd)
-        st=os.fstat(self.leaf_fd);self.leaf_ident=(st.st_dev,st.st_ino)
+        st=os.fstat(self.leaf_fd);self.leaf_ident=(st.st_dev,st.st_ino);self.leaf_unbound=False
         self.leaf_rel=(self.parent_rel.rstrip('/')+'/'+name)
         return name
     def write(self,leaf,name,val):
@@ -177,12 +179,22 @@ class RealOps:
         except OSError:
             try:self.proc.kill()
             except OSError:pass
+    def _wait_empty(self,budget):
+        end=time.monotonic()+budget
+        while True:
+            try:
+                if self._rd('cgroup.procs')=='' and 'populated 0' in self._rd('cgroup.events').splitlines():return True
+            except OSError:return False
+            if time.monotonic()>=end:return False
+            time.sleep(0.05)
     def cleanup(self,leaf,child):
-        """Both obligations are separate: (1) the held direct child is always killed if still live, whether or
-        not cgroup.kill worked; (2) the leaf must be empty before it is removed. True only if both hold."""
-        ok=True
+        """Separate obligations. (1) Acquired leaf: kill it through its held fd INDEPENDENTLY of direct-child liveness, then
+        wait boundedly for empty/populated 0, then remove only the identity-bound empty leaf. (2) The held direct child is
+        always killed if live and reaped. (3) A leaf that was created but never bound to an fd is UNVERIFIED: we try to remove
+        the empty directory by name and still report False. True only if every obligation is verified."""
+        ok=True;stop=time.monotonic()+CLEANUP_S
         try:
-            if self.leaf_fd is not None and self.proc is not None and self.proc.poll() is None:
+            if self.leaf_fd is not None:
                 try:self.write(leaf,'cgroup.kill','1')
                 except OSError:pass
             self._kill_direct()
@@ -191,16 +203,20 @@ class RealOps:
                     try:
                         if pipe is not None:pipe.close()
                     except OSError:pass
-                try:self.proc.wait(timeout=CLEANUP_S)
+                try:self.proc.wait(timeout=max(0.1,stop-time.monotonic()))
                 except subprocess.TimeoutExpired:ok=False
             if self.leaf_fd is not None:
                 try:
-                    empty=self._rd('cgroup.procs')=='' and 'populated 0' in self._rd('cgroup.events').splitlines()
+                    empty=self._wait_empty(max(0.1,stop-time.monotonic()))
                     st=os.stat(self.leaf_name,dir_fd=self.parent_fd,follow_symlinks=False)
                     if (st.st_dev,st.st_ino)!=self.leaf_ident:raise OSError(1,'leaf identity changed')
                     if not empty:ok=False
                     else:os.rmdir(self.leaf_name,dir_fd=self.parent_fd)
                 except OSError:ok=False
+            elif self.leaf_name is not None:
+                ok=False                                   # UNVERIFIED acquisition, never True
+                try:os.rmdir(self.leaf_name,dir_fd=self.parent_fd)
+                except OSError:pass
         finally:self.close()
         return ok
     def close(self):

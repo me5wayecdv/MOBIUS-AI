@@ -1568,3 +1568,75 @@ def test_host_primitive_real_ops_acquisition_and_failure_branches(tmp_path,monke
         def require_controllers(s,n):raise RuntimeError('x')
         def cleanup(s,l,c):Boom.calls+=1;return True
     o=hp.run(Boom(),env);assert Boom.calls==1 and not o['results'][0]['ok']
+
+
+def test_host_probe_cleanup_obligations_and_publication_failure_paths(tmp_path,monkeypatch):
+    import os,shutil,hashlib,threading,time
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1]/'research'/'d061_android'))
+    import host_primitive_probe as hp,audience_gate as g
+    euid=os.geteuid()
+    sleep=tmp_path/'sleepcopy';shutil.copy(shutil.which('sleep'),sleep);os.chmod(sleep,0o755)
+    sha=hashlib.sha256(sleep.read_bytes()).hexdigest()
+    root=tmp_path/'tree';cg=root/'sys/fs/cgroup';cg.mkdir(parents=True)
+    for p in (tmp_path,root,root/'sys',root/'sys/fs',cg):os.chmod(p,0o755)
+    (cg/'cgroup.controllers').write_text('cpu memory pids');(cg/'cgroup.subtree_control').write_text('cpu memory pids')
+    class Ops(hp.RealOps):_root=str(root)
+    # 1. mkdir succeeded but binding the leaf failed: cleanup removes the empty dir but reports UNVERIFIED (False)
+    ops=Ops('/sys/fs/cgroup',str(sleep),sha,trusted_uid=euid)
+    real_open=os.open
+    def fail_leaf_open(path,flags,*a,**k):
+        if path=='mobius-probe-run-w' and flags&os.O_DIRECTORY:raise OSError(24,'x')
+        return real_open(path,flags,*a,**k)
+    monkeypatch.setattr(os,'open',fail_leaf_open)
+    with pytest.raises(OSError):ops.make_leaf('run-w')
+    monkeypatch.setattr(os,'open',real_open)
+    assert ops.leaf_unbound is True and (cg/'mobius-probe-run-w').exists()
+    assert ops.cleanup('x',None) is False and not (cg/'mobius-probe-run-w').exists()
+    # 2. direct child already gone but the leaf stays populated: cgroup.kill is still written; async emptiness is awaited
+    ops=Ops('/sys/fs/cgroup',str(sleep),sha,trusted_uid=euid);ops.make_leaf('run-x')
+    leaf=cg/'mobius-probe-run-x'
+    (leaf/'cgroup.procs').write_text('123\n');(leaf/'cgroup.events').write_text('populated 1\n');(leaf/'cgroup.kill').write_text('')
+    real_write=ops.write
+    def kill_then_drain(l,name,val):
+        real_write(l,name,val)
+        if name=='cgroup.kill':
+            def later():
+                time.sleep(0.3);(leaf/'cgroup.procs').write_text('');(leaf/'cgroup.events').write_text('populated 0\n')
+            threading.Thread(target=later).start()
+    monkeypatch.setattr(ops,'write',kill_then_drain)
+    assert ops.proc is None
+    real_rmdir=os.rmdir
+    def cgroupfs_rmdir(path,*a,**k):          # a real cgroupfs rmdir succeeds with its pseudo files; the fake tree needs them removed
+        for f in os.listdir(cg/path):os.unlink(cg/path/f)
+        return real_rmdir(path,*a,**k)
+    monkeypatch.setattr(os,'rmdir',cgroupfs_rmdir)
+    assert ops.cleanup('x',None) is True and not leaf.exists()
+    monkeypatch.setattr(os,'rmdir',real_rmdir)
+    assert (cg/'moved').exists() is False
+    # populated forever: bounded wait ends False and leaves the leaf (no removal of a populated leaf)
+    ops=Ops('/sys/fs/cgroup',str(sleep),sha,trusted_uid=euid);ops.make_leaf('run-y')
+    leaf=cg/'mobius-probe-run-y';(leaf/'cgroup.procs').write_text('9\n');(leaf/'cgroup.events').write_text('populated 1\n')
+    monkeypatch.setattr(hp,'CLEANUP_S',0.3)
+    t0=time.monotonic();assert ops.cleanup('x',None) is False and leaf.exists() and time.monotonic()-t0<5
+    # 3. publication: post-link fsync failure is reported, not raised; temp fstat failure cleans its own exclusive temp
+    d=tmp_path/'priv';d.mkdir(mode=0o700);os.chmod(tmp_path,0o700)
+    plan={'route':'local_private_file','destination':str(d),'content_class':'capability_metadata','declared_retention_days':3,'route_evidence_ref':'main-route-0001'}
+    cap={'euid':0,'kvm_present':True,'kvm_rw':False,'disk_free_bytes':1,'disk_total_bytes':2}
+    real_fsync=os.fsync
+    def fsync_dir_fails(fd):
+        import stat as S
+        if S.S_ISDIR(os.fstat(fd).st_mode):raise OSError(5,'x')
+        return real_fsync(fd)
+    monkeypatch.setattr(os,'fsync',fsync_dir_fails)
+    res=g.publish_private(plan,'f.json',cap)
+    monkeypatch.setattr(os,'fsync',real_fsync)
+    assert res['committed'] is True and res['durable_dir_fsync'] is False and (d/'f.json').exists()
+    monkeypatch.setattr(g,'_ident',lambda fd:(_ for _ in ()).throw(OSError(5,'x')))
+    with pytest.raises(OSError):g.publish_private(plan,'h.json',cap)
+    assert not (d/'h.json').exists() and not [x for x in os.listdir(d) if x.startswith('.tmp-')]
+    # results carry the narrow pidns definition
+    env=hp.envelope('run-1','a'*40,'b'*64);assert env['pidns_claim']==hp.PIDNS_CLAIM
+    bad={**env,'pidns_claim':'namespace created and absent'}
+    rows=[{'check':c,'ok':True,'errno':0} for c in hp.CHECKS]
+    assert g.validate_content('host_primitive_result',{'envelope':env,'results':rows})
+    with pytest.raises(ValueError):g.validate_content('host_primitive_result',{'envelope':bad,'results':rows})

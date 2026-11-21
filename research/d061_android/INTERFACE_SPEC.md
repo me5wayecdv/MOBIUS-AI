@@ -107,7 +107,7 @@ Source contract (unit-tested only through an injected fake; the real primitives 
 - Cleanup (live parent only): `cgroup.kill` on the held leaf (else pidfd kill of the held direct child), bounded reap, `cgroup.procs` empty, `cgroup.events populated 0`, `rmdir` of its
   own empty leaf. No broad process discovery or numeric-PID signals.
 - Result is the closed `host_primitive_result` record: fixed envelope `{run_id, source_commit (40-hex git commit), sleep_sha256 (64-hex), probe}` plus four separate results
-  `limit_readback, pidns_create, child_exit, cleanup_absence` each `{check, ok, errno}`. A denial or later-skipped check is `ok False`. A pass
+  `limit_readback, pidns_create, child_exit, cleanup_absence` each `{check, ok, errno}`. `pidns_create` has the NARROW meaning carried in the envelope as `pidns_claim`: the child's `unshare(CLONE_NEWPID)` returned 0 and the parent saw the child's `pid_for_children` namespace id differ from its own. No PID1 membership or namespace-wide absence is claimed. A denial or later-skipped check is `ok False`. A pass
   means only those observed primitives plus bounded normal-exit cleanup. It is never full containment, KVM function, SDK closure, app traffic or owner-death safety.
 - Output goes only through `audience_gate.publish_private` to a verified private destination. Nothing is printed, uploaded or logged.
 

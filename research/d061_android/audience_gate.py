@@ -60,6 +60,10 @@ def open_private_destination(path):
         if cur is not None:os.close(cur)
 
 
+def _ident(fd):
+    st=os.fstat(fd);return (st.st_dev,st.st_ino)
+
+
 def _create_owned_temp(dirfd,data):
     """Exclusive create of a UNIQUE per-attempt temp name; returns (name, fd, (dev,ino)). Ownership
     exists only after the exclusive create succeeded, so cleanup can never delete another attempt's file."""
@@ -68,8 +72,12 @@ def _create_owned_temp(dirfd,data):
     if not isinstance(data,bytes) or len(data)>64*1024**2:raise ValueError('bounded bytes required')
     name='.tmp-'+os.urandom(12).hex()
     fd=os.open(name,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW|os.O_CLOEXEC,0o600,dir_fd=dirfd)
-    fst=os.fstat(fd)
-    return name,fd,(fst.st_dev,fst.st_ino)
+    try:return name,fd,_ident(fd)
+    except BaseException:                      # created exclusively just above, so this unique name is ours
+        os.close(fd)
+        try:os.unlink(name,dir_fd=dirfd)
+        except OSError:pass
+        raise
 
 
 def _unlink_if_ours(dirfd,name,ident):
@@ -106,9 +114,10 @@ def publish_private(plan,name,obj,*,sha256=None,size=None):
         finally:
             os.close(fd)
             unlinked=_unlink_if_ours(dirfd,tmp,ident)     # only this attempt's inode
-        os.fsync(dirfd)                                   # directory entry durability for the committed link
+        try:os.fsync(dirfd);durable=True                  # directory entry durability for the committed link
+        except OSError:durable=False                      # committed but NOT known durable: reported, never raised
         return {'written_relative_to_plan_destination':True,'committed':True,'temp_removed':unlinked,'bytes':len(data),
-            'route_evidence_ref':plan['route_evidence_ref'],'retention_enforced':False,'durable_dir_fsync':True}
+            'route_evidence_ref':plan['route_evidence_ref'],'retention_enforced':False,'durable_dir_fsync':durable}
     finally:os.close(dirfd)
 
 
@@ -128,7 +137,7 @@ def validate_content(content_class,obj,*,sha256=None,size=None):
         checks=('limit_readback','pidns_create','child_exit','cleanup_absence')
         if not isinstance(obj,dict) or set(obj)!={'envelope','results'}:raise ValueError('closed host result keys required')
         e=obj['envelope']
-        if (not isinstance(e,dict) or set(e)!={'run_id','source_commit','sleep_sha256','probe'} or e['probe']!='host_primitive_v1'
+        if (not isinstance(e,dict) or set(e)!={'run_id','source_commit','sleep_sha256','probe','pidns_claim'} or e['probe']!='host_primitive_v1' or e['pidns_claim']!='child_unshare_ok_and_parent_saw_distinct_pid_for_children_id'
             or not isinstance(e['run_id'],str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,31}',e['run_id'])
             or not isinstance(e['source_commit'],str) or not re.fullmatch('[0-9a-f]{40}',e['source_commit'])
             or not isinstance(e['sleep_sha256'],str) or not re.fullmatch('[0-9a-f]{64}',e['sleep_sha256'])):raise ValueError('closed envelope required')
