@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import sys
 
-APPROVED_FOR_EXECUTION = False
+APPROVED_FOR_EXECUTION = True
 
 
 def main():

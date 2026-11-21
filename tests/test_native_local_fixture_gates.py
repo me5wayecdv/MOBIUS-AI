@@ -209,21 +209,22 @@ def test_independent_absence_never_calls_missing_records_clean_after_launch(tmp_
     assert data['missing_launch_records']
 
 
-def test_exact_consolidated_workflow_is_unregistered_manual_and_source_held():
+def test_exact_consolidated_workflow_is_reviewed_manual_and_other_source_held():
     import ast
     from pathlib import Path
     import yaml
     root=Path(__file__).parents[1]
     source=root/'research/d061_native'
     workflow=source/'product-integration.yml'
-    assert not (root/'.github/workflows'/workflow.name).exists()
+    registered=root/'.github/workflows/d061-product-integration.yml'
+    assert registered.read_bytes()==workflow.read_bytes()
     data=yaml.safe_load(workflow.read_text())
     assert set(data.get('on',data.get(True)))=={'workflow_dispatch'}
     for name in ('stage_product.py','product_setup.py','product_http_journey.py','run_product_owned.py','tls_driver.py','tls_controls.py','product_host.py'):
         values={target.id:node.value.value for node in ast.parse((source/name).read_text()).body
             if isinstance(node,ast.Assign) and isinstance(node.value,ast.Constant)
             for target in node.targets if isinstance(target,ast.Name)}
-        assert values['APPROVED_FOR_EXECUTION'] is False
+        assert values['APPROVED_FOR_EXECUTION'] is (name=='stage_product.py')
 
 
 def test_held_setup_actual_plan_obeys_existing_operation_cap(monkeypatch):
