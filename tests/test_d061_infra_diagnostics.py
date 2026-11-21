@@ -133,9 +133,25 @@ class CounterNormalizationTests(unittest.TestCase):
             a.replace(':OUTPUT', ':FORWARD'),
             a.replace('192.0.2.1', '192.0.2.2'),
             a.replace('-j DROP', '-j ACCEPT'),
+            a.replace('-A OUTPUT -d 192.0.2.1 -j DROP\n', ''),
+            a + '-A INPUT -p udp --dport 53 -m owner --uid-owner 1000 -j ACCEPT\n',
+            a + '-A INPUT -p tcp --dport 53 -m owner --uid-owner 1000 -j ACCEPT\n',
             a + '-A INPUT -p tcp --dport 443 -j ACCEPT\n',
             a + '# opaque value [8:9]\n',
             a.replace('*filter', '*security'),
+        ):
+            with self.subTest(changed=changed):
+                self.assertNotEqual(infra.normalized(a), infra.normalized(changed))
+
+    def test_rule_order_port_protocol_owner_verdict_changes_detected(self):
+        a = '*filter\n:OUTPUT ACCEPT [1:2]\n-A OUTPUT -p tcp --dport 443 -m owner --uid-owner 1000 -j ACCEPT\n-A OUTPUT -p udp --dport 53 -j DROP\nCOMMIT\n'
+        for changed in (
+            a.replace('--dport 443', '--dport 8443'),
+            a.replace('-p tcp', '-p udp'),
+            a.replace('--uid-owner 1000', '--uid-owner 0'),
+            a.replace('-j ACCEPT', '-j REJECT'),
+            a.replace('-A OUTPUT -p tcp --dport 443 -m owner --uid-owner 1000 -j ACCEPT\n-A OUTPUT -p udp --dport 53 -j DROP',
+                      '-A OUTPUT -p udp --dport 53 -j DROP\n-A OUTPUT -p tcp --dport 443 -m owner --uid-owner 1000 -j ACCEPT'),
         ):
             with self.subTest(changed=changed):
                 self.assertNotEqual(infra.normalized(a), infra.normalized(changed))

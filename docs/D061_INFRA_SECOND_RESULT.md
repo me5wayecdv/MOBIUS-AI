@@ -64,3 +64,15 @@ workload ran. No Allsafe/arbitrary-app claim or whole-project completion.
 SIGKILL/runner-loss and the creation-to-journal window remain limits; never adopt
 or delete an unverified namespace by prefix. Runtime work stays held pending
 technical disposition. No third preflight is needed solely for a green badge.
+
+### Initial and fallback evidence distinction
+
+The fallback cleanup overwrote the named host-after snapshot. Raw command
+records preserve both initial after iptables-save (command-0039.json) and
+fallback after iptables-save (command-0048.json). Each was separately compared
+offline to the original before snapshot with the anchored chain-counter fix;
+both yield equivalent configuration. Neither original exit status is changed.
+The uploaded archive contains 61 files including collector-summary.json;
+cleanup is supported for this normal path, not signal-loss/SIGKILL testing.
+Regressions additionally retain differences for rule removal/order, port,
+protocol, owner and verdict. No third runtime dispatch.
