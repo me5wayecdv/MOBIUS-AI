@@ -58,14 +58,14 @@ not the held full harness or an Allsafe demonstration.
   checks passed; none of these modules has been imported. Local runtime unknown.
 - Pin runner image and verify glibc/CPython/OpenSSL, owner UID, resource limits,
   loopback-only sandbox boundary and inherited descriptors before activating.
-- Readiness currently waits for proxy CA file, not both listening sockets. Add
-  bounded readiness without making successful application probes or retries.
-- Tighten independent backend-to-flow comparison: nonce/TLS/count and proxy
-  fingerprint equality are present, but compare each backend receipt's complete
-  canonical method/path/headers/empty-body fingerprint to the corresponding
-  native event too. It must fail on lost/reordered/mismatched receipts.
-- Add explicit process exit/cleanup evidence and fail the result if cleanup is
-  incomplete. Current finally cleanup is operational, not evidentiary proof.
+- Bounded TCP-only readiness now checks both listeners without successful
+  application probes/retries. Fixed-port collision and process ownership still
+  need runtime sandbox review.
+- Backend/native canonical method/path/headers/body fingerprints and strict
+  backend receipt order now reconcile per event. This comparison is unexecuted.
+- Process exit and private-key absence records now gate final candidate result.
+  Process-group termination is not namespace/cgroup descendant-absence proof.
+  A separately reviewed sandbox boundary remains necessary for that claim.
 - Exercise negative cases with real captured bytes only after review. No more
   synthetic evidence layers are needed. No target authentication, Android,
   product integration, request streaming, HTTP/2, redirects or capability-wide

@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 import secrets
 import signal
+import socket
 import ssl
 import subprocess
 import sys
@@ -34,6 +35,7 @@ def main():
     policy_path = out/'policy.json'
     policy_path.write_text(json.dumps(policy, sort_keys=True)+'\n')
     processes = []
+    result = None
     def start(argv, name, env=None):
         log = (out/(name+'.log')).open('xb')
         p = subprocess.Popen(argv, stdout=log, stderr=subprocess.STDOUT,
@@ -64,6 +66,18 @@ def main():
                 raise RuntimeError('fixture process exited before ready')
             if time.monotonic()>deadline:raise TimeoutError('CA readiness')
             time.sleep(0.1)
+        # TCP-only readiness, never an application probe or successful request.
+        for port in (18443,18080):
+            deadline = time.monotonic()+5
+            while True:
+                if proxy.poll() is not None or origin.poll() is not None:
+                    raise RuntimeError('fixture process exited before socket ready')
+                try:
+                    with socket.create_connection(('127.0.0.1',port),timeout=0.2):
+                        break
+                except OSError:
+                    if time.monotonic()>deadline:raise TimeoutError('fixture listener readiness')
+                    time.sleep(0.1)
         # One initial request. A failure stays failed, no model or client retries.
         context = ssl.create_default_context(cafile=str(ca))
         client = http.client.HTTPSConnection('127.0.0.1',18080,context=context,timeout=5)
@@ -92,22 +106,53 @@ def main():
         if not all(e['upstream_tls'] for e in events):raise RuntimeError('upstream TLS missing')
         if not all(r['nonce']==policy['nonce'] and r['tls_version'] for r in receipts):
             raise RuntimeError('independent backend receipt mismatch')
-        (out/'candidate-result.json').write_text(json.dumps({'status':'LOCAL_FIXTURE_ONLY',
+        def canonical_headers(items):
+            return sorted((k.lower(),v) for k,v in items)
+        for receipt,event in zip(receipts,events):
+            req = event['request']
+            if (receipt['method'] != req['method'] or receipt['path'] != req['path']
+                or receipt['body_sha256'] != req['body_sha256']
+                or receipt['body_bytes'] != req['body_bytes']
+                or canonical_headers(receipt['headers']) != canonical_headers(req['headers'])):
+                raise RuntimeError('independent backend/native request fingerprint mismatch')
+        if receipts[1]['timestamp_ns'] <= receipts[0]['timestamp_ns']:
+            raise RuntimeError('backend receipt order mismatch')
+        if (out/'native-errors.jsonl').exists() or (out/'rejections.jsonl').exists():
+            raise RuntimeError('proxy errors/rejections recorded')
+        result = {'status':'LOCAL_FIXTURE_ONLY',
             'profile':policy['profile'],'nonce':policy['nonce'], 'receipts':2,
-            'capture_sha256':hashlib.sha256((out/'initial.native').read_bytes()).hexdigest()})+'\n')
+            'capture_sha256':hashlib.sha256((out/'initial.native').read_bytes()).hexdigest()}
     finally:
+        cleanup = {'processes':[], 'errors':[]}
         for p in reversed(processes):
-            if p.poll() is None:os.killpg(p.pid,signal.SIGTERM)
+            try:
+                if p.poll() is None:os.killpg(p.pid,signal.SIGTERM)
+            except OSError as e:
+                cleanup['errors'].append(type(e).__name__)
         for p in processes:
             try:p.wait(timeout=3)
             except subprocess.TimeoutExpired:
-                os.killpg(p.pid,signal.SIGKILL)
-                p.wait(timeout=3)
-        for name in ('origin.key',):
-            (out/name).unlink(missing_ok=True)
-        # Do not publish ephemeral CA signing key as an artifact.
+                try:
+                    os.killpg(p.pid,signal.SIGKILL)
+                    p.wait(timeout=3)
+                except (OSError,subprocess.TimeoutExpired) as e:
+                    cleanup['errors'].append(type(e).__name__)
+            cleanup['processes'].append({'pid':p.pid,'exit_code':p.poll()})
+            if p.poll() is None:cleanup['errors'].append('process_remains')
+        # Remove all ephemeral signing keys before any publishable result.
         import shutil
-        shutil.rmtree(out/'proxy-conf',ignore_errors=True)
+        try:
+            (out/'origin.key').unlink(missing_ok=True)
+            if (out/'proxy-conf').exists():shutil.rmtree(out/'proxy-conf')
+        except OSError as e:
+            cleanup['errors'].append(type(e).__name__)
+        cleanup['private_keys_absent'] = not ((out/'origin.key').exists() or (out/'proxy-conf').exists())
+        if not cleanup['private_keys_absent']:cleanup['errors'].append('private_keys_remain')
+        (out/'cleanup.json').write_text(json.dumps(cleanup,sort_keys=True)+'\n')
+        if cleanup['errors']:raise RuntimeError('cleanup incomplete, see cleanup.json')
+    if result is not None:
+        result['cleanup_complete'] = True
+        (out/'candidate-result.json').write_text(json.dumps(result,sort_keys=True)+'\n')
 
 if __name__ == '__main__':
     main()
