@@ -142,3 +142,36 @@ def test_manifest_prepare_against_real_db_and_store(ctx, session, store, future_
         run={'plan_id': 'poc_A1', 'run_id': 'pcr_C3'}, report_sha256='1' * 64)
     assert {o['sha256'] for o in m['objects']} == {sha(data), app.sha256}
     assert fe.object_rows(m, {'run_id': 'r1', 'provisioning_id': 'p1'})
+
+
+def _wd():
+    sys.path.insert(0, str(ROOT))
+    return importlib.import_module('staging_watchdog')
+
+
+def test_watchdog_held_and_kills_hung_child_and_oversize_output(tmp_path, monkeypatch):
+    wd = _wd()
+    assert wd.APPROVED_FOR_EXECUTION is False
+    with pytest.raises(RuntimeError):
+        wd.supervise(['true'], tmp_path)
+    monkeypatch.setattr(wd, 'APPROVED_FOR_EXECUTION', True)
+    monkeypatch.setattr(wd, 'POLL', 0.05)
+    hang = [sys.executable, '-c', 'import time;time.sleep(60)']
+    r = wd.supervise(hang, tmp_path, wall=0.3)
+    assert r['killed_reason'] == 'wall_clock' and r['exit_code'] != 0
+    grow = [sys.executable, '-c', 'import time,sys;open(sys.argv[1]+"/big","wb").write(b"x"*5000);time.sleep(60)', str(tmp_path)]
+    r = wd.supervise(grow, tmp_path, wall=20, max_bytes=1000)
+    assert r['killed_reason'] == 'output_bytes'
+    ok = wd.supervise([sys.executable, '-c', 'pass'], tmp_path, wall=20)
+    assert ok['exit_code'] == 0 and ok['killed_reason'] is None
+
+
+def test_watchdog_refuses_symlink_and_file_ceiling(tmp_path):
+    wd = _wd()
+    (tmp_path / 'a').write_text('1')
+    (tmp_path / 'b').write_text('1')
+    with pytest.raises(ValueError):
+        wd.usage(tmp_path, limit_files=1)
+    os.symlink('/etc', tmp_path / 'l')
+    with pytest.raises(ValueError):
+        wd.usage(tmp_path)
