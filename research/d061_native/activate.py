@@ -12,8 +12,8 @@ from cleanup import attempt, error_record, ordinary_signals_ignored
 from lifecycle import identity, parent_death, lexical
 from wire import atomic_json
 
-ALLOW_INSTALL_ONLY = False
-ALLOW_POSITIVE_FIXTURE = False
+ALLOW_INSTALL_ONLY = True
+ALLOW_POSITIVE_FIXTURE = True
 
 def main():
     if len(sys.argv)!=4:raise SystemExit('usage: activate.py MODE NEW_RAW_ROOT WHEELHOUSE')
