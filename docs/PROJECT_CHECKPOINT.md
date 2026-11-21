@@ -1,10 +1,10 @@
-# Mobius project checkpoint, 2026-11-21 10:11 EET
+# Mobius project checkpoint, 2026-11-21 10:48 EET
 
-This checkpoint supersedes the earlier 20627843 snapshot. It records evidence
-limits, not whole-project completion. Merged main inspected at
-`9f8ede5c6e08efae4c94d76becdaec2de9181558`. PR117 merged after all5 normal
-checks green at exactaa5f7ae. One separately reviewed local positive experiment
-passed. It is not product integration or fullD061 acceptance.
+Current merged main inspected at `45d0b31b4e71dbb0c62fb65d4e04f2c10633f076`.
+PR118 product local integration merged after exact reviewed activation and all8
+normal checks green. One bounded actual experiment44886198628 succeeded with
+independent result review, see `docs/D061_PRODUCT_INTEGRATION_RESULT.md`.
+This is not whole D061 or project completion. Prior failed runs remain failed.
 
 ## Landed work versus demonstrated work
 
@@ -31,10 +31,22 @@ and runtime copies activated through the exact orchestrator. See
   report stages, but run-to-model-hypothesis projection failed because the
   serializer omitted hypothesis IDs. The later fix does not retroactively pass
   that run.
-- Subsequent model samples returned zero hypotheses twice at unchanged route
+- Subsequent intentional model samples returned zero hypotheses twice at unchanged route
   and inputs, alongside the earlier five. Empty answers are legitimate model
   outputs. The harness fails honestly, no retries into a pass:
   https://github.com/me5wayecdv/MOBIUS-AI/actions/runs/44868837467 .
+- A fourth sample0 occurred unintentionally from PR118 shared-path automatic CI:
+  https://github.com/me5wayecdv/MOBIUS-AI/actions/runs/44884058366 . It stays an
+  honest failure, not a desired-result retry. Exact payload reconstructed to
+  stored input hash: public Allsafe manifest facts/metadata and fixed product
+  instructions/schema, no raw APK/private code/user messages/credentials in
+  matching payload. Provider-reported10808input/184output tokens; conservative
+  accounting14186prompt bytes differs. Free-labelled route, billing unverified.
+  Cancelled connected runs stopped pre-script/model; unintended initial Frida
+  run44884058267 observed public Allsafe classes11361 with recorded cleanup.
+  PR119 safety merged34680b4 removes advisory PR/mainpush triggers, intentional
+  manual dispatch retained. Actual trigger surface and no-auto-experiment runs
+  checked. Four model samples5/0/0/0, never success tuning.
 - Unit/baseline success is not evidence that the corrected model-positive
   connected journey has run end to end. No invented approvals, expected-verdict
   tuning or seeded hypotheses have been added.
@@ -72,16 +84,22 @@ held and incomplete: https://github.com/me5wayecdv/MOBIUS-AI/pull/112 .
   https://github.com/me5wayecdv/MOBIUS-AI/actions/runs/44883271361 . Native3201byte
   flow plus two independent TLSv1.3 backend receipts, matched fingerprints,
   native replay lifecycle, normal cleanup and all31 copied hashes reviewed.
-- FullD061 remains NOT ESTABLISHED. Product authorization/run/evidence/report
-  wiring, APK traffic and TLS rejection controls were not exercised. Positive
-  stdlib-client loopback traffic is not Android/Allsafe or cert-pinning evidence.
-- Namespace snapshot is root supervisor pre-drop, not per-child privilege proof.
-  Driver guard passed; separate child privilege/FD snapshots were not retained.
-  Normal cleanup succeeded, signal/timeout/emergency kill paths unexercised.
-- No repeated local run is planned merely for another pass. Next smallest slice
-  is explicit product provenance/persistence wiring with the same fixed fixture,
-  preserving existing authorization gates and investigation-anchor versus actual
-  traffic-source identity. Its execution awaits focused exact scope review.
+- Actual product API authorization/approval/execute/immutable readback/report
+  wiring plus native local replay and one separate untrusted-proxy-chain TLS
+  rejection control now demonstrated in44886198628 at45d0b31.75recovery hashes,
+  21product originals,19linkedrun refs, report original hash and normal
+  independent stage-required absence checked; independent reviewer confirmed
+  narrow result. Historical5genuine hypotheses copied with explicit fixture-only
+  provenance, no new model/owner grant. Original decided_by row gap preserved;
+  event retains actor, forward metadata correction separately prepared.
+- FullD061 remains NOT ESTABLISHED: no APK-originated traffic, Android/Allsafe
+  capture, certificate-pinning or general target support demonstrated. Separate
+  hostname/untrusted-origin negatives and failure/signal/timeout cleanup remain
+  unexercised. Earlier positive standalone claims keep their narrower limits.
+- Next original-scope preparation: real minimal owned test-app network action,
+  app-explicit CA/trust and contained owned endpoint, preserving no-uplink.
+  Exact source/scope review required before any APK/emulator/runtime. No
+  third-party egress, system-CA change or pinning bypass is inferred necessary.
 
 ## Unchanged limits and unfinished decisions
 
