@@ -34,7 +34,7 @@ jobs:
           if not re.fullmatch('[0-9a-f]{40}',expected) or expected!=actual:raise SystemExit('exact reviewed SHA required')
           root=Path('research/d061_android')
           # All are currently FALSE. No workflow input or repository prose grants authority.
-          for name,flag in [('outer_owner.py','APPROVED_FOR_EXECUTION'),('stage_archives.py','APPROVED_FOR_EXECUTION'),('stage_archives.py','HARD_WATCHDOG_AND_RESOURCE_LIMITS_REVIEWED')]:
+          for name,flag in [('outer_owner.py','APPROVED_FOR_EXECUTION'),('stage_archives.py','APPROVED_FOR_EXECUTION'),('stage_archives.py','HARD_WATCHDOG_AND_RESOURCE_LIMITS_REVIEWED'),('staging_watchdog.py','APPROVED_FOR_EXECUTION')]:
               assignments={t.id:n.value.value for n in ast.parse((root/name).read_text()).body
                   if isinstance(n,ast.Assign) and isinstance(n.value,ast.Constant)
                   for t in n.targets if isinstance(t,ast.Name)}

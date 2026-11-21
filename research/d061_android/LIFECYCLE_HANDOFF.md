@@ -276,3 +276,22 @@ cleanup. HARD_WATCHDOG_AND_RESOURCE_LIMITS_REVIEWED remains FALSE and is a
 separate main/workflow source gate. Those mechanisms are not implemented here;
 no staging readiness or hard-ceiling claim is made. Retained session readers fix
 repeated per-member hashing, not all sources of stalled/unbounded runtime.
+
+## Staging watchdog (held, source only)
+`staging_watchdog.py` supervises `stage_archives.py`. Before any effect it writes a durable private intent
+record (argv, exact role roots, watchdog identity); after spawn it records the child's (pid, start-ticks, pgid).
+The child gets its own session, CPU/file-size/NOFILE/address-space/core rlimits and PDEATHSIG SIGKILL, so a
+dead watchdog does not leave the root stager running. Exit is detected through a pidfd without reaping; the
+child's process group is killed and `/proc` scanned for absence BEFORE the leader is reaped, so a reused PID or
+PGID is never signalled. Cancellation (SIGTERM/SIGINT/SIGHUP) and the wall clock go through the same path. The
+exact owned role roots (not the report file) are scanned by an anchored `dir_fd`/`O_NOFOLLOW` traversal that counts
+directories and files and checks budgets and the deadline between entries, during the run and once more after
+ANY exit, including a fast exit 0. Success requires exit 0, group absence, the final report file, a regular
+`closure-lock.json` in each role root and a clean final scan; otherwise roots without a lock are renamed (never
+deleted) to a private failed name. `recover()` is an independent attributable recovery that signals only if the
+recorded (pid, start-ticks) still matches a live process, preserves the originals and writes a unique recovery record.
+
+Honest limits: size scans are polling, not a disk quota; descendants are contained by session/process group plus a
+/proc scan, not a PID namespace or cgroup; RLIMIT_NPROC is per-UID and is not claimed; tests use benign child
+processes and tmp directories as source evidence only, not real SDK staging, a root-owned run or kernel limit
+enforcement. `APPROVED_FOR_EXECUTION` is FALSE and the held workflow source gate requires it.

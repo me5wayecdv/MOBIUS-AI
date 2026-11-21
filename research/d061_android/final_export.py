@@ -28,6 +28,7 @@ CONTROL_FILES=frozenset({'control-privileges.json','execute-response.json','api-
 PUBLIC_FILES=frozenset({'owned-fixture.apk','public-ca.der','build-result.json','ready.json'})
 ROOT_ATTEMPT=re.compile(r'outer-recovery(?:-intent)?-[0-9a-f]{32}\.json')
 ROLE_ATTEMPT=re.compile(r'(?:outer-independent-absence|export-independent-absence)-[0-9a-f]{32}\.json')
+ALWAYS_CONTROL=frozenset({'control-privileges.json','control-result.json'})
 REQUIRED_ROOT=frozenset({'outer-owner-intent.json','outer-owner-result.json','runtime-root-stage.json'})
 REQUIRED_ROLE=frozenset({'namespace-setup.json','namespace-driver-result.json','trusted-final-absence.json'})
 MAX_FILES=512
@@ -62,34 +63,60 @@ def object_rows(manifest,owner):
         seen.add(row['sha256']);total+=row['bytes']
         if total>32*1024**2:raise ValueError('aggregate exact product objects ceiling')
     if manifest['apk_sha256'] not in seen:raise ValueError('exact owned APK object absent')
+    if manifest['report_sha256'] not in seen:raise ValueError('exact report object absent from manifest')
     return rows
 
 
-def bind_manifest(manifest,work,root):
-    """Fail closed unless the manifest agrees with the actually exported case records."""
-    def js(path,limit=1048576):return json.loads(read(path,limit))
-    report=read(work/'report.md',16*1024**2)
+def bind_manifest(manifest,stage):
+    """Fail closed unless the manifest agrees with the STAGED immutable copies (never source paths)."""
+    stage=Path(stage)
+    def js(relative,limit=1048576):return json.loads(read(stage/relative,limit))
+    report=read(stage/'control/report.md',16*1024**2)
     if digest(report)!=manifest['report_sha256']:raise ValueError('manifest report digest differs from exported report bytes')
-    result=js(work/'control-result.json')
+    result=js('control/control-result.json')
     if (result.get('run_id'),result.get('plan_id'),result.get('report_sha256'))!=(manifest['product_run_id'],manifest['plan_id'],manifest['report_sha256']):
         raise ValueError('manifest differs from control result')
-    execute=js(work/'execute-response.json').get('body',{})
+    execute=js('control/execute-response.json').get('body',{})
     if (execute.get('run_id'),execute.get('plan_id'))!=(manifest['product_run_id'],manifest['plan_id']):raise ValueError('manifest differs from execute response')
-    plan=js(work/'setup/approved-plan.json')
+    plan=js('control/setup/approved-plan.json')
     if (plan.get('id'),plan.get('investigation_id'),plan.get('target_sha256'))!=(manifest['plan_id'],manifest['investigation_id'],manifest['apk_sha256']):
         raise ValueError('manifest differs from approved plan')
-    ready=js(root/'control-in/snapshot/ready.json',65536)
+    ready=js('public-snapshot/ready.json',65536)
     if (ready.get('run_id'),ready.get('provisioning_id'),ready.get('apk_sha256'))!=(manifest['infrastructure_run_id'],manifest['provisioning_id'],manifest['apk_sha256']):
         raise ValueError('manifest differs from ready record')
-    if digest(read(root/'control-in/snapshot/owned-fixture.apk',4*1024**2))!=manifest['apk_sha256']:raise ValueError('published APK differs from manifest')
-    # Coherent DB cross-check (sidecars were already refused by the caller).
+    apk=read(stage/'public-snapshot/owned-fixture.apk',4*1024**2)
+    if digest(apk)!=manifest['apk_sha256']:raise ValueError('published APK differs from manifest')
+    # Coherent DB: deserialize the staged immutable copy in memory, never reopen a path.
     import sqlite3
-    db=sqlite3.connect('file:'+str(work/'mobius.db')+'?mode=ro&immutable=1',uri=True)
+    db=sqlite3.connect(':memory:')
     try:
-        row=db.execute('select investigation_id,plan_id from poc_runs where id=?',(manifest['product_run_id'],)).fetchone()
-        if row!=(manifest['investigation_id'],manifest['plan_id']):raise ValueError('manifest run/case differs from DB')
-        count=db.execute('select count(*) from evidence where investigation_id=? and sha256=?',(manifest['investigation_id'],manifest['report_sha256'])).fetchone()[0]
-        if count<1:raise ValueError('report digest absent from same-case DB evidence')
+        db.deserialize(read(stage/'control/mobius.db',16*1024**2))
+        case,run=manifest['investigation_id'],manifest['product_run_id']
+        row=db.execute('select investigation_id,plan_id from poc_runs where id=?',(run,)).fetchone()
+        if row!=(case,manifest['plan_id']):raise ValueError('manifest run/case differs from DB')
+        evidence={r[0]:(r[1],r[2],r[3]) for r in db.execute('select id,sha256,byte_size,object_key from evidence where investigation_id=?',(case,))}
+        expected={}
+        for sha,size,key in evidence.values():
+            if key!='apk/'+sha[:2]+'/'+sha+'.apk':raise ValueError('noncanonical DB evidence key')
+            expected[sha]=size
+        expected.setdefault(manifest['apk_sha256'],len(apk))
+        for sha,size,key in db.execute('select content_sha256,0,object_key from reports where investigation_id=?',(case,)):
+            if key!='apk/'+sha[:2]+'/'+sha+'.apk':raise ValueError('noncanonical DB report key')
+            expected.setdefault(sha,None)
+        listed={o['sha256']:o['bytes'] for o in manifest['objects']}
+        if len(listed)!=len(manifest['objects']) or set(listed)!=set(expected):raise ValueError('manifest object set differs from DB-referenced objects')
+        for sha,size in expected.items():
+            if size is not None and listed[sha]!=size:raise ValueError('manifest object size differs from DB')
+        if manifest['report_sha256'] not in listed:raise ValueError('report object absent from manifest')
+        linked={r[0] for r in db.execute('select evidence_id from poc_run_evidence where investigation_id=? and run_id=?',(case,run))}
+        if not linked or not linked<=set(evidence):raise ValueError('run evidence links absent or cross-case')
+        readback=js('control/api-readback.json',4*1024**2)
+        items=readback.get('evidence')
+        if not isinstance(items,list) or {i.get('evidence_id') for i in items}!=linked or len(items)!=len(linked):
+            raise ValueError('readback evidence links differ from DB run links')
+        for item in items:
+            sha,size,_=evidence[item['evidence_id']]
+            if (item.get('sha256'),item.get('bytes'))!=(sha,size):raise ValueError('readback evidence digest differs from DB')
     finally:db.close()
 
 
@@ -127,6 +154,11 @@ def export(root,destination,*,owner,absence_checker=check_absent,clock=time.mono
     if not reached:errors.append({'class':'EmptyOrUnreachedRoot','detail':'no role directory or launch intent; nothing to verify'})
     for name in sorted(ROOT_FILES|set(attempt_names(root,ROOT_ATTEMPT))):optional(root/name,'root/'+name,required=name in REQUIRED_ROOT)
     role_absence={}
+    status=None
+    control_work=None
+    try:status=json.loads(read(root/'control/work/control-result.json',65536)).get('status')
+    except BaseException:pass
+    passed=status=='passed'  # trusted-stage-derived: full evidence is only demanded of a passed run
     stage_record=json.loads(read(root/'runtime-root-stage.json',65536)) if exists(root/'runtime-root-stage.json') else None
     for role in ('runtime','control'):
         output=root/role
@@ -143,28 +175,30 @@ def export(root,destination,*,owner,absence_checker=check_absent,clock=time.mono
         for name in sorted(ROLE_FILES|set(attempt_names(output,ROLE_ATTEMPT))):optional(output/name,role+'/'+name,required=name in REQUIRED_ROLE)
         if role_absence[role]!='independently_verified_absent':continue
         if role=='runtime':
-            for name in sorted(REQUIRED|DIAGNOSTICS):optional(output/'work/evidence'/name,'runtime-originals/'+name,required=name in REQUIRED)
+            for name in sorted(REQUIRED|DIAGNOSTICS):optional(output/'work/evidence'/name,'runtime-originals/'+name,required=passed and name in REQUIRED)
         else:
             work=output/'work'
-            for name in sorted(CONTROL_FILES):optional(work/name,'control/'+name,required=True)
+            for name in sorted(CONTROL_FILES):optional(work/name,'control/'+name,required=passed or name in ALWAYS_CONTROL)
             # Never present an unresolved WAL/journal snapshot as coherent DB.
             journals=[name for name in ('mobius.db-wal','mobius.db-shm','mobius.db-journal') if exists(work/name)]
             if journals:errors.append({'role':'control','class':'DatabaseSidecarsUnresolved','files':journals})
             elif not optional(work/'mobius.db','control/mobius.db',16*1024**2):errors.append({'role':'control','class':'DatabaseMissing'})
-            try:
-                manifest=json.loads(read(work/'export-manifest.json',1048576))
-                rows=object_rows(manifest,owner)
-                bind_manifest(manifest,work,root)
-                # Resolve only the store's fixed content-addressed key shape,
-                # never a path supplied by a DB row or payload manifest.
-                for row in rows:
-                    sha=row['sha256'];key='apk/'+sha[:2]+'/'+sha+'.apk'
-                    copy(work/'store'/key,'product-store/'+key,4*1024**2,expected=row)
-            except BaseException as error:errors.append({'role':'control','class':type(error).__name__,'stage':'exact_product_objects'})
+            control_work=work
     for name in sorted(PUBLIC_FILES):optional(root/'control-in/snapshot'/name,'public-snapshot/'+name,4*1024**2,required='control' in reached)
     # Private collector candidates are deliberately NOT exported. Only already
     # published product results can be copied as such, never passed private data.
-    for name in sorted(REQUIRED|DIAGNOSTICS|{'result.json'}):optional(root/'control-in/result'/name,'published-result/'+name,required='control' in reached)
+    for name in sorted(REQUIRED|DIAGNOSTICS|{'result.json'}):
+        optional(root/'control-in/result'/name,'published-result/'+name,
+            required='control' in reached and (name=='result.json' or (passed and name in REQUIRED)))
+    if control_work is not None and passed:
+        try:
+            manifest=json.loads(read(stage/'control/export-manifest.json',1048576))
+            rows=object_rows(manifest,owner)
+            bind_manifest(manifest,stage)
+            for row in rows:
+                sha=row['sha256'];key='apk/'+sha[:2]+'/'+sha+'.apk'
+                copy(control_work/'store'/key,'product-store/'+key,4*1024**2,expected=row)
+        except BaseException as error:errors.append({'role':'control','class':type(error).__name__,'stage':'exact_product_objects'})
     checkpoint()
     result={'version':'owned-final-export/1','workflow_context':owner['workflow_context'],'infrastructure_run_id':owner['run_id'],
         'complete':bool(reached) and not errors,'diagnostic_partial_export':bool(errors) or not reached,'errors':errors,'role_absence':role_absence,'inventory':inventory,
