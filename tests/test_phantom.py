@@ -7,13 +7,16 @@ from __future__ import annotations
 
 import pytest
 
-from mobius.adapters.models import AuthorizationRow, HypothesisRow
+import hashlib
+import json
+
+from mobius.adapters.models import ApprovalRow, AuthorizationRow, HypothesisRow
 from mobius.core.ids import IdPrefix, new_id
-from mobius.core.schemas import PoCStep, PoCTestPlan
+from mobius.core.schemas import PoCCleanupStep, PoCStep, PoCTestPlan
 from mobius.services.intake import IntakeService
-from mobius.services.phantom import PhantomEmulatorAdapter
+from mobius.services.phantom import _FRIDA_ENUMERATE_SCRIPT, PhantomEmulatorAdapter
 from mobius.services.poc_runner import (
-    PoCAdapterUnavailable, PoCScopeRejected, SafePoCRunner,
+    PoCAdapterUnavailable, PoCApprovalRequired, PoCScopeRejected, SafePoCRunner,
 )
 from conftest import make_apk
 
@@ -31,10 +34,23 @@ def _runner_script(mapping):
 EMULATOR_OK = ("shell", "getprop", "ro.kernel.qemu")
 
 
-def _adapter(mapping, *, emulator=True):
+def _adapter(mapping, *, emulator=True, frida=None):
     responses = dict(mapping)
     responses.setdefault(EMULATOR_OK, (0, b"1\n" if emulator else b"\n", b""))
-    return PhantomEmulatorAdapter(adb_path="/fake/adb", runner=_runner_script(responses))
+    return PhantomEmulatorAdapter(
+        adb_path="/fake/adb", frida_path=frida, runner=_runner_script(responses))
+
+
+PIDOF_OK = ("shell", "pidof", "com.example")
+
+
+def _frida_adapter(class_count=1420, rc=0):
+    return _adapter(
+        {PIDOF_OK: (0, b"1234\n", b""),
+         ("-q", "-p", "1234", "-e", _FRIDA_ENUMERATE_SCRIPT):
+            (rc, f"MOBIUS_CLASSES:{class_count}\n".encode(), b"")},
+        frida="/fake/frida",
+    )
 
 
 def test_physical_device_is_refused_before_any_probe():
@@ -159,6 +175,201 @@ def test_emulator_probe_authority_must_stay_in_authorized_package(session, store
     with pytest.raises(PoCScopeRejected, match="authorized package"):
         SafePoCRunner(session, emulator_adapter=adapter).run(
             _emulator_plan(app, auth, scan, hyp, steps))
+
+
+def test_frida_enumerate_parsing_and_failures():
+    adapter = _frida_adapter(1420)
+    assert adapter.probe_frida_enumerate_classes("com.example").actual == 1420
+    failed = _frida_adapter(rc=3)
+    assert failed.probe_frida_enumerate_classes("com.example").actual is None
+    no_frida = _adapter({})
+    with pytest.raises(PoCAdapterUnavailable, match="frida tooling"):
+        no_frida.probe_frida_enumerate_classes("com.example")
+
+
+def test_frida_failure_detail_uses_fixed_classes_never_target_strings():
+    # Output deliberately stuffed with target-derived strings: the persisted
+    # detail must carry only the fixed class label.
+    leaky = _adapter(
+        {PIDOF_OK: (0, b"1234\n", b""),
+         ("-q", "-p", "1234", "-e", _FRIDA_ENUMERATE_SCRIPT):
+            (1, b"", b"Failed to attach: unable to find process with name "
+                      b"com.example and path /data/app/com.example.private/libsecret.so")},
+        frida="/fake/frida",
+    )
+    result = leaky.probe_frida_enumerate_classes("com.example")
+    assert result.actual is None
+    assert "frida-process-not-found" in result.detail
+    assert "libsecret" not in result.detail
+    assert "/data/app" not in result.detail
+    assert "com.example" not in result.detail.split("frida-process-not-found")[-1]
+    unknown = _adapter(
+        {PIDOF_OK: (0, b"1234\n", b""),
+         ("-q", "-p", "1234", "-e", _FRIDA_ENUMERATE_SCRIPT):
+            (7, b"weird tool-specific text", b"")},
+        frida="/fake/frida",
+    )
+    assert "frida-error-unclassified" in unknown.probe_frida_enumerate_classes("com.example").detail
+
+
+def test_frida_probe_launches_app_when_process_is_gone(monkeypatch):
+    # Emulator killed the app between install and execution: the probe
+    # relaunches it (target-side setup) before attaching.
+    calls = []
+
+    def sequenced(argv, timeout):
+        calls.append(tuple(argv))
+        suffix = tuple(argv[-3:])
+        if suffix == ("shell", "pidof", "com.example"):
+            pidof_calls = [c for c in calls if tuple(c[-3:]) == suffix]
+            if len(pidof_calls) >= 2:
+                return (0, b"4321\n", b"")
+            return (1, b"", b"")
+        if "ro.kernel.qemu" in argv:
+            return (0, b"1\n", b"")
+        if "monkey" in argv:
+            return (0, b"Events injected: 1\n", b"")
+        if tuple(argv[-2:]) == ("-e", _FRIDA_ENUMERATE_SCRIPT):
+            return (0, b"MOBIUS_CLASSES:900\n", b"")
+        return (1, b"", b"unexpected")
+
+    monkeypatch.setattr("mobius.services.phantom.time.sleep", lambda _s: None)
+    adapter = PhantomEmulatorAdapter(
+        adb_path="/fake/adb", frida_path="/fake/frida", runner=sequenced)
+    result = adapter.probe_frida_enumerate_classes("com.example")
+    assert result.actual == 900
+    assert any("monkey" in c for c in calls)
+    # Attach by the observed pid, not the package name (process names are
+    # app labels, so name matching can miss a running process).
+    attach = [c for c in calls if "-e" in c]
+    assert attach and "-p" in attach[0] and "4321" in attach[0]
+
+
+def test_frida_probe_fails_closed_on_ambiguous_pids():
+    calls = []
+
+    def runner(argv, timeout):
+        calls.append(tuple(argv))
+        suffix = tuple(argv[-3:])
+        if suffix == ("shell", "pidof", "com.example"):
+            return (0, b"1234 5678\n", b"")
+        if "ro.kernel.qemu" in argv:
+            return (0, b"1\n", b"")
+        return (0, b"MOBIUS_CLASSES:9\n", b"")
+
+    adapter = PhantomEmulatorAdapter(
+        adb_path="/fake/adb", frida_path="/fake/frida", runner=runner)
+    result = adapter.probe_frida_enumerate_classes("com.example")
+    assert result.actual is None
+    assert "frida-ambiguous-process" in result.detail
+    assert not any("-e" in c for c in calls), "must not attach on ambiguity"
+
+
+def test_frida_probe_fails_closed_when_process_stays_gone(monkeypatch):
+    calls = []
+
+    def runner(argv, timeout):
+        calls.append(tuple(argv))
+        suffix = tuple(argv[-3:])
+        if suffix == ("shell", "pidof", "com.example"):
+            return (1, b"", b"")
+        if "ro.kernel.qemu" in argv:
+            return (0, b"1\n", b"")
+        if "monkey" in argv:
+            return (0, b"Events injected: 1\n", b"")
+        return (0, b"MOBIUS_CLASSES:9\n", b"")
+
+    monkeypatch.setattr("mobius.services.phantom.time.sleep", lambda _s: None)
+    adapter = PhantomEmulatorAdapter(
+        adb_path="/fake/adb", frida_path="/fake/frida", runner=runner)
+    result = adapter.probe_frida_enumerate_classes("com.example")
+    assert result.actual is None
+    assert "frida-process-not-running" in result.detail
+    assert not any("-e" in c for c in calls), "must not attach without a pid"
+
+
+def test_stop_instrumentation_is_idempotent_cleanup():
+    adapter = _adapter({
+        ("shell", "pkill", "-f", "frida-server"): (0, b"", b""),
+    })
+    assert "stopped" in adapter.stop_instrumentation()
+    absent = _adapter({
+        ("shell", "pkill", "-f", "frida-server"): (1, b"", b""),
+    })
+    assert "no running frida-server" in absent.stop_instrumentation()
+
+
+def _granted_approval(session, plan):
+    plan_sha = hashlib.sha256(json.dumps(
+        plan.model_dump(mode="json", exclude={"approval_id"}),
+        sort_keys=True, separators=(",", ":"),
+    ).encode()).hexdigest()
+    row = ApprovalRow(
+        id=new_id(IdPrefix.APPROVAL), investigation_id=plan.investigation_id,
+        requested_action="poc.execute", plan_sha256=plan_sha,
+        intensity_required=1, intensity_granted=1,
+        justification="unit fixture", risk_summary="unit fixture",
+        state="granted", requested_by="analyst-1", decided_by="analyst-1",
+        decided_at="2026-11-18T00:00:00Z", decision_note="granted",
+        expires_at="2999-01-01T00:00:00Z", created_at="2026-11-18T00:00:00Z",
+    )
+    session.add(row)
+    session.flush()
+    return row
+
+
+def _frida_plan(app, auth, scan, hyp, steps, approval_id=None):
+    return PoCTestPlan(
+        investigation_id=scan.id, authorization_id=auth.id,
+        target_sha256=app.sha256, target_package=app.package_name or "com.example",
+        target_kind="emulator", hypothesis_ids=(hyp.id,),
+        steps=tuple(steps),
+        expected_outcome="Observation-only instrumentation enumerates the lab app.",
+        safety_class="non_destructive", requires_approval=True, approval_id=approval_id,
+        cleanup_steps=(PoCCleanupStep(
+            action="stop_emulator_instrumentation", target_ref="frida-server"),),
+        max_duration_seconds=120, max_output_bytes=8192,
+    )
+
+
+def test_frida_plan_runs_under_granted_approval_with_cleanup(session, store, future_iso):
+    app, auth, scan, hyp = _context(session, store, future_iso)
+    package = app.package_name or "com.example"
+    steps = (PoCStep(action="assert_emulator_frida_classes",
+                     target_ref=package, expected_value=100),)
+    plan = _frida_plan(app, auth, scan, hyp, steps)
+    approval = _granted_approval(session, plan)
+    # Same plan, same id: approval_id is excluded from the approval hash.
+    plan = plan.model_copy(update={"approval_id": approval.id})
+    adapter = _frida_adapter(1420)
+    result = SafePoCRunner(session, emulator_adapter=adapter).run(plan)
+    assert result.status == "passed"
+    assert result.steps[0].actual_value == 1420
+    assert "phantom-frida/" in result.tool_versions[0]
+    assert result.cleanup_results[0]["status"] == "completed"
+    assert any("Observation-only Frida" in item for item in result.limitations)
+
+
+def test_frida_plan_requires_granted_approval(session, store, future_iso):
+    app, auth, scan, hyp = _context(session, store, future_iso)
+    package = app.package_name or "com.example"
+    steps = (PoCStep(action="assert_emulator_frida_classes",
+                     target_ref=package, expected_value=100),)
+    plan = _frida_plan(app, auth, scan, hyp, steps)
+    with pytest.raises(PoCApprovalRequired):
+        SafePoCRunner(session, emulator_adapter=_frida_adapter()).run(plan)
+
+
+def test_frida_action_requires_non_destructive_class():
+    with pytest.raises(ValueError, match="non_destructive"):
+        PoCTestPlan(
+            investigation_id="scn_x", authorization_id="ath_x",
+            target_sha256="0" * 64, target_package="com.example",
+            target_kind="emulator", hypothesis_ids=("hyp_01M7XK6E5H4QQJ157D5W39NNBS",),
+            steps=(PoCStep(action="assert_emulator_frida_classes",
+                           target_ref="com.example", expected_value=100),),
+            expected_outcome="x",
+        )
 
 
 def test_emulator_actions_rejected_for_non_emulator_targets():

@@ -16,7 +16,15 @@ D-041 currently provides two execution surfaces:
    verifies `ro.kernel.qemu` on the device before every probe, refusing
    physical devices. Without the environment a plan on an emulator target
    still fails closed with `PoCAdapterUnavailable`. No install, delete, write,
-   Frida, or proxy capability exists in this slice.
+   or proxy capability exists in the adb probes.
+4. **Observation-only Frida instrumentation** (`assert_emulator_frida_classes`),
+   enabled only when `MOBIUS_PHANTOM_FRIDA` names a frida CLI binary and a
+   frida-server is already running on the verified emulator (the environment
+   owns the server lifecycle). The script is a fixed class-enumeration
+   literal embedded in the adapter - callers cannot supply scripts. These
+   plans must use the `non_destructive` safety class, so they require a
+   granted PoC approval and a `stop_emulator_instrumentation` cleanup step,
+   which stops the frida-server on the device (idempotent).
 
 The local harness is an explicitly labelled simulation, not execution of the APK. It makes no
 network requests and performs no process execution. No arbitrary shell, command, URL fetch,

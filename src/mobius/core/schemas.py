@@ -67,6 +67,7 @@ class PoCStep(_Model):
         "assert_local_harness_result",
         "assert_emulator_package_present",
         "assert_emulator_provider_rows",
+        "assert_emulator_frida_classes",
     ]
     target_ref: str = Field(min_length=1, max_length=500)
     expected_value: str | bool | int | None = None
@@ -90,17 +91,17 @@ class PoCStep(_Model):
         if self.action == "assert_emulator_package_present":
             if not isinstance(self.expected_value, bool):
                 raise ValueError("emulator package presence expects a boolean expected_value")
-        if self.action == "assert_emulator_provider_rows":
-            # Threshold semantics: pass when at least expected_value rows are
-            # readable without a permission.
+        if self.action in {"assert_emulator_provider_rows", "assert_emulator_frida_classes"}:
+            # Threshold semantics: pass when at least expected_value rows
+            # (or enumerated classes) are observed.
             if not isinstance(self.expected_value, int) or isinstance(self.expected_value, bool) \
                     or self.expected_value < 0:
-                raise ValueError("emulator provider rows expects a non-negative integer expected_value")
+                raise ValueError("emulator threshold probes expect a non-negative integer expected_value")
         return self
 
 
 class PoCCleanupStep(_Model):
-    action: Literal["remove_temporary_workspace", "reset_local_harness"]
+    action: Literal["remove_temporary_workspace", "reset_local_harness", "stop_emulator_instrumentation"]
     target_ref: str = Field(min_length=1, max_length=300)
     timeout_seconds: int = Field(default=15, ge=1, le=60)
 
@@ -145,10 +146,17 @@ class PoCTestPlan(_Model):
         ):
             raise ValueError("manifest assertions require a lab_apk or emulator target")
         if any(
-            step.action in {"assert_emulator_package_present", "assert_emulator_provider_rows"}
+            step.action in {"assert_emulator_package_present", "assert_emulator_provider_rows",
+                            "assert_emulator_frida_classes"}
             for step in self.steps
         ) and self.target_kind != "emulator":
             raise ValueError("emulator probes require an emulator target")
+        if any(step.action == "assert_emulator_frida_classes" for step in self.steps) \
+                and self.safety_class != "non_destructive":
+            # Instrumentation attaches to a running process: more than
+            # read_only, so it flows through the existing approval gate via
+            # the non_destructive class (which requires approval + cleanup).
+            raise ValueError("frida instrumentation probes require the non_destructive safety class")
         return self
 
 

@@ -22,10 +22,15 @@ Allowed step actions:
 - `assert_emulator_provider_rows` (emulator targets only; non-negative integer
   `expected_value`; pass when at least that many rows are readable without a permission;
   target must be one authority path inside the authorized package)
+- `assert_emulator_frida_classes` (emulator targets only; non-negative integer
+  `expected_value`; observation-only Frida attach counting loaded classes; requires the
+  `non_destructive` safety class, so it flows through the approval gate with cleanup;
+  target must equal the plan's authorized package)
 
 Cleanup actions:
 - `remove_temporary_workspace`
 - `reset_local_harness`
+- `stop_emulator_instrumentation` (emulator targets only; stops frida-server, idempotent)
 
 Each step has a bounded target reference and timeout. No free-form command field exists.
 
@@ -37,7 +42,8 @@ Each step has a bounded target reference and timeout. No free-form command field
 - State-changing plans require explicit approval.
 - Non-read-only plans require cleanup steps.
 - Manifest assertions cannot target a local harness.
-- Emulator probes cannot target a non-emulator target kind, and stay read-only.
+- Emulator adb probes cannot target a non-emulator target kind, and stay read-only.
+- Frida instrumentation probes are non_destructive (approval + cleanup), observation-only.
 
 D-040 defines the contract only. D-041 implements allowlisted adapters; D-042 persists
 reproducible execution evidence; D-043 owns approval, timeout, cancellation and cleanup.

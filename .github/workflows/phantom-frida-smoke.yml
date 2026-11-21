@@ -1,0 +1,98 @@
+# PHANTOM instrumentation smoke (D-060, approval-gated observation-only
+# slice): boots the CI emulator, installs and launches the sha256-pinned
+# Allsafe lab APK, starts a pinned frida-server inside the ephemeral emulator
+# only, and drives an observation-only Frida instrumentation PoC through the
+# Mobius API using the real plan-approval flow (request -> resolve -> execute
+# -> persisted run/evidence read-back, approval bound to the run).
+#
+# Constraints honoured:
+# - lab target only, public intentionally-vulnerable training app, ephemeral
+#   emulator, no external targets, no credentials;
+# - observation-only fixed enumeration script embedded in the adapter; no
+#   caller-supplied scripts, no method tampering;
+# - frida/frida-tools are CI job tooling, not repo dependencies;
+# - no image publication (nothing is built or pushed; run artifacts only);
+# - free: public-repo GitHub-hosted runner.
+name: PHANTOM frida smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/phantom-frida-smoke.yml"
+      - "scripts/phantom_frida_smoke.py"
+      - "scripts/phantom_frida_smoke.sh"
+      - "src/mobius/services/phantom.py"
+      - "src/mobius/services/poc_runner.py"
+      - "src/mobius/services/poc_execution.py"
+      - "src/mobius/services/poc_approval.py"
+  pull_request:
+    paths:
+      - ".github/workflows/phantom-frida-smoke.yml"
+      - "scripts/phantom_frida_smoke.py"
+      - "scripts/phantom_frida_smoke.sh"
+      - "src/mobius/services/phantom.py"
+      - "src/mobius/services/poc_runner.py"
+      - "src/mobius/services/poc_execution.py"
+      - "src/mobius/services/poc_approval.py"
+
+concurrency:
+  group: phantom-frida-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  phantom-frida-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Mobius and frida CI tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+          pip install "frida==17.27.4" "frida-tools"
+
+      - name: Enable KVM group perms
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Download pinned Allsafe lab APK
+        run: |
+          curl -sSfL -o allsafe.apk \
+            https://github.com/t0thkr1s/allsafe/releases/download/v.1.6/allsafe.apk
+          echo "d6792d6634a033f048f935f1269179d3c27b859c4c34b1e9e5b008a88375efd9  allsafe.apk" | sha256sum -c -
+
+      - name: Download pinned frida-server
+        run: |
+          curl -sSfL -o frida-server-17.27.4-android-x86_64.xz \
+            https://github.com/frida/frida/releases/download/17.27.4/frida-server-17.27.4-android-x86_64.xz
+          echo "e30e8d8dcefa6d8b78b5b6a613b42c102d5dfa0e0e47ac7ce27590dc8f05a4db  frida-server-17.27.4-android-x86_64.xz" | sha256sum -c -
+          unxz frida-server-17.27.4-android-x86_64.xz
+
+      - name: Run PHANTOM instrumentation smoke on emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 29
+          target: default
+          arch: x86_64
+          profile: Nexus 6
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          disable-animations: true
+          script: bash scripts/phantom_frida_smoke.sh
+
+      - name: Upload smoke outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phantom-frida-smoke
+          path: phantom-frida-smoke/
+          retention-days: 30
