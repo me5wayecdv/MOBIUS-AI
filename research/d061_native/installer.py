@@ -8,6 +8,7 @@ import ssl
 import subprocess
 import sys
 import zipfile
+from lifecycle import parent_death
 
 APPROVED_FOR_EXECUTION = False
 
@@ -36,7 +37,7 @@ def main():
     def run(argv,extra=None):
         e=dict(env)
         if extra:e.update(extra)
-        subprocess.run(argv,env=e,stdin=subprocess.DEVNULL,close_fds=True,check=True,timeout=120)
+        subprocess.run(argv,env=e,stdin=subprocess.DEVNULL,close_fds=True,check=True,timeout=120,preexec_fn=parent_death(os.getpid()))
     venv=root/'venv'
     run([sys.executable,'-I','-m','venv','--without-pip',str(venv)])
     # Import the separately hash-verified bootstrap wheel only inside the future

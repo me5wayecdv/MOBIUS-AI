@@ -145,3 +145,35 @@ collection itself cannot turn a failed command into success.
 
 The combined patch has AST-only Python and YAML syntax parsing. No new tests
 simulate runtime success or manufacture network evidence.
+
+## Outer lifecycle and copy-completeness correction
+
+`activate.py` now uses owned Popen plus signal-aware bounded teardown instead of
+subprocess.run(timeout) killing only a wrapper. Linux prctl parent-death coupling
+is armed and parent identity rechecked before exec: an abruptly dead activation
+parent sends TERM to its command, and a dead wrapper sends KILL to its exact
+unshare supervisor, whose --kill-child kills namespace PID1. The installer's
+subcommands also arm parent-death KILL. Coupling is never a generic host kill.
+Normal cancellation attempts30 seconds graceful teardown then bounded KILL/reap.
+Wrapper420-second outer budget accounts for snapshot140+namespace75+teardown8+
+post-snapshot140+overhead; reaching it still triggers owned teardown rather than
+assuming inner cleanup already ended. Workflow18-minute ceiling leaves room for
+both stages, staging and sanitized upload. SIGKILL/host loss remain limits.
+
+Independent always-run `emergency.py` validates recorded PID+starttime+boot-ID
+identities, uses pidfd with recheck before killing exact still-owned identities,
+waits for death and removes only exact recorded jail/private-key/home paths.
+Record-before-wait plus parent-death coupling covers the Popen-to-record gap.
+It never adopts a namespace/process by prefix. The recorded jail directory name
+is constrained under /opt only for deletion, not used to discover other work.
+Every command stage now records argv, rc-or-null, original timeout/exception and
+all teardown errors on every exit path. Partial command diagnostics are retained.
+
+Collector checks lexical/lstat path components before resolving or reading,
+then opens leaf files O_NOFOLLOW. Known mode is required. Positive success needs
+all named native bytes+digest, both receipt/event sets, replay enqueue/start/end,
+addon terminal, driver/wrapper cleanup and candidate result actually copied,
+not merely present upstream. Missing/rejected/failed copies invalidate success
+and remove a copied candidate. Failure-safe bounded allowlist remains unchanged
+in audience/scope. Only source/AST/YAML checks, no live namespace signals or
+runtime tests were executed for this correction.

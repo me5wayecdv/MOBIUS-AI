@@ -15,6 +15,7 @@ import sys
 import tempfile
 from cleanup import attempt, error_record, ordinary_signals_ignored
 from wire import atomic_json
+from lifecycle import parent_death, identity
 
 APPROVED_FOR_EXECUTION = False
 CLEAN = {'PATH':'/usr/sbin:/usr/bin:/sbin:/bin','LANG':'C.UTF-8','HOME':'/nonexistent'}
@@ -127,6 +128,7 @@ def main():
     root=Path(tempfile.mkdtemp(prefix='d061-jail-',dir='/opt'))
     # No open namespace, host service or credential descriptors survive exec.
     env=dict(CLEAN,D061_WRAPPER_OUTPUT=str(output))
+    atomic_json(output/'wrapper-lifecycle.json',{'wrapper_identity':identity(os.getpid()),'jail_root':str(root)})
     child=None
     status={'complete':False,'errors':[]}
     def interrupted(signum,frame):raise SystemExit(128+signum)
@@ -138,7 +140,9 @@ def main():
             '--kill-child=SIGKILL',sys.executable,str(Path(__file__).resolve()),
             '--source',str(source),'--runtime',str(runtime),'--base-prefix',str(base),
             '--output',str(output),'--inside',str(root)],
-            env=env,stdin=subprocess.DEVNULL,close_fds=True,start_new_session=True)
+            env=env,stdin=subprocess.DEVNULL,close_fds=True,start_new_session=True,
+            preexec_fn=parent_death(os.getpid()))
+        atomic_json(output/'namespace-supervisor.json',identity(child.pid))
         rc=child.wait(timeout=75)
         status['exit_code']=rc
         if rc:raise RuntimeError('fixture namespace failed')

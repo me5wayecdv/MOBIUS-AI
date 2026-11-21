@@ -20,7 +20,7 @@ concurrency:
 jobs:
   isolated:
     runs-on: ubuntu-24.04
-    timeout-minutes: 12
+    timeout-minutes: 18
     env:
       D061_MODE: ${{ inputs.mode }}
       D061_REVIEWED_SHA: ${{ inputs.reviewed_sha }}
@@ -65,6 +65,11 @@ jobs:
           printf '%s\n' "$rc" > "$RUNNER_TEMP/d061-command-rc"
           printf 'command_rc=%s\n' "$rc" >> "$GITHUB_OUTPUT"
           exit "$rc"
+      - name: Identity-scoped emergency cleanup, even on timeout or cancellation
+        if: always()
+        shell: bash
+        run: |
+          sudo "$(command -v python)" research/d061_native/emergency.py "$RUNNER_TEMP/d061-raw"
       - name: Collect only allowlisted sanitized evidence even on failure
         if: always()
         shell: bash
