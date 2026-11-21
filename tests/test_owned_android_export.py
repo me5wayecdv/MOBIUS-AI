@@ -699,3 +699,45 @@ def test_recover_refuses_unauthenticated_reused_sid_no_signal_no_mutation(wd, tm
         assert bystander.poll() is None  # unrelated session was never signalled
     finally:
         bystander.kill(); bystander.wait()
+
+
+def _mk_export(tmp_path):
+    import hashlib
+    d = tmp_path / 'exp'
+    (d / 'control').mkdir(parents=True)
+    data = b'hello'
+    (d / 'control' / 'a.txt').write_bytes(data)
+    summary = {'version': 'owned-final-export/1', 'private_candidates_exported': False, 'complete_product_evidence': False,
+               'inventory': [{'path': 'control/a.txt', 'bytes': len(data), 'sha256': hashlib.sha256(data).hexdigest()}]}
+    (d / 'export-summary.json').write_text(json.dumps(summary))
+    return d
+
+
+def test_publication_packer_is_held_and_deterministic_and_inventory_exact(tmp_path, monkeypatch):
+    import tarfile
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('pp', ROOT / 'publication_packer.py')
+    pp = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(pp)
+    d = _mk_export(tmp_path)
+    with pytest.raises(RuntimeError):
+        pp.pack(d, tmp_path / 'o.tar')
+    monkeypatch.setattr(pp, 'APPROVED_FOR_EXECUTION', True)
+    a = pp.pack(d, tmp_path / 'o1.tar')
+    b = pp.pack(d, tmp_path / 'o2.tar')
+    assert a['tar_sha256'] == b['tar_sha256'] and a['files'] == 2
+    with tarfile.open(tmp_path / 'o1.tar') as tf:
+        assert all(m.uid == 0 and m.mode == 0o644 and m.mtime == 0 for m in tf.getmembers())
+    with pytest.raises(FileExistsError):
+        pp.pack(d, tmp_path / 'o1.tar')
+    (d / 'control' / 'extra').write_text('x')
+    with pytest.raises(ValueError):
+        pp.pack(d, tmp_path / 'o3.tar')
+    (d / 'control' / 'extra').unlink()
+    (d / 'control' / 'a.txt').write_bytes(b'HELLO')
+    with pytest.raises(ValueError):
+        pp.pack(d, tmp_path / 'o4.tar')
+    (d / 'control' / 'a.txt').write_bytes(b'hello')
+    os.symlink('/etc/passwd', d / 'control' / 'l')
+    with pytest.raises(ValueError):
+        pp.pack(d, tmp_path / 'o5.tar')
