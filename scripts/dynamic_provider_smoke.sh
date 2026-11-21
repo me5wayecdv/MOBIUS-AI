@@ -25,29 +25,33 @@ echo "== verify pinned digest =="
 echo "${PINNED_SHA256}  ${APK}" | sha256sum -c -
 expect "apk-sha256-pinned" $?
 
+# adb calls are wrapped in timeouts: a hung emulator-side install/query
+# must fail fast instead of consuming the whole job budget (observed on
+# run 44837473144: adb install hung until the 30-minute job timeout
+# cancelled the run).
 echo "== install =="
-adb install -r "$APK" >"$OUT/install.out" 2>&1
+timeout 240 adb install -r "$APK" >"$OUT/install.out" 2>&1
 expect "adb-install" $?
-adb shell pm list packages | grep -q "^package:infosecadventures.allsafe$"
+timeout 60 adb shell pm list packages | grep -q "^package:infosecadventures.allsafe$"
 expect "package-present" $?
 
 echo "== positive: exported provider query without any permission =="
-adb shell content query --uri "$URI" >"$OUT/query-before.out" 2>&1
+timeout 60 adb shell content query --uri "$URI" >"$OUT/query-before.out" 2>&1
 rows_before=$(grep -c "Row:" "$OUT/query-before.out" || true)
 echo "rows_before=${rows_before}"
 [ "$rows_before" -ge 4 ]
 expect "query-without-permission-returns-seeded-notes" $?
 
 echo "== injection: caller-controlled tautology WHERE reaches delete =="
-adb shell content delete --uri "$URI" --where "1=1" >"$OUT/delete-tautology.out" 2>&1
-adb shell content query --uri "$URI" >"$OUT/query-after.out" 2>&1
+timeout 60 adb shell content delete --uri "$URI" --where "1=1" >"$OUT/delete-tautology.out" 2>&1
+timeout 60 adb shell content query --uri "$URI" >"$OUT/query-after.out" 2>&1
 rows_after=$(grep -c "Row:" "$OUT/query-after.out" || true)
 echo "rows_after=${rows_after}"
 [ "$rows_before" -ge 4 ] && [ "$rows_after" -eq 0 ]
 expect "tautology-where-deleted-all-rows" $?
 
 echo "== negative control: non-exported FileProvider authority is refused =="
-adb shell content query --uri "content://infosecadventures.allsafe.fileprovider/notes" \
+timeout 60 adb shell content query --uri "content://infosecadventures.allsafe.fileprovider/notes" \
   >"$OUT/query-nonexported.out" 2>&1
 neg_rc=$?
 if [ "$neg_rc" -ne 0 ] || grep -qi "permission\|security\|denial\|failed" "$OUT/query-nonexported.out"; then
@@ -56,7 +60,7 @@ else
   echo "FAIL non-exported-provider-refused"; fail=1
 fi
 
-adb logcat -d >"$OUT/logcat.out" 2>&1 || true
+timeout 60 adb logcat -d >"$OUT/logcat.out" 2>&1 || true
 
 echo "== summary =="
 echo "rows_before=${rows_before} rows_after=${rows_after} fail=${fail}"
