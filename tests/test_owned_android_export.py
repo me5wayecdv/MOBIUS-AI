@@ -922,3 +922,101 @@ def test_namespace_scan_sees_descendant_namespace_and_handle_holders(wd):
         assert os.getpid() in pids
     finally:
         os.close(own_fd)
+
+
+NONCE = 'a' * 32
+
+
+def _log(*kinds, pid=10, uid=20, fail='SSLHandshakeException', nonce=NONCE):
+    lines = []
+    for k in kinds:
+        extra = ' class=%s' % fail if k == 'FAILED' else ''
+        lines.append('I/OwnedFixture: OWNED_FIXTURE_%s nonce=%s pid=%d uid=%d%s' % (k, nonce, pid, uid, extra))
+    return '\n'.join(lines)
+
+
+def _nv():
+    return importlib.import_module('negative_verdict')
+
+
+def _ev(sc, text, **kw):
+    base = dict(nonce=NONCE, native_request_ledger=0, origin_receipts=0, proxy_upstream_refusals=1,
+                teardown_absence_verified=True, apk_sha256='b' * 64, expected_apk_sha256='b' * 64)
+    base.update(kw)
+    return _nv().evaluate(sc, text, **base)
+
+
+@pytest.mark.parametrize('sc,kinds', [('untrusted-ca', ('PREPARED', 'SOCKET', 'TLS_BEGIN', 'FAILED')),
+                                      ('wrong-hostname', ('PREPARED', 'SOCKET', 'TLS_BEGIN', 'FAILED'))])
+def test_negative_verdict_passes_only_with_full_expected_evidence(sc, kinds):
+    assert _ev(sc, _log(*kinds))['passed'] is True
+
+
+def test_negative_verdict_untrusted_origin_requires_refusal_and_no_tls():
+    assert _ev('untrusted-origin', _log('PREPARED', 'SOCKET', 'FAILED', fail='IOException'))['passed'] is True
+    assert not _ev('untrusted-origin', _log('PREPARED', 'SOCKET', 'FAILED', fail='IOException'), proxy_upstream_refusals=0)['passed']
+    assert not _ev('untrusted-origin', _log('PREPARED', 'SOCKET', 'TLS_BEGIN', 'FAILED', fail='IOException'))['passed']
+
+
+@pytest.mark.parametrize('mutate', ['established', 'completed', 'ledger', 'origin', 'wrong_nonce', 'mixed_pid', 'bad_class', 'missing_begin',
+                                    'no_teardown', 'apk_unbound', 'order'])
+def test_negative_verdict_fails_closed(mutate):
+    kinds = ('PREPARED', 'SOCKET', 'TLS_BEGIN', 'FAILED')
+    text, kw = None, {}
+    if mutate == 'established':
+        text = _log('PREPARED', 'SOCKET', 'TLS_BEGIN', 'TLS_ESTABLISHED', 'FAILED')
+    elif mutate == 'completed':
+        text = _log(*kinds, 'REQUEST_COMPLETED')
+    elif mutate == 'ledger':
+        kw['native_request_ledger'] = 1
+    elif mutate == 'origin':
+        kw['origin_receipts'] = 1
+    elif mutate == 'wrong_nonce':
+        text = _log(*kinds, nonce='c' * 32)
+    elif mutate == 'mixed_pid':
+        text = _log(*kinds[:2]) + '\n' + _log(*kinds[2:], pid=11)
+    elif mutate == 'bad_class':
+        text = _log(*kinds, fail='ConnectException')
+    elif mutate == 'missing_begin':
+        text = _log('PREPARED', 'SOCKET', 'FAILED')
+    elif mutate == 'no_teardown':
+        kw['teardown_absence_verified'] = False
+    elif mutate == 'apk_unbound':
+        kw['apk_sha256'] = 'd' * 64
+    elif mutate == 'order':
+        text = _log('PREPARED', 'TLS_BEGIN', 'SOCKET', 'FAILED')
+    res = _ev('untrusted-ca', text or _log(*kinds), **kw)
+    assert res['passed'] is False and res['reasons'], mutate
+
+
+def test_ns_get_parent_eperm_is_indeterminate_unless_own_namespace_proves_outside(wd, monkeypatch):
+    import errno
+    import fcntl
+
+    def eperm(fd, req):
+        raise OSError(errno.EPERM, 'denied')
+    monkeypatch.setattr(fcntl, 'ioctl', eperm)
+    # process in the watchdog's own namespace is positively outside an unrelated target: not a member, no error
+    assert wd._in_or_under(os.getpid(), (0, 0)) is False
+    # same process, but the watchdog's "own" namespace is something else: ancestry unknown, so an inspection obligation
+    monkeypatch.setattr(wd, '_own_ref', lambda: (1, 1))
+    with pytest.raises(wd.NamespaceInspectionError):
+        wd._in_or_under(os.getpid(), (0, 0))
+
+
+def test_external_handle_holder_is_reported_never_signalled(wd, monkeypatch):
+    import subprocess as sp
+    holder = sp.Popen([PY, '-c', 'import time;time.sleep(30)'])
+    member = sp.Popen([PY, '-c', 'import time;time.sleep(30)'])
+    try:
+        ident_h = dict(wd.process_identity(holder.pid), kind='handle_holder')
+        ident_m = dict(wd.process_identity(member.pid), kind='member')
+        monkeypatch.setattr(wd, 'ns_members', lambda ref, skip=False: [i for i in (ident_h, ident_m) if (Path('/proc/%d' % i['pid']).exists() and wd.process_identity(i['pid'])['state'] != 'Z')])
+        left = wd.kill_ns_members((0, 0), wait=0.5)
+        member.wait(timeout=5)  # owned member was terminated
+        assert holder.poll() is None  # foreign holder never signalled
+        assert [m['pid'] for m in left] == [holder.pid] and left[0]['kind'] == 'handle_holder'
+    finally:
+        for p in (holder, member):
+            p.kill()
+            p.wait()

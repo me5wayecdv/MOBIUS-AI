@@ -359,9 +359,18 @@ def _stat_ns(path):
     return (st.st_dev, st.st_ino)
 
 
+def _own_ref():
+    fd = os.open('/proc/self/ns/pid', os.O_RDONLY | os.O_CLOEXEC)
+    try:
+        return _ref(fd)
+    finally:
+        os.close(fd)
+
+
 def _in_or_under(pid, target):
     """True if the process's PID namespace is the target or a DESCENDANT of it (walks NS_GET_PARENT, bounded)."""
     import fcntl
+    own = _own_ref()
     try:
         fd = os.open('/proc/%d/ns/pid' % pid, os.O_RDONLY | os.O_CLOEXEC)
     except (FileNotFoundError, ProcessLookupError):
@@ -373,11 +382,15 @@ def _in_or_under(pid, target):
             st = os.fstat(fd)
             if (st.st_dev, st.st_ino) == target:
                 return True
+            if (st.st_dev, st.st_ino) == own:
+                return False  # positively OUTSIDE: it is in the watchdog's own namespace, an ancestor of the target
             try:
                 parent = fcntl.ioctl(fd, NS_GET_PARENT)
             except OSError as error:
-                if error.errno == 1:  # EPERM: no visible ancestor, so it is not under the target
-                    return False
+                if error.errno == 1:
+                    # EPERM can mean ancestry authority/visibility is missing, not "no ancestor". Without a positive
+                    # outside proof (own namespace above) this stays an inspection obligation, never nonmembership.
+                    raise NamespaceInspectionError('NS_GET_PARENT EPERM: ancestry indeterminate')
                 raise NamespaceInspectionError('NS_GET_PARENT: %s' % error.__class__.__name__)
             os.close(fd)
             fd = parent if isinstance(parent, int) else None
@@ -410,7 +423,8 @@ def ns_members(ns_ref, skip_foreign=False):
                     continue
             except OSError:
                 continue
-        hit = _in_or_under(pid, target)
+        member = _in_or_under(pid, target)
+        hit = member
         if not hit:
             hit = _stat_ns('/proc/%d/ns/pid_for_children' % pid) == target
         if not hit:
@@ -433,8 +447,16 @@ def ns_members(ns_ref, skip_foreign=False):
         if hit:
             ident = process_identity(pid)
             if ident and ident['state'] != 'Z':
-                out.append(ident)
+                out.append(dict(ident, kind='member' if member else 'handle_holder'))
     return out
+
+
+def scan_ns_final(target, skip_foreign=False):
+    """Non-signalling final obligation scan (run after our own namespace handle is released). Inspection errors are obligations."""
+    try:
+        return ns_members(target, skip_foreign)
+    except NamespaceInspectionError as error:
+        return [{'pid': -1, 'inspection_error': str(error)[:120]}]
 
 
 def kill_ns_members(ns_ref, wait=ABSENCE_WAIT, clock=time.monotonic, skip_foreign=False):
@@ -448,9 +470,11 @@ def kill_ns_members(ns_ref, wait=ABSENCE_WAIT, clock=time.monotonic, skip_foreig
             members = ns_members(target, skip_foreign)
         except NamespaceInspectionError as error:
             return [{'pid': -1, 'inspection_error': str(error)[:120]}]
-        if not members:
-            return []
+        if not [m for m in members if m.get('kind') == 'member']:
+            return members  # nothing left to signal; remaining holders (if any) are reported as blockers
         for ident in members:
+            if ident.get('kind') != 'member':
+                continue  # an external handle holder is an absence BLOCKER to report, never a termination target
             try:
                 pfd = os.pidfd_open(ident['pid'])
             except OSError:
@@ -542,10 +566,9 @@ def quarantine_partial(roots, attempt, uid=None):
 def stop_and_reap(child, sid, ns_fd=None, skip_foreign=False):
     """Bounded: kill the session via pidfds, verify absence, then reap the leader with a timeout."""
     remaining = kill_session_stable(sid)
-    ns_left = []
     if ns_fd is not None:
-        # Namespace obligation first, while the leader is still unreaped and the namespace handle is held.
-        ns_left = kill_ns_members(ns_fd, skip_foreign=skip_foreign)
+        # Signal OWNED namespace members first, while the leader is unreaped and our namespace handle is held.
+        kill_ns_members(ns_fd, skip_foreign=skip_foreign)
     if child.poll() is None:
         child.kill()  # Popen-guarded kill of the still-unreaped leader (fallback when pidfd signalling failed)
         end = time.monotonic() + ABSENCE_WAIT
@@ -558,10 +581,6 @@ def stop_and_reap(child, sid, ns_fd=None, skip_foreign=False):
         code = child.wait(timeout=REAP_WAIT)
     except subprocess.TimeoutExpired:
         remaining = remaining or ['leader_unreaped']
-    if ns_fd is not None:
-        # Re-check after the reap, still holding the handle; the caller releases it afterwards.
-        ns_left = ns_left or kill_ns_members(ns_fd, skip_foreign=skip_foreign)
-        remaining = list(remaining) + [dict(m, ns=True) for m in ns_left]
     return code, remaining
 
 
@@ -604,7 +623,7 @@ def supervise(argv, report_path, *, role_roots, lock_bytes, expected_lock_sha256
         # ALL post-Popen setup is inside this guard.
         pidfd = os.pidfd_open(child.pid)
         if pid_namespace:
-            own = _ref(os.open('/proc/self/ns/pid', os.O_RDONLY | os.O_CLOEXEC))
+            own = _own_ref()
             end = clock() + NS_ESTABLISH_WAIT
             while ns_fd is None:
                 fd = open_child_pid_ns(child.pid)
@@ -644,7 +663,8 @@ def supervise(argv, report_path, *, role_roots, lock_bytes, expected_lock_sha256
         reason = reason or 'supervision_error'
     code, remaining = stop_and_reap(child, sid, ns_fd, skip_foreign=user_namespace)
     if ns_fd is not None:
-        os.close(ns_fd)
+        os.close(ns_fd)  # release OUR handle; from here on only non-signalling inspection
+        remaining = list(remaining) + [dict(m, ns=True) for m in scan_ns_final(ns_ref, user_namespace)]
     if pid_namespace and ns_ref is None:
         remaining = list(remaining) + [{'pid': -1, 'namespace_unestablished': True}]  # requested but never established: UNVERIFIED
     if pidfd is not None:
