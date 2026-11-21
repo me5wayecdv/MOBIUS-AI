@@ -1381,14 +1381,32 @@ def test_runner_capability_probe_is_readonly_and_held(tmp_path,monkeypatch):
     with pytest.raises(SystemExit):r.main()
 
 
-def test_audience_gate_refuses_public_and_unreviewed(monkeypatch):
+def test_audience_gate_is_plan_validation_only(monkeypatch,tmp_path):
+    import os
     monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[1]/'research'/'d061_android'))
     import audience_gate as g
     assert g.APPROVED_FOR_EXECUTION is False
-    ok={'audience':'local_private_file','destination':'/var/private/inv.json','content_class':'package_hash_inventory','retention_days':7,'reviewed_private_destination':True}
-    assert g.check_plan(ok)
-    for mut in ({'audience':'workflow_log'},{'audience':'public_artifact'},{'audience':'pr_comment'},{'audience':'x'},{'audience':['a']},
-        {'content_class':'device_logs'},{'content_class':'user_data'},{'retention_days':0},{'retention_days':99},{'retention_days':True},
-        {'destination':'rel/x'},{'destination':'/a/../b'},{'reviewed_private_destination':False},{'extra':1}):
+    ok={'route':'local_private_file','destination':'/var/private/inv','content_class':'package_hash_inventory','declared_retention_days':7,'route_evidence_ref':'main-route-0001'}
+    assert g.check_plan(ok)=={'validated_plan_only':True,'retention_enforced':False,'route_verified':False}
+    for mut in ({'route':'private_agent_channel'},{'route':'workflow_log'},{'route':['a']},{'content_class':'device_logs'},{'content_class':['x']},
+        {'declared_retention_days':0},{'declared_retention_days':99},{'declared_retention_days':True},{'destination':'rel/x'},
+        {'destination':'/a/../b'},{'destination':'/a//b'},{'destination':'/a/./b'},{'destination':'/a/b/'},{'route_evidence_ref':'x'},{'route_evidence_ref':5},{'extra':1}):
         with pytest.raises(ValueError):g.check_plan({**ok,**mut})
     with pytest.raises(ValueError):g.check_plan('x')
+    # use-time verification of the real filesystem destination
+    d=tmp_path/'priv';d.mkdir(mode=0o700);os.chmod(tmp_path,0o700)
+    assert g.verify_private_destination(str(d))
+    os.chmod(d,0o750)
+    with pytest.raises(ValueError):g.verify_private_destination(str(d))
+    os.chmod(d,0o700);(tmp_path/'ln').symlink_to(d)
+    with pytest.raises(OSError):g.verify_private_destination(str(tmp_path/'ln'))
+    os.chmod(tmp_path,0o770)
+    with pytest.raises(ValueError):g.verify_private_destination(str(d))
+    os.chmod(tmp_path,0o700)
+    # content validated by schema, never by label
+    cap={'euid':0,'kvm_present':True,'kvm_rw':False,'disk_free_bytes':1,'disk_total_bytes':2}
+    assert g.validate_content('capability_metadata',cap)==cap
+    for bad in ({**cap,'host':'runner-1'},{**cap,'euid':True},{**cap,'disk_free_bytes':-1},{**cap,'kvm_present':'yes'}):
+        with pytest.raises(ValueError):g.validate_content('capability_metadata',bad)
+    with pytest.raises(ValueError):g.validate_content('device_logs',{})
+    with pytest.raises(ValueError):g.validate_content('package_hash_inventory',{'members':[]},sha256='0'*64,size=1)
