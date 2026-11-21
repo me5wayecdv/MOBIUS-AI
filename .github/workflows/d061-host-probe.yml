@@ -1,0 +1,49 @@
+# ACTIVATION SOURCE for the user-approved bounded host-capability check (user's yes 2026-11-21 16:12 to the 15:39 question).
+# Public exposure approved: run existence and binary success/failure only. RED IS INCONCLUSIVE, never proof that the host lacks the primitive:
+# it can be any refusal, ownership/git/sleep-acquisition error, probe failure, publish failure or checkout cleanup failure.
+# The probe commit checked out and measured is P (ref below); this file lives in a child commit whose tree equals P plus this file only.
+# Green requires BOTH the probe and the ownership-restore/temp-removal cleanup to succeed; either failing gives the same generic red.
+# Single-use: the follow-up commit that deletes this file (tree equals P) disables the trigger after the one run.
+name: Host capability check
+on:
+  push:                        # workflow_dispatch needs the file on the default branch (no merge allowed); path-filtered push on the PR branch is the trigger
+    branches: [d061-owned-android-contained-preparation]
+    paths: ['.github/workflows/d061-host-probe.yml']
+concurrency:
+  group: d061-host-probe
+  cancel-in-progress: false
+permissions: {}
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: 5f64bae70fd16f49b57b87c7fc1375dfee5b0f78
+          persist-credentials: false
+          fetch-depth: 1
+      - name: Check
+        run: |
+          D=""
+          cleanup() {
+            st=$?
+            trap - EXIT
+            c=0
+            sudo -n chown -R "$(id -u):$(id -g)" "$GITHUB_WORKSPACE" >/dev/null 2>&1 || c=1
+            case "$D" in /run/d061-sleep.??????) sudo -n rm -rf -- "$D" >/dev/null 2>&1 || c=1 ;; esac
+            if [ "$st" -eq 0 ] && [ "$c" -eq 0 ]; then exit 0; else exit 1; fi
+          }
+          trap cleanup EXIT
+          probe() {
+            D=$(sudo -n mktemp -d /run/d061-sleep.XXXXXX) || return 1
+            SRC=$(readlink -f /usr/bin/sleep) || return 1
+            [ -f "$SRC" ] && [ ! -L "$SRC" ] || return 1
+            sudo -n install -m 0755 -o root -g root -- "$SRC" "$D/sleep" || return 1
+            SHA=$(sudo -n sha256sum "$D/sleep" | cut -d' ' -f1) || return 1
+            [ "${#SHA}" -eq 64 ] || return 1
+            sudo -n chown -R root:root "$GITHUB_WORKSPACE" || return 1
+            sudo -n chmod -R go-w "$GITHUB_WORKSPACE" || return 1
+            sudo -n env -i ImageOS="$ImageOS" ImageVersion="$ImageVersion" /usr/bin/python3 -I -B "$GITHUB_WORKSPACE/research/d061_android/host_primitive_entry.py" --repo "$GITHUB_WORKSPACE" --expected-commit 5f64bae70fd16f49b57b87c7fc1375dfee5b0f78 --sleep-path "$D/sleep" --sleep-sha256 "$SHA" --parent auto --run-id "hp$GITHUB_RUN_ID" --route-evidence-ref user-yes-20261121T161201-public-run-conclusion || return 1
+          }
+          if probe >/dev/null 2>&1; then exit 0; else exit 1; fi

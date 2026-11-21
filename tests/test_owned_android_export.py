@@ -1836,3 +1836,30 @@ def test_host_entry_parent_auto_resolution_fails_closed(monkeypatch):
     assert r('auto',reader=lambda:'0::/\n') == '/sys/fs/cgroup'
     for bad in ('','12:memory:/x\n0::/y\n','1:name=systemd:/x\n','0::relative\n'):
         with pytest.raises(he.Refused):r('auto',reader=lambda b=bad:b)
+
+
+def test_host_capability_workflow_exit_semantics_with_stubbed_sudo(tmp_path):
+    import subprocess,yaml,shutil
+    wf=Path(__file__).resolve().parents[1]/'.github'/'workflows'/'d061-host-probe.yml'
+    if not wf.exists():pytest.skip('single-use workflow removed')
+    if shutil.which('bash') is None:pytest.skip('bash required')
+    run=yaml.safe_load(wf.read_text())['jobs']['probe']['steps'][1]['run']
+    stub=(
+        'sudo(){ shift; case "$1" in\n'
+        '  mktemp) echo /run/d061-sleep.abcdef;;\n'
+        '  sha256sum) echo "'+'a'*64+'  x";;\n'
+        '  chown) case "$*" in *root:root*) return 0;; *) return ${STUB_CHOWN_FAIL:-0};; esac;;\n'
+        '  rm) return ${STUB_RM_FAIL:-0};;\n'
+        '  env) return ${STUB_PROBE_FAIL:-0};;\n'
+        '  *) return 0;; esac; }\n')
+    script=tmp_path/'s.sh';script.write_text(stub+run)
+    def rc(**env):
+        e={'PATH':os.environ['PATH'],'GITHUB_WORKSPACE':str(tmp_path),'ImageOS':'ubuntu24','ImageVersion':'1'}
+        e.update({k:str(v) for k,v in env.items()})
+        r=subprocess.run(['bash',str(script)],env=e,capture_output=True,text=True)
+        return r.returncode
+    assert rc()==0
+    assert rc(STUB_PROBE_FAIL=1)==1                      # original failure, cleanup fine
+    assert rc(STUB_CHOWN_FAIL=1)==1                      # original success, restore failed
+    assert rc(STUB_RM_FAIL=1)==1                         # original success, temp removal failed
+    assert rc(STUB_PROBE_FAIL=1,STUB_CHOWN_FAIL=1,STUB_RM_FAIL=1)==1
