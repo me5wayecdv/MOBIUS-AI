@@ -925,68 +925,144 @@ def test_namespace_scan_sees_descendant_namespace_and_handle_holders(wd):
 
 
 NONCE = 'a' * 32
+APP = {'pid': 10, 'uid': 20}
 
 
-def _log(*kinds, pid=10, uid=20, fail='SSLHandshakeException', nonce=NONCE):
+def _log(*kinds, pid=10, uid=20, fail='SSLHandshakeException', nonce=NONCE, tag='MobiusOwnedFixture', lpid=None):
     lines = []
     for k in kinds:
         extra = ' class=%s' % fail if k == 'FAILED' else ''
-        lines.append('I/OwnedFixture: OWNED_FIXTURE_%s nonce=%s pid=%d uid=%d%s' % (k, nonce, pid, uid, extra))
+        lines.append('11-21 13:00:00.123  %d  %d I %s: OWNED_FIXTURE_%s nonce=%s pid=%d uid=%d%s' % (lpid or pid, pid, tag, k, nonce, pid, uid, extra))
     return '\n'.join(lines)
 
 
 def _nv():
+    import sys as _s
+    if str(ROOT) not in _s.path:
+        _s.path.insert(0, str(ROOT))
     return importlib.import_module('negative_verdict')
 
 
+def _led(sc, count=0, **over):
+    d = {'scenario': sc, 'nonce': NONCE, 'window_start': 1, 'window_end': 9, 'complete': True, 'count': count}
+    d.update(over)
+    return d
+
+
+def _prem(sc):
+    if sc == 'untrusted-ca':
+        return {'embedded_anchor_sha256': 'e' * 64, 'origin_chain_anchor_sha256': 'f' * 64}
+    if sc == 'wrong-hostname':
+        return {'peer_name': 'owned-name-mismatch.invalid', 'presented_cert_names': ['127.0.0.1'], 'chain_anchor_trusted': True}
+    return {'upstream_chain_anchor_sha256': 'e' * 64, 'proxy_upstream_trust_sha256': 'f' * 64}
+
+
 def _ev(sc, text, **kw):
-    base = dict(nonce=NONCE, native_request_ledger=0, origin_receipts=0, proxy_upstream_refusals=1,
-                teardown_absence_verified=True, apk_sha256='b' * 64, expected_apk_sha256='b' * 64)
+    base = dict(nonce=NONCE, expected_app=dict(APP), build_record={'scenario': sc, 'apk_sha256': 'b' * 64, 'installed_apk_sha256': 'b' * 64},
+                premises=_prem(sc), native_ledger=_led(sc), origin_ledger=_led(sc),
+                proxy_refusal={'scenario': sc, 'nonce': NONCE, 'upstream': '127.0.0.1:18444', 'reason': 'certificate_verify_failed', 'count': 1},
+                teardown_absence_verified=True)
     base.update(kw)
     return _nv().evaluate(sc, text, **base)
 
 
-@pytest.mark.parametrize('sc,kinds', [('untrusted-ca', ('PREPARED', 'SOCKET', 'TLS_BEGIN', 'FAILED')),
-                                      ('wrong-hostname', ('PREPARED', 'SOCKET', 'TLS_BEGIN', 'FAILED'))])
-def test_negative_verdict_passes_only_with_full_expected_evidence(sc, kinds):
-    assert _ev(sc, _log(*kinds))['passed'] is True
+KINDS = ('PREPARED', 'SOCKET', 'TLS_BEGIN', 'FAILED')
+
+
+@pytest.mark.parametrize('sc', ['untrusted-ca', 'wrong-hostname'])
+def test_negative_verdict_passes_only_with_full_expected_evidence(sc):
+    res = _ev(sc, _log(*KINDS))
+    assert res['passed'] is True and res['refusal_reason_established'] is False
 
 
 def test_negative_verdict_untrusted_origin_requires_refusal_and_no_tls():
-    assert _ev('untrusted-origin', _log('PREPARED', 'SOCKET', 'FAILED', fail='IOException'))['passed'] is True
-    assert not _ev('untrusted-origin', _log('PREPARED', 'SOCKET', 'FAILED', fail='IOException'), proxy_upstream_refusals=0)['passed']
-    assert not _ev('untrusted-origin', _log('PREPARED', 'SOCKET', 'TLS_BEGIN', 'FAILED', fail='IOException'))['passed']
+    ok = _log('PREPARED', 'SOCKET', 'FAILED', fail='IOException')
+    assert _ev('untrusted-origin', ok)['passed'] is True
+    assert not _ev('untrusted-origin', ok, proxy_refusal=None)['passed']
+    assert not _ev('untrusted-origin', ok, proxy_refusal={'scenario': 'untrusted-origin', 'nonce': 'c' * 32, 'upstream': 'x', 'reason': 'y', 'count': 1})['passed']
+    assert not _ev('untrusted-origin', _log(*KINDS, fail='IOException'))['passed']
 
 
-@pytest.mark.parametrize('mutate', ['established', 'completed', 'ledger', 'origin', 'wrong_nonce', 'mixed_pid', 'bad_class', 'missing_begin',
-                                    'no_teardown', 'apk_unbound', 'order'])
-def test_negative_verdict_fails_closed(mutate):
-    kinds = ('PREPARED', 'SOCKET', 'TLS_BEGIN', 'FAILED')
-    text, kw = None, {}
+def _mutated(mutate):
+    text, kw = _log(*KINDS), {}
+    sc = 'untrusted-ca'
     if mutate == 'established':
         text = _log('PREPARED', 'SOCKET', 'TLS_BEGIN', 'TLS_ESTABLISHED', 'FAILED')
     elif mutate == 'completed':
-        text = _log(*kinds, 'REQUEST_COMPLETED')
-    elif mutate == 'ledger':
-        kw['native_request_ledger'] = 1
-    elif mutate == 'origin':
-        kw['origin_receipts'] = 1
+        text = _log(*KINDS, 'REQUEST_COMPLETED')
+    elif mutate == 'success_without_nonce':
+        text = _log(*KINDS) + '\n11-21 13:00:01.000  10  10 I MobiusOwnedFixture: OWNED_FIXTURE_REQUEST_COMPLETED pid=10 uid=20'
+    elif mutate == 'ledger_nonzero':
+        kw['native_ledger'] = _led(sc, 1)
+    elif mutate == 'origin_nonzero':
+        kw['origin_ledger'] = _led(sc, 1)
+    elif mutate == 'ledger_bare_zero':
+        kw['native_ledger'] = 0
+    elif mutate == 'ledger_false':
+        kw['origin_ledger'] = False
+    elif mutate == 'ledger_incomplete':
+        kw['native_ledger'] = _led(sc, 0, complete=False)
+    elif mutate == 'ledger_wrong_nonce':
+        kw['native_ledger'] = _led(sc, 0, nonce='c' * 32)
+    elif mutate == 'ledger_bad_window':
+        kw['origin_ledger'] = _led(sc, 0, window_start=9, window_end=1)
     elif mutate == 'wrong_nonce':
-        text = _log(*kinds, nonce='c' * 32)
+        text = _log(*KINDS, nonce='c' * 32)
     elif mutate == 'mixed_pid':
-        text = _log(*kinds[:2]) + '\n' + _log(*kinds[2:], pid=11)
+        text = _log(*KINDS[:2]) + '\n' + _log(*KINDS[2:], pid=11)
+    elif mutate == 'logcat_pid_mismatch':
+        text = _log(*KINDS, lpid=99)
+    elif mutate == 'unobserved_identity':
+        kw['expected_app'] = {'pid': 11, 'uid': 20}
+    elif mutate == 'missing_identity':
+        text = _log(*KINDS).replace(' pid=10 uid=20', '', 1)
+    elif mutate == 'missing_nonce':
+        text = _log(*KINDS).replace(' nonce=' + NONCE, '', 1)
+    elif mutate == 'wrong_tag':
+        text = _log(*KINDS, tag='SomeOtherTag')
+    elif mutate == 'not_threadtime':
+        text = 'OWNED_FIXTURE_PREPARED nonce=%s pid=10 uid=20' % NONCE
+    elif mutate == 'duplicate_key':
+        text = _log(*KINDS).replace('uid=20', 'uid=20 uid=20', 1)
+    elif mutate == 'refused_marker':
+        text = _log(*KINDS) + '\n11-21 13:00:01.000  10  10 I MobiusOwnedFixture: REFUSED fresh prepare required'
     elif mutate == 'bad_class':
-        text = _log(*kinds, fail='ConnectException')
+        text = _log(*KINDS, fail='ConnectException')
     elif mutate == 'missing_begin':
         text = _log('PREPARED', 'SOCKET', 'FAILED')
-    elif mutate == 'no_teardown':
-        kw['teardown_absence_verified'] = False
-    elif mutate == 'apk_unbound':
-        kw['apk_sha256'] = 'd' * 64
     elif mutate == 'order':
         text = _log('PREPARED', 'TLS_BEGIN', 'SOCKET', 'FAILED')
-    res = _ev('untrusted-ca', text or _log(*kinds), **kw)
+    elif mutate == 'no_teardown':
+        kw['teardown_absence_verified'] = False
+    elif mutate == 'teardown_truthy':
+        kw['teardown_absence_verified'] = 1
+    elif mutate == 'apk_arbitrary_equal':
+        kw['build_record'] = {'scenario': sc, 'apk_sha256': 'not-a-hash', 'installed_apk_sha256': 'not-a-hash'}
+    elif mutate == 'apk_not_installed':
+        kw['build_record'] = {'scenario': sc, 'apk_sha256': 'b' * 64, 'installed_apk_sha256': 'd' * 64}
+    elif mutate == 'apk_other_scenario':
+        kw['build_record'] = {'scenario': 'wrong-hostname', 'apk_sha256': 'b' * 64, 'installed_apk_sha256': 'b' * 64}
+    elif mutate == 'same_anchor':
+        kw['premises'] = {'embedded_anchor_sha256': 'e' * 64, 'origin_chain_anchor_sha256': 'e' * 64}
+    return _ev(sc, text, **kw)
+
+
+@pytest.mark.parametrize('mutate', ['established', 'completed', 'success_without_nonce', 'ledger_nonzero', 'origin_nonzero', 'ledger_bare_zero',
+                                    'ledger_false', 'ledger_incomplete', 'ledger_wrong_nonce', 'ledger_bad_window', 'wrong_nonce', 'mixed_pid',
+                                    'logcat_pid_mismatch', 'unobserved_identity', 'missing_identity', 'missing_nonce', 'wrong_tag',
+                                    'not_threadtime', 'duplicate_key', 'refused_marker', 'bad_class', 'missing_begin', 'order', 'no_teardown',
+                                    'teardown_truthy', 'apk_arbitrary_equal', 'apk_not_installed', 'apk_other_scenario', 'same_anchor'])
+def test_negative_verdict_fails_closed(mutate):
+    res = _mutated(mutate)
     assert res['passed'] is False and res['reasons'], mutate
+
+
+@pytest.mark.parametrize('premises', [
+    {'peer_name': 'owned-name-mismatch.invalid', 'presented_cert_names': ['owned-name-mismatch.invalid'], 'chain_anchor_trusted': True},
+    {'peer_name': 'owned-name-mismatch.invalid', 'presented_cert_names': ['127.0.0.1'], 'chain_anchor_trusted': False},
+    {'peer_name': 'other.invalid', 'presented_cert_names': ['127.0.0.1'], 'chain_anchor_trusted': True}])
+def test_wrong_hostname_requires_trusted_chain_and_distinct_name_premise(premises):
+    assert not _ev('wrong-hostname', _log(*KINDS), premises=premises)['passed']
 
 
 def test_ns_get_parent_eperm_is_indeterminate_unless_own_namespace_proves_outside(wd, monkeypatch):
