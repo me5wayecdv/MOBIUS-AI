@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+printf "%s\n" "DISABLED DRAFT: exact technical review required; no execution." >&2
+exit 78
 # D-061 staging: downloads and verifies every pinned dependency, builds the
 # fixture APKs, and generates the per-run test CA. Runs OUTSIDE the
 # namespace, before any containment step. Network access happens only here,
@@ -106,6 +108,9 @@ printf '\nd56f5187479451eabf01fb78af6dfcb131a6481e\n' >> "$STAGE/sdk/licenses/an
 "$STAGE/gradle/bin/gradle" --no-daemon -g "$STAGE/gradle-home" \
   assembleTrustedCaDebug assembleDefaultTrustDebug
 cd - >/dev/null
+FIXOUT="$(dirname "$0")/../../fixture/d061lab/app/build/outputs/apk"
+cp "$FIXOUT/trustedCa/debug/app-trustedCa-debug.apk" "$STAGE/fixture-trustedCa.apk"
+cp "$FIXOUT/defaultTrust/debug/app-defaultTrust-debug.apk" "$STAGE/fixture-defaultTrust.apk"
 { find "$(dirname "$0")/../../fixture/d061lab/app/build/outputs/apk" -name '*.apk' \
     | sort | while read -r apk; do
         echo "apk=$apk sha256=$(sha256sum "$apk" | awk '{print $1}')"; done; echo; } >> "$MANIFEST"

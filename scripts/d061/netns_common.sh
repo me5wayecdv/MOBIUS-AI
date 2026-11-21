@@ -20,7 +20,9 @@ set -euo pipefail
 
 : "${D061_NS:=mobius-d061}"
 : "${D061_RUN_DIR:=/tmp/d061-run}"
+: "${D061_STAGE_DIR:=/tmp/d061-stage}"
 : "${D061_RUN_USER:=$(id -un)}"
+: "${D061_PATH:=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin}"
 
 d061_log() { printf '[d061 %s] %s\n' "$(date -u +%H:%M:%S)" "$*" >&2; }
 d061_fail() { d061_log "FAIL: $*"; exit 1; }
@@ -138,6 +140,8 @@ d061_ns_exec_user() {
       XDG_CACHE_HOME="$D061_RUN_DIR/cache" \
       XDG_CONFIG_HOME="$D061_RUN_DIR/config" \
       XDG_DATA_HOME="$D061_RUN_DIR/data" \
+      D061_RUN_DIR="$D061_RUN_DIR" \
+      D061_STAGE_DIR="$D061_STAGE_DIR" \
       "$@"
 }
 

@@ -1,0 +1,5 @@
+// D-061 fixture root build file. AGP version is pinned in scripts/d061/pins.env
+// (AGP_VERSION) and must match; it is injected by stage.sh via -P.
+plugins {
+    id 'com.android.application' version '8.5.2' apply false
+}

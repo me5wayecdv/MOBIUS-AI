@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- defaultTrust flavor: platform default trust anchors only. The per-run
+     Mobius test CA is NOT trusted, so the lab proxy certificate chain must be
+     rejected. This is the negative-control flavor. -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false" />
+</network-security-config>

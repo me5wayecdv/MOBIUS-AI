@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+printf "%s\n" "DISABLED DRAFT: exact technical review required; no execution." >&2
+exit 78
 # D-061 infrastructure-only namespace capability check.
 #
 # The smallest possible demonstration of the containment property: create the

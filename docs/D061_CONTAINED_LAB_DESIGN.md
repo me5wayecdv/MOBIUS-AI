@@ -1,153 +1,129 @@
-# D-061 Contained Capture: Design Research (rev3, for review, no execution)
+# D-061 capture preparation checkpoint
 
-Status: research for technical review. No launch, no applied firewall rules,
-no network-namespace creation has happened or will happen before review
-disposition. This revision withdraws premises an independent review found
-unsound; the earlier ruleset sketches (rev1 in D061_CONTAINED_LAB_ASSESSMENT.md,
-rev2 circulated in draft) are superseded and must not be implemented.
+Status: draft research and preparation only. No namespace, firewall ruleset,
+emulator, proxy or fixture has been launched by this preparation. No capture,
+replay or TLS-gate capability has been verified. PR #112 must not be merged
+or used for execution until technical review.
 
-## 1. Scope trace: original objective vs later narrowing
+## Scope and authorship
 
-- Original proposal (2026-10-15, v2 PDF, verbatim from its generated source
-  transcript, stronger than repo history): mitmproxy is named for
-  "Interception and inspection of app network traffic in the test
-  environment", inside the dynamic analysis module (emulator/ADB, Frida).
-  Intake scope control blocks dynamic tests outside the declared app and
-  environment.
-- Earlier task board (commit d3277c4b): T104 mitmproxy adapter with request
-  replay, T105 VECTOR auth/TLS gates. No controlled-backend-only restriction.
-- Narrowing: "controlled lab backend only" first appears in the demo replan
-  (commit b1c89df4, 2026-11-15). No owner-sanctioned narrowing is
-  established; repo history alone is not owner acceptance, so the proposal
-  text above is the grounding.
+The October 15 proposal describes mitmproxy interception and inspection of
+app traffic. It is assistant-authored proposed content, not evidence that
+the owner accepted every detail. Earlier task-board entries T104/T105 name
+capture/replay and TLS/auth gates; the November 15 demo replan later adds a
+controlled-backend restriction. Repository text does not establish owner
+acceptance or authorize narrowing the deliverable.
 
-Consequence: lab-backend success cannot close original scope. Original
-capability still requires capture/replay against real target network
-behavior, with TLS/auth boundaries resolved and the CA route verified.
+A controlled fixture can prove named machinery using real mitmproxy capture,
+safe GET replay and TLS trust checks. That evidence must be labeled fixture
+or substitute-target evidence. It cannot establish Allsafe compatibility,
+arbitrary-app interception, pinning bypass or broad detection coverage.
+Conversely, the proposal alone cannot create a mandatory third-party-egress,
+system-CA or Allsafe requirement. Final acceptance remains to be reconciled
+against the owner's authenticated project instructions.
 
-## 2. Withdrawn premises (independent review findings, accepted)
+## Earlier assessment withdrawn
 
-1. Socket-cgroup classification is not universal isolation: nft_socket can
-   fail to classify packets without a full associated socket, and with a
-   policy-accept base chain such packets fail open. A target classifier plus
-   policy accept is therefore not proof of containment.
-2. Counter equality (total == permit + drop) proves only internal
-   consistency of classified packets; packets the classifier missed are
-   never counted. Counters cannot prove absence of egress.
-3. The QEMU-only process assumption is unestablished: emulator networking
-   helpers (for example netsim) may be separate or pre-existing processes
-   with inherited sockets outside any fresh cgroup.
-4. Broad `ct state established,related` permits are not endorsed: any
-   control exception needs narrow loopback, known-listener,
-   reply-direction semantics, and no `related` without justification.
-5. (rev1 error) A global output policy-drop would sever non-target runner
-   connectivity.
+D061_CONTAINED_LAB_ASSESSMENT.md records capability probes, not containment
+proof. Its cgroup-filtering design is superseded and must not be executed:
 
-Safety must therefore come from topology (no route exists), not from
-packet classification or counters. Counters and pcap remain evidence
-accounting, never safety claims.
+- A global output drop would break unrelated runner connectivity.
+- Socket-cgroup matching can miss unclassifiable packets. Policy accept then
+  fails open. Upstream kernel source is not a runner-kernel proof.
+- Classifier-scoped counters show internal consistency only, not missed egress.
+- QEMU-only networking was not established. Helpers and inherited sockets
+  matter. Broad established/related allowances were not justified.
 
-## 3. Research direction: no-uplink network namespace
+Probe runs 44875785657, 44876090990 and 44876211141 establish only observed
+runner properties and nft check-mode acceptance. No target was launched in
+those probes. Neither socket metadata nor rule acceptance proves isolation.
 
-Design under study (research only, not approved execution):
+## Candidate topology
 
-- One dedicated network namespace containing EVERYTHING the run needs:
-  the emulator process and every helper it spawns (netsim included if
-  present), the adb server, mitmproxy, the lab backend/mock origin, and
-  tcpdump. Inside the namespace only loopback is brought up. No veth, no
-  default route, no external interface of any kind.
-- Structural containment: with no route to any non-local address, the
-  namespace's own stack refuses egress ("network unreachable") regardless
-  of socket type, protocol, address family, or process identity. Nothing
-  depends on classifier correctness or counter completeness.
-- Verification by inspection, not inference: `ip netns exec mobius ip route`
-  and `ip -6 route` showing only loopback/link-local scope; host-side
-  forwarding sysctls confirmed unchanged; no NAT rules added anywhere.
-  These are complete, enumerable conditions.
-- No cross-namespace control plane: the driver script orchestrates inside
-  the namespace via `ip netns exec`; artifacts (pcap, logs, reports) leave
-  through the shared filesystem, which a network namespace does not
-  isolate.
-- Process inventory still required, for evidence completeness rather than
-  safety: pin the exact emulator build, enumerate all spawned helpers and
-  their namespace membership before app launch and at capture end, and
-  confirm no helper was pre-existing with inherited sockets (start every
-  component fresh inside the namespace).
+Research direction: a fresh no-uplink network namespace with loopback only,
+containing a fresh emulator, all networking helpers, internal adb, proxy and
+mock origin. No veth/uplink, host proxy or cross-namespace control connection.
+Artifact files can be collected separately.
 
-Open research items before any execution proposal:
+Threat model: trusted-lab accidental-egress containment, not hostile host-code
+isolation. Membership and runtime hygiene are safety-relevant. A network
+namespace does not close inherited sockets or block filesystem broker sockets.
+The full harness therefore needs reviewed FD closure, private runtime/HOME/AVD,
+proxy-environment removal, broker-path isolation and unprivileged execution.
+All links, addresses, all route tables, policy rules, namespace memberships,
+processes/helpers and sockets need checked inventories before app launch.
+Versions and hashes must be pinned and recorded. Cleanup must stop helpers
+before final inventory and removal. No universal-byte assurance is claimed.
 
-1. Runner capability: probe showed passwordless sudo and cgroup2fs, but
-   netns creation (CAP_NET_ADMIN under sudo) is NOT yet probed on the free
-   runners. Listed as unprobed; would be a read-mostly capability check.
-2. Emulator inventory: which helpers the pinned emulator build spawns
-   (netsimd or successors), which can be disabled by flag, and which must
-   be included. Source: AOSP netsim development guide and the pinned
-   emulator version's own docs.
-3. Emulator boot with zero upstream: whether boot completes with slirp
-   unable to reach any resolver or host service (expected: yes, with
-   guest networking degraded; to be demonstrated, not assumed).
-4. adb-in-namespace flow: adb server and emulator co-located in the
-   namespace; confirm no component expects a host-side adb server.
+## Exact infrastructure-only candidate
 
-## 4. Traffic source and behavior caveats (unchanged, still binding)
+`scripts/d061/infra_netns_check.py` is a standalone candidate for exact-script
+review. It is separate from the draft emulator scripts and requires an explicit
+review-authorized flag. No one has executed it.
 
-- The pinned Allsafe APK hardcodes external endpoints (httpbin.io,
-  infosecadventures.io, firebaseappcheck.googleapis.com; static evidence in
-  PHANTOM_FEASIBILITY.md). Under any no-uplink containment it produces only
-  denied-attempt evidence, never successful sessions or content.
-- Containment changes target behavior (DNS failure, refusal, TLS fallback,
-  pinning aborts); all capture under containment is contained-behavior
-  evidence and must be reported as such.
-- A purpose-built lab target is a substitute target and can never close the
-  original objective for real targets.
+It proposes: root orchestration of one fresh named network namespace, loopback
+only, JSON topology inventories, route lookups for documentation addresses
+without sending packets, then a fresh isolated Python process as `nobody` with
+no capabilities and no-new-privileges, no inherited environment/network FDs,
+and a bounded loopback-only roundtrip. It proposes bounded cleanup and strict
+host-topology-before/after comparison. No emulator/proxy/app or package install.
 
-## 5. Honest substitute-target route (exercises real capability)
+A pass would establish only that small infrastructure test. It would not
+clear the full harness or establish broker-path isolation for emulator tooling.
+Review must settle the exact candidate before even this check is run.
 
-Reviewer-endorsed framing: a controlled lab app built to explicitly trust a
-Mobius test CA can honestly exercise the REAL mitmproxy capture, request
-replay, and TLS/auth gate machinery (proxy configuration, certificate
-presentation, capture format, replay) without system-CA modification and
-without unconstrained external traffic. Inside the no-uplink namespace the
-proxy's upstream is a loopback mock origin. All results remain labeled
-substitute-target evidence; they demonstrate the T104/T105 machinery, not
-real-target coverage.
+## Full fixture harness: incomplete draft, disabled
 
-## 6. Original capability: explicit decisions, none assumed
+The shell entry points are disabled. The workflow is stored as a `.disabled`
+draft outside `.github/workflows`, so no dispatch or automatic execution exists.
+The proposed adapter is under scripts/d061/draft, NOT wired into product code.
 
-1. Third-party endpoint scope: original-scope capture of Allsafe's real
-   traffic requires real egress to its hardcoded third-party endpoints.
-   That is an owner/authority question (standing constraint: no unapproved
-   third-party communication), not engineering.
-2. CA route for real targets: user/system CA install changes the emulator
-   image; Allsafe bundles okhttp CertificatePinner and its runtime pinning
-   posture is unverified.
-3. Pinning bypass conflicts with the standing constraint disabling
-   state-changing PoC adapters; lifting it is a separate decision.
-4. Request replay (T104) against real endpoints needs decision 1.
+Prepared draft parts: dependency-manifest candidate, staging script, emulator
+launcher sketch, mock TLS backend/receipt ledger, fixture APK source with trust
+flavors, product-API journey sketch and adapter sketch. They are NOT runnable
+or accepted merely because the files exist. Known unresolved defects include:
 
-## 7. Honest D-061 state
+- Shell inventory functions mostly record instead of enforcing complete expected
+  state; inherited-FD closure and broker-path isolation are not implemented.
+- Exact pinned emulator helper inventory is absent. Actual component versions
+  are printed, not yet asserted against an approved runtime manifest.
+- Working-directory/Python-environment propagation, SDK archive layout and
+  mitmproxy hostname routing need source-backed correction.
+- Unprivileged tcpdump has no reviewed capture privilege design. Evidence must
+  be stopped/flushed before hashing and verified, not counted while live.
+- Wrong-hostname control currently conflates chain rejection with hostname
+  rejection. It needs a chain trusted for that control but wrong SAN, with
+  independently verified rejection reason. Positive response JSON parsing
+  must replace a brittle whitespace-sensitive string check.
+- Replay currently reissues a known URL, not a captured request. Use the actual
+  captured safe GET and prove a second backend receipt of its fresh run nonce.
+- The second fixture package is not covered by the current primary-APK plan.
+  Give each target its own correct product authorization and execution record.
+- Product schema/allowlist/action integration and approval rejection tests are
+  not implemented. No bypass or expanded read-only classification is allowed.
+- New toolchain dependencies are proposed, not installed or approved. Gradle,
+  AGP, Android build-tools/platform, mitmproxy and tcpdump need disposition.
+  Transitive downloads are not fully locked; a freeze after resolution is not
+  a reproducible dependency lock. No dependency license is accepted here.
+- Runtime bounds and cleanup error propagation need review; a comment is not
+  a timeout or an enforced safety gate.
 
-- Original capability (mitmproxy interception/inspection of real target
-  traffic, replay, TLS/auth gates against real targets): OPEN, gated on the
-  decisions in section 6.
-- Contained-lab mechanism: PREPARED at research level. cgroup-based
-  filtering withdrawn; no-uplink namespace is the grounded direction,
-  pending the open items in section 3.3 and technical review.
-- Substitute-target machinery demonstration (mitmproxy capture/replay/TLS
-  gates against a lab app trusting a test CA): available once the namespace
-  design clears review; closes nothing original.
-- Real-target deliverable available today: denied-attempt evidence only.
+Fixture trust must preserve normal hostname validation, reject an untrusted CA
+and wrong hostname for the intended reasons, and keep upstream TLS verification
+on. Safe GET request replay means a second origin receipt, not response replay.
+A purpose-built fixture trusting a test CA needs no system-CA change or arbitrary
+pinning bypass. Containment can change app behavior; results must say so.
 
-## 8. Evidence references
+## Verification performed
 
-- Capability probe runs: 44875785657, 44876090990, 44876211141 (branch
-  d061-capability-probe; read-only plus nft --check and transient cgroup
-  creation; no applied ruleset, no target, no namespace).
-- Proposal text: 2026-10-15 generation transcript (section 1).
-- Task board commits: d3277c4b (T104/T105, unrestricted), b1c89df4
-  (2026-11-15 narrowing).
-- Reviewer sources (via main): Linux net/netfilter/nft_socket.c upstream
-  (not runner-kernel matched), AOSP netsim development guide, nftables
-  conntrack documentation, mitmproxy Android certificate documentation.
-- Related: docs/D061_CONTAINED_LAB_ASSESSMENT.md (rev1, superseded),
-  docs/PROJECT_CHECKPOINT.md.
+Only static syntax checks and the unchanged baseline Python suite were run.
+Baseline: 968 passed, 20 skipped. This does not verify the new drafts, emulator
+build, namespace capability, APK build or capture path. No model call or retry.
+
+## Continuation
+
+1. Review the standalone infrastructure candidate exactly as committed.
+2. Fix the full-harness defects above without launching it or adding dependencies.
+3. Submit the corrected exact harness for safety and scope review.
+4. Only after disposition, run the authorized bounded slice and preserve real
+   evidence. Until then D-061 remains unverified, neither optional nor complete.

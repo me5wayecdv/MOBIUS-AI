@@ -1,0 +1,70 @@
+# D-061 contained capture: substitute-fixture machinery slice in a no-uplink
+# network namespace.
+#
+# MANUAL DISPATCH ONLY, AND EXECUTION IS HELD: this workflow must not be
+# dispatched until technical review of scripts/d061/* dispositions it. It
+# never runs on push or pull_request.
+#
+# What it does when eventually dispatched: stage pinned dependencies and
+# build the fixture (the only network-using phase, pinned URLs only), run the
+# infrastructure-only capability check, then the full contained run with the
+# fixture traversing the real Mobius authorization/execution path against a
+# loopback mock origin, with complete inventories and host-topology proof.
+#
+# What a pass proves: the named machinery (proxy capture, safe-GET request
+# replay, TLS trust gates) works against a substitute fixture target. It
+# proves nothing about Allsafe or any real target, and it does not close the
+# original D-061 objective.
+
+name: D-061 contained capture (fixture slice, held)
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: d061-contained-capture
+  cancel-in-progress: true
+
+jobs:
+  contained-capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Mobius and CI tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq tcpdump
+
+      - name: Enable KVM group perms
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Stage pinned dependencies and build fixture
+        run: bash scripts/d061/stage.sh
+
+      - name: Infrastructure-only namespace capability check
+        run: bash scripts/d061/netns_capability_check.sh
+
+      - name: Contained fixture run (no-uplink namespace)
+        run: bash scripts/d061/run_in_netns.sh
+
+      - name: Upload run evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: d061-contained-capture
+          path: |
+            d061-output/
+            /tmp/d061-run/inventory/
+          if-no-files-found: ignore
