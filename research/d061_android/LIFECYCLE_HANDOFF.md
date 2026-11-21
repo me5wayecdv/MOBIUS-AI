@@ -74,3 +74,10 @@ approved operation+teardown+collection130s total400s. The proposed inner driver
 wall timeout420s and trusted outer reaping/sanitation wall timeout480s are global
 infrastructure ceilings, not extensions to the approved60s action. These values
 are source proposals only; no timing/compatibility experiment has occurred.
+
+Pure source protocol checkpoint: handoff_protocol.py closes provisioning keys,
+public byte/source digests, zero-preapproval-app/receipt counts, exact typed
+commit, distinct phase ceilings and failure-terminal state transitions. It has
+no launcher or file/network effects and cannot create an approval. Unit tests
+exercise substitutions, extra keys, premature traffic and illegal ordering;
+they do not supply the still-missing trusted root relay/control mounts.

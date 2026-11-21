@@ -141,3 +141,54 @@ def test_owned_absence_refuses_missing_postlaunch_evidence(tmp_path,monkeypatch)
     assert not result['complete'] and not result['stage_required_records_complete']
     assert 'namespace-setup.json' in result['missing_records']
     assert 'work/evidence/owned-app-launch.json' in result['missing_records']
+
+
+def test_handoff_closed_commit_cannot_change_actual_apk_or_add_instructions(monkeypatch):
+    from dataclasses import asdict,replace
+    import pytest
+    monkeypatch.syspath_prepend(str(ROOT))
+    from handoff_protocol import make_commit,validate_commit,canonical,digest
+    from profile import OwnedAppRequest
+    request=OwnedAppRequest(apk_sha256='a'*64,public_ca_sha256='b'*64,plan_sha256='c'*64,
+        authorization_id='ath_unit',approval_id='apr_unit',investigation_id='scn_unit',plan_id='poc_unit',nonce='d'*32)
+    ready={'version':'owned-android-ready/1','profile':request.profile,'package':request.package,
+        'apk_sha256':request.apk_sha256,'public_ca_sha256':request.public_ca_sha256,'build_json_sha256':'e'*64,
+        'source_manifest_sha256':'f'*64,'original_count':0,'origin_receipt_count':0,'apk_installed':False,'apk_launched':False}
+    commit=make_commit(request,ready_metadata=ready,ready_metadata_sha256=digest(canonical(ready)))
+    assert validate_commit(commit,ready_metadata=ready,expected_request=request)==request
+    with pytest.raises(ValueError):validate_commit({**commit,'argv':['unrelated']},ready_metadata=ready,expected_request=request)
+    with pytest.raises(ValueError):validate_commit(commit,ready_metadata=ready,expected_request=replace(request,nonce='e'*32))
+    with pytest.raises(ValueError):make_commit(replace(request,apk_sha256='e'*64),ready_metadata=ready,
+        ready_metadata_sha256=digest(canonical(ready)))
+    with pytest.raises(ValueError):make_commit(request,ready_metadata=ready,ready_metadata_sha256='f'*64)
+
+
+def test_handoff_stage_budgets_and_no_retry_after_failure(monkeypatch):
+    import pytest
+    monkeypatch.syspath_prepend(str(ROOT))
+    from handoff_protocol import LifecycleState
+    state=LifecycleState()
+    with pytest.raises(ValueError):state.advance('committed',seconds=1)
+    with pytest.raises(ValueError):state.advance('provisioned',seconds=241)
+    with pytest.raises(ValueError):state.advance('provisioned',seconds=10,originals=1)
+    assert state.advance('provisioned',seconds=240)=='ready'
+    with pytest.raises(ValueError):state.advance('committed',seconds=31)
+    assert state.advance('committed',seconds=30)=='committed'
+    with pytest.raises(ValueError):state.advance('operation_returned',seconds=61)
+    assert state.advance('operation_returned',seconds=60,originals=1,receipts=2)=='operation_returned'
+    assert state.advance('runtime_absent',seconds=60)=='runtime_absent'
+    assert state.advance('collected',seconds=10)=='collected'
+    failed=LifecycleState();failed.fail('TimeoutError')
+    with pytest.raises(ValueError):failed.advance('provisioned',seconds=1)
+
+
+def test_handoff_provisioning_refuses_preapproval_traffic_and_extra_fields(monkeypatch):
+    import pytest
+    monkeypatch.syspath_prepend(str(ROOT))
+    from handoff_protocol import validate_provisioned,READY_VERSION
+    metadata={'version':READY_VERSION,'profile':'owned-android-fixed-loopback-v1','package':'org.mobius.ownedfixture',
+        'apk_sha256':'a'*64,'public_ca_sha256':'b'*64,'build_json_sha256':'c'*64,'source_manifest_sha256':'d'*64,
+        'original_count':0,'origin_receipt_count':0,'apk_installed':False,'apk_launched':False}
+    for key,value in [('original_count',1),('apk_installed',True),('origin_receipt_count',True),('extra','instructions')]:
+        with pytest.raises(ValueError):validate_provisioned({**metadata,key:value},apk=b'unit-only',public_ca_der=b'unit-only',
+            build_json=b'{}',expected_source_manifest_sha256='d'*64)
