@@ -36,11 +36,12 @@ from dataclasses import replace
 from sqlalchemy.orm import Session
 
 from ..adapters.android_manifest import parse_apk
-from ..adapters.events import SqlEventStore
+from ..adapters.events import SqlEventStore, utcnow
 from ..adapters.flow_adapt import adapt_code
 from ..adapters.provider_payload import ProviderAnalysisResult, dex_ledger_complete
-from ..adapters.models import ApplicationRow, AuthorizationRow, InvestigationRow
-from ..core.enums import EvidenceKind
+from ..adapters.models import ApplicationRow, AuthorizationRow, InvestigationRow, ObservationRow
+from ..core.enums import EvidenceKind, Fidelity, ObservationKind
+from ..core.ids import IdPrefix, new_id
 from ..core.flow import flow_scan_from_androguard
 from ..core.providers import ProviderExposure, detect_provider_exposures
 from ..core.reachability import MethodRef
@@ -327,6 +328,44 @@ class ProviderAnalysisService:
                     ),
                     produced_by=AGENT,
                 )
+                # Model proposals may cite observation IDs, not finding/evidence IDs.
+                # Persist the detector's bounded code slice as an inference observation
+                # so the evidence package does not reduce it to manifest-only context.
+                # No flow -> no invented path. This does not change any gate/verdict.
+                if operation.sink_flows:
+                    methods = list(dict.fromkeys(s.method for s in operation.sink_flows))
+                    sinks = list(dict.fromkeys(s.sink for s in operation.sink_flows))
+                    flow_text = '; '.join(
+                        f'{s.method} -> {s.sink}: {s.detail}' for s in operation.sink_flows
+                    )
+                    self._session.add(ObservationRow(
+                        id=new_id(IdPrefix.OBSERVATION), investigation_id=investigation_id,
+                        agent=AGENT, kind=ObservationKind.INFERENCE.value,
+                        fidelity=Fidelity.DECOMPILED.value, subject_type='component',
+                        subject_ref=exposure.provider,
+                        statement=(
+                            f'Bounded provider bytecode analysis for {exposure.provider} '
+                            f'{operation.operation}: {flow_text}. '
+                            f'Operation coverage_complete={operation.coverage_complete}, '
+                            f'flow_complete={operation.flow_complete}; package_dex_complete={dex_complete}. '
+                            'Only analyzed operation methods and resolved helpers are covered. '
+                            'This is static inference, not a runtime observation or exploitability proof.'
+                        ),
+                        attributes={
+                            # A bag of method refs is NOT an ordered caller path.
+                            'path': [], 'method_references': methods[:100],
+                            'sink_references': sinks[:100],
+                            'sink': sinks[0] if len(sinks)==1 else None,
+                            'guards': [f'{g.api}: {g.outcome}' for g in operation.guard_findings][:100],
+                            'index_truncated': not dex_complete,
+                            'exhaustive': False,  # no whole-program/absence inference from this slice
+                            'operation': operation.operation,
+                            'operation_coverage_complete': operation.coverage_complete,
+                            'flow_complete': operation.flow_complete,
+                        },
+                        maswe=[], confidence=0.6,
+                        evidence_refs=[evidence.id], created_at=utcnow(),
+                    ))
                 attributes = _gate_attributes(exposure, operation)
                 sink_kinds = ", ".join(
                     sorted({s.sink for s in operation.sink_flows})

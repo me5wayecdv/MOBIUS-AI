@@ -157,6 +157,10 @@ class EvidencePackageBuilder:
             attrs = row.attributes or {}
             path = [str(item)[:1000] for item in attrs.get("path", []) if isinstance(item, str)]
             methods.update(path)
+            # Provider flow locations are an unordered set, not a caller chain.
+            explicit_methods = [str(item)[:1000] for item in attrs.get('method_references', []) if isinstance(item,str)][:self.max_methods]
+            explicit_sinks = [str(item)[:1000] for item in attrs.get('sink_references', []) if isinstance(item,str)][:100]
+            methods.update(explicit_methods); sinks.update(explicit_sinks)
             sink = attrs.get("sink")
             if isinstance(sink, str) and sink:
                 sinks.add(sink[:1000])
@@ -172,6 +176,8 @@ class EvidencePackageBuilder:
                 "attributes": {
                     "reachability": attrs.get("reachability"),
                     "path": path[: self.max_methods],
+                    "method_references": explicit_methods,
+                    "sink_references": explicit_sinks,
                     "sink": sink,
                     "guards": list(attrs.get("guards", []))[:100],
                     "index_truncated": bool(attrs.get("index_truncated", False)),
