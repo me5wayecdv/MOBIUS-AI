@@ -123,3 +123,34 @@ def test_evidence_package_limits_are_explicit_and_mark_truncation(
 def test_evidence_package_api_enforces_scan_owner(client, ctx):
     response = client.get("/api/v1/scans/not-a-real-scan/evidence-package")
     assert response.status_code == 404
+
+
+def test_explicit_method_refs_clipping_is_disclosed_not_a_caller_path(session,store,future_iso):
+    scan=_investigation(session,store,future_iso)
+    _,obs=_seed_context(session,store,scan,'com.example.Entry')
+    obs.attributes={'path':[], 'method_references':['C.first','C.second'],
+                    'sink_references':['SQLiteDatabase.query'], 'guards':[],
+                    'operation':'read', 'operation_coverage_complete':False,
+                    'flow_complete':False, 'package_dex_complete':True}
+    session.flush()
+    p=EvidencePackageBuilder(session,max_methods=1).build(scan).as_dict()
+    assert p['truncated'] is True
+    assert len(p['method_references'])==1
+    a=p['observations'][0]['attributes']
+    assert a['path']==[] and a['references_clipped'] is True
+    assert a['operation']=='read'
+    assert a['operation_coverage_complete'] is False and a['flow_complete'] is False
+    assert a['package_dex_complete'] is True
+    assert any('omitted' in s for s in p['limitations'])
+
+
+def test_aggregate_method_reference_clipping_sets_package_truncated(session,store,future_iso):
+    scan=_investigation(session,store,future_iso)
+    _,a=_seed_context(session,store,scan,'com.example.One')
+    _,b=_seed_context(session,store,scan,'com.example.Two')
+    a.attributes={'path':[],'method_references':['C.first']}
+    b.attributes={'path':[],'method_references':['C.second']}
+    session.flush()
+    p=EvidencePackageBuilder(session,max_methods=1).build(scan).as_dict()
+    assert p['truncated'] is True and len(p['method_references'])==1
+    assert all(o['attributes']['references_clipped'] is False for o in p['observations'])

@@ -155,16 +155,24 @@ class EvidencePackageBuilder:
             refs = [str(ref) for ref in (row.evidence_refs or [])]
             evidence_ids.update(refs)
             attrs = row.attributes or {}
-            path = [str(item)[:1000] for item in attrs.get("path", []) if isinstance(item, str)]
-            methods.update(path)
-            # Provider flow locations are an unordered set, not a caller chain.
-            explicit_methods = [str(item)[:1000] for item in attrs.get('method_references', []) if isinstance(item,str)][:self.max_methods]
-            explicit_sinks = [str(item)[:1000] for item in attrs.get('sink_references', []) if isinstance(item,str)][:100]
-            methods.update(explicit_methods); sinks.update(explicit_sinks)
-            sink = attrs.get("sink")
-            if isinstance(sink, str) and sink:
-                sinks.add(sink[:1000])
-            guards.update(str(item)[:1000] for item in attrs.get("guards", []) if isinstance(item, str))
+            def bounded_refs(key, cap):
+                values = attrs.get(key, [])
+                if not isinstance(values,list): return [], True
+                strings = [v for v in values if isinstance(v,str)]
+                clipped = len(strings)>cap or any(len(v)>1000 for v in strings[:cap])
+                return [v[:1000] for v in strings[:cap]], clipped
+            path, path_clip = bounded_refs('path',self.max_methods)
+            explicit_methods, methods_clip = bounded_refs('method_references',self.max_methods)
+            explicit_sinks, sinks_clip = bounded_refs('sink_references',100)
+            selected_guards, guards_clip = bounded_refs('guards',100)
+            methods.update(path); methods.update(explicit_methods); sinks.update(explicit_sinks)
+            sink = attrs.get('sink')
+            sink_clip = isinstance(sink,str) and len(sink)>1000
+            if isinstance(sink,str) and sink: sinks.add(sink[:1000]); sink=sink[:1000]
+            guards.update(selected_guards)
+            statement_clip = bool(attrs.get('statement_clipped')) or len(row.statement)>4000
+            references_clip = bool(attrs.get('references_clipped')) or path_clip or methods_clip or sinks_clip or guards_clip or sink_clip
+            if statement_clip or references_clip: truncated=True
             observations.append({
                 "id": row.id,
                 "agent": row.agent,
@@ -179,9 +187,17 @@ class EvidencePackageBuilder:
                     "method_references": explicit_methods,
                     "sink_references": explicit_sinks,
                     "sink": sink,
-                    "guards": list(attrs.get("guards", []))[:100],
+                    "guards": selected_guards,
+                    "operation": attrs.get("operation"),
+                    "statement_clipped": statement_clip,
+                    "references_clipped": references_clip,
                     "index_truncated": bool(attrs.get("index_truncated", False)),
                     "exhaustive": attrs.get("exhaustive"),
+                    # Independent scope flags survive statement truncation. A
+                    # complete package is not proof of complete operation/flow.
+                    "package_dex_complete": attrs.get("package_dex_complete"),
+                    "operation_coverage_complete": attrs.get("operation_coverage_complete"),
+                    "flow_complete": attrs.get("flow_complete"),
                 },
                 "maswe": list(row.maswe or []),
                 "confidence": row.confidence,
@@ -306,6 +322,7 @@ class EvidencePackageBuilder:
                 except (OSError, UnicodeError, json.JSONDecodeError, TypeError):
                     source_integrity_limited = True
 
+        if len(methods)>self.max_methods: truncated=True
         limitations = [
             "Method references are bytecode-derived identifiers; reachability does not prove tainted data flow or exploitability.",
         ]

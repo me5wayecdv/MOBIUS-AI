@@ -338,28 +338,36 @@ class ProviderAnalysisService:
                     flow_text = '; '.join(
                         f'{s.method} -> {s.sink}: {s.detail}' for s in operation.sink_flows
                     )
+                    flow_text_clipped = len(flow_text)>4096
+                    flow_text = flow_text[:4096]
+                    guards = [f'{g.api}: {g.outcome}' for g in operation.guard_findings]
                     self._session.add(ObservationRow(
                         id=new_id(IdPrefix.OBSERVATION), investigation_id=investigation_id,
                         agent=AGENT, kind=ObservationKind.INFERENCE.value,
                         fidelity=Fidelity.DECOMPILED.value, subject_type='component',
                         subject_ref=exposure.provider,
                         statement=(
-                            f'Bounded provider bytecode analysis for {exposure.provider} '
-                            f'{operation.operation}: {flow_text}. '
-                            f'Operation coverage_complete={operation.coverage_complete}, '
-                            f'flow_complete={operation.flow_complete}; package_dex_complete={dex_complete}. '
+                            # Caveats MUST precede flow text: the package truncates
+                            # observation statements at 4000 chars.
+                            'Bounded provider bytecode inference, NOT runtime or exploitability proof. '
                             'Only analyzed operation methods and resolved helpers are covered. '
-                            'This is static inference, not a runtime observation or exploitability proof.'
+                            f'Operation coverage_complete={operation.coverage_complete}; '
+                            f'flow_complete={operation.flow_complete}; package_dex_complete={dex_complete}. '
+                            f'Provider {exposure.provider}, operation {operation.operation}. '
+                            f'Flow observations: {flow_text}'
                         ),
                         attributes={
                             # A bag of method refs is NOT an ordered caller path.
                             'path': [], 'method_references': methods[:100],
                             'sink_references': sinks[:100],
                             'sink': sinks[0] if len(sinks)==1 else None,
-                            'guards': [f'{g.api}: {g.outcome}' for g in operation.guard_findings][:100],
+                            'guards': guards[:100],
+                            'statement_clipped': flow_text_clipped,
+                            'references_clipped': len(methods)>100 or len(sinks)>100 or len(guards)>100,
                             'index_truncated': not dex_complete,
                             'exhaustive': False,  # no whole-program/absence inference from this slice
                             'operation': operation.operation,
+                            'package_dex_complete': dex_complete,
                             'operation_coverage_complete': operation.coverage_complete,
                             'flow_complete': operation.flow_complete,
                         },

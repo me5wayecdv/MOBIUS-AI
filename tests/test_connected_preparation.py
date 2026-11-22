@@ -114,6 +114,11 @@ def test_preparation_through_actual_api_lifecycle_with_supplied_worker_payloads(
     # API cross-checks the supplied worker ledger against the archive metadata.
     supplied['dex_coverage'][0]['size_bytes']=len(FIXTURE_DEX.read_bytes())
     if not complete:
+        # Force flow text well beyond package's 4000-char statement cap.
+        import copy
+        flow=supplied['exposures'][0]['operations'][0]['sink_flows'][0]
+        flow['detail']='detail '*250
+        supplied['exposures'][0]['operations'][0]['sink_flows']=[copy.deepcopy(flow) for _ in range(4)]
         supplied['exposures'][0]['operations'][0]['coverage_complete']=False
         supplied['exposures'][0]['operations'][0]['flow_complete']=False
         supplied['exposures'][0]['operations'][0]['caller_check_absent']=None
@@ -136,14 +141,22 @@ def test_preparation_through_actual_api_lifecycle_with_supplied_worker_payloads(
     assert p['observations'] and p['evidence']
     obs=[o for o in p['observations'] if o['subject_ref']=='com.example.NotesProvider' and o['agent']=='SPECTRE' and o['statement'].startswith('Bounded provider bytecode')]
     assert len(obs)==1 and obs[0]['kind']=='inference' and obs[0]['confidence']<1
-    assert 'not a runtime observation' in obs[0]['statement']
+    assert 'NOT runtime or exploitability proof' in obs[0]['statement']
     assert obs[0]['attributes']['exhaustive'] is False
     assert obs[0]['attributes']['path']==[]
     assert obs[0]['attributes']['method_references']==['com.example.NotesProvider.query']
     assert obs[0]['evidence_refs'][0] in {e['id'] for e in p['evidence']}
     assert 'SQLiteDatabase.rawQuery' in p['sink_references']
+    assert obs[0]['attributes']['operation']=='read'
+    assert obs[0]['attributes']['operation_coverage_complete'] is complete
+    assert obs[0]['attributes']['flow_complete'] is complete
     if not complete:
+        assert len(obs[0]['statement'])==4000
+        assert obs[0]['attributes']['statement_clipped'] is True
+        assert p['truncated'] is True
         assert 'coverage_complete=False' in obs[0]['statement']
+        assert 'flow_complete=False' in obs[0]['statement']
+        assert 'Only analyzed operation methods and resolved helpers' in obs[0]['statement']
         assert all(f['status']!='confirmed' for f in p['findings'] if f['category']=='exported-provider-unprotected-sink')
     # The successful provider apply occurred while SURFACE_READY; SPECTRE then
     # advances the actual FSM. Reversing this order fails the next enqueue.
