@@ -39,11 +39,17 @@ def fixed_fixture() -> bytes:
     return stream.getvalue()
 
 
-def run_canary(apk:bytes,request,upload,*,clock=time.monotonic,sleep=time.sleep,budget=900)->dict:
+def run_canary(apk:bytes,request,upload,*,expect_worker_id:str,clock=time.monotonic,sleep=time.sleep,budget=900)->dict:
+    if re.fullmatch(r"[A-Za-z0-9_.-]{1,128}",expect_worker_id) is None:raise ValueError("explicit literal worker identity required")
     deadline=clock()+budget
     def req(method,path,body=None):
         if clock()>=deadline:raise TimeoutError('canary shared deadline')
         return request(method,path,body)
+    # No writes if this capability is missing, fails or shows any application.
+    # Current API has no applications-list route: intentionally fail closed until
+    # an independently reviewed fresh-host attestation seam exists.
+    applications=req('GET','/applications')
+    if applications != []:raise ValueError('empty applications list required before any write')
     app=upload(apk)
     sha=hashlib.sha256(apk).hexdigest()
     if app.get('sha256')!=sha:raise ValueError('uploaded digest mismatch')
@@ -64,7 +70,7 @@ def run_canary(apk:bytes,request,upload,*,clock=time.monotonic,sleep=time.sleep,
             if result.get('status')=='succeeded':break
             if result.get('status') not in ('queued','running'):raise ValueError('worker failed or returned unknown state')
             sleep(min(1,max(0,deadline-clock())))
-        if not result.get('worker_id') or not result.get('started_at') or not result.get('finished_at'):
+        if result.get('worker_id')!=expect_worker_id or not result.get('started_at') or not result.get('finished_at'):
             raise ValueError('completed worker provenance missing')
         req('POST',stem+'/'+job_id+'/apply')
         applied=req('GET',stem+'/'+job_id)
@@ -86,6 +92,7 @@ def run_canary(apk:bytes,request,upload,*,clock=time.monotonic,sleep=time.sleep,
 def main()->int:
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--api',required=True)
+    parser.add_argument('--expect-worker-id',required=True)
     parser.add_argument('--execute-local-canary',action='store_true',help='Required explicit acknowledgement, not permission')
     args=parser.parse_args()
     url=urlparse(args.api)
@@ -103,7 +110,7 @@ def main()->int:
         return transport.call('POST','/applications',raw=raw,headers={'Content-Type':f'multipart/form-data; boundary={boundary}'})
     import json
     try:
-        result=run_canary(fixed_fixture(),transport.call,upload)
+        result=run_canary(fixed_fixture(),transport.call,upload,expect_worker_id=args.expect_worker_id)
     except Exception as exc:
         # Never dump arbitrary provider/API bodies or local connection details.
         print(json.dumps({'status':'failed','error_type':type(exc).__name__}));return 1

@@ -11,22 +11,23 @@ def module():
     m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m);return m
 
 
-@pytest.mark.parametrize('failure',[None,'failed','no_worker','no_applied','digest','bad_id','timeout'])
+@pytest.mark.parametrize('failure',[None,'failed','no_worker','no_applied','digest','bad_id','timeout','wrong_worker','nonempty_host'])
 def test_three_worker_route_and_fail_closed(failure):
     m=module();apk=m.fixed_fixture();sha=hashlib.sha256(apk).hexdigest();calls=[];now=[0];jid=str(uuid.uuid4())
     def request(method,path,body=None):
         calls.append((method,path));now[0]+=2 if failure=='timeout' else 0
+        if path=='/applications':return [{}] if failure=='nonempty_host' else []
         if path=='/authorizations':return {'id':'auth_test'}
         if path=='/scans':return {'id':'scn_test'}
         if method=='POST' and path.endswith('/jobs'):return {'job_id':'../x' if failure=='bad_id' else jid}
         if path.endswith('/apply'):return {}
         if '/jobs/' in path:
             return {'status':'failed' if failure=='failed' else 'succeeded',
-                'worker_id':None if failure=='no_worker' else 'offline-fake',
+                'worker_id':None if failure=='no_worker' else 'other-worker' if failure=='wrong_worker' else 'offline-fake',
                 'started_at':'unit','finished_at':'unit','applied':failure!='no_applied'}
         if path.endswith('/evidence-package'):return {'observations':[{'id':'unit'}],'evidence':[{'id':'unit'}]}
         return {'application':{'sha256':'b'*64 if failure=='digest' else sha,'package_name':'com.example.demo'}}
-    def run():return m.run_canary(apk,request,lambda _:{'id':'app_test','sha256':sha},clock=lambda:now[0],sleep=lambda _:None,budget=3)
+    def run():return m.run_canary(apk,request,lambda _:{'id':'app_test','sha256':sha},expect_worker_id='offline-fake',clock=lambda:now[0],sleep=lambda _:None,budget=3)
     if failure:
         with pytest.raises((ValueError,TimeoutError)):run()
     else:
@@ -57,6 +58,7 @@ def test_canary_through_actual_api_with_explicitly_supplied_completions(client,c
         assert result.status_code<300,result.text
         return result.json()
     def request(method,path,body=None):
+        if method=='GET' and path=='/applications':return [] # supplied future fresh-host capability, NOT current API
         result=client.request(method,'/api/v1'+path,json=body)
         assert result.status_code<300,result.text
         data=result.json()
@@ -72,6 +74,28 @@ def test_canary_through_actual_api_with_explicitly_supplied_completions(client,c
                 else:payload=code_index_payload(index_apk(raw),sha)
                 q.succeed(job.id,'offline-supplied-canary',payload,staged_sha256=sha);session.commit()
         return data
-    result=m.run_canary(raw,request,upload)
+    result=m.run_canary(raw,request,upload,expect_worker_id='offline-supplied-canary')
     assert result['status']=='canary_api_jobs_applied'
     assert len(result['jobs'])==3 and not result['provider_flow_semantics_proven']
+
+
+def test_current_api_has_no_fresh_host_capability_and_canary_refuses_before_upload(client):
+    m=module();writes=[]
+    def request(method,path,body=None):
+        response=client.request(method,'/api/v1'+path,json=body)
+        response.raise_for_status()
+        return response.json()
+    with pytest.raises(Exception):
+        m.run_canary(m.fixed_fixture(),request,lambda _:writes.append('upload'),expect_worker_id='unit')
+    assert writes==[]
+
+
+def test_connected_transport_import_has_no_side_effects(monkeypatch):
+    import socket,subprocess,inspect
+    def refused(*args,**kwargs):raise AssertionError('import attempted external effect')
+    monkeypatch.setattr(socket.socket,'connect',refused)
+    monkeypatch.setattr(subprocess,'Popen',refused)
+    spec=importlib.util.spec_from_file_location('import_only_connected',Path(__file__).parents[1]/'scripts/connected_journey_smoke.py')
+    transport=importlib.util.module_from_spec(spec);spec.loader.exec_module(transport)
+    assert {'raw','headers'} <= set(inspect.signature(transport.call).parameters)
+    assert transport.failures==[] and transport.CALL_DEADLINE is None

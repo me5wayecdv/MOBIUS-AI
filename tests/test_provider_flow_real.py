@@ -10,7 +10,7 @@ def fixture_apk(*, caller_controlled=True):
     spec=importlib.util.spec_from_file_location('provider_fixture',root/'fixtures/dex/build_provider_flow_dex.py')
     m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
     import sys
-    sys.path.insert(0,str(root))
+    if str(root) not in sys.path:sys.path.insert(0,str(root))
     from _axml import El,encode,ANDROID_NS as A,TYPE_STRING as S,TYPE_INT_BOOLEAN as B
     manifest=El('manifest',attrs=[('','package',S,'com.example.demo')],children=[El('application',children=[
         El('provider',attrs=[(A,'name',S,'.NotesProvider'),(A,'authorities',S,'com.example.demo.notes'),(A,'exported',B,True)])])])
@@ -22,7 +22,7 @@ def fixture_apk(*, caller_controlled=True):
     return out.getvalue()
 
 
-def test_actual_provider_bytecode_yields_read_flow_and_negative_helper_does_not():
+def test_actual_provider_bytecode_yields_read_flow():
     from mobius.adapters.android_manifest import parse_apk
     from mobius.adapters.flow_adapt import adapt_code
     from mobius.core.providers import detect_provider_exposures
@@ -35,7 +35,6 @@ def test_actual_provider_bytecode_yields_read_flow_and_negative_helper_does_not(
     assert read.sink_flows,read
     assert all(f.method.startswith('com.example.demo.NotesProvider->query(') for f in read.sink_flows)
     assert all('rawQuery' in f.detail for f in read.sink_flows)
-    assert not any('negative' in f.method for f in read.sink_flows)
 
 
 def test_constant_query_variant_is_a_real_bytecode_negative_control():

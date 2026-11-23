@@ -101,10 +101,11 @@ def build(*, caller_controlled: bool = True) -> bytes:
 
     align(4)
     class_data_off = at()
-    direct = sorted(app, key=lambda name: M[(CLS, name)])
-    class_data = uleb(0) + uleb(0) + uleb(0) + uleb(len(direct))
+    # Instance public methods belong to virtual_methods, not direct_methods.
+    virtual = sorted(app, key=lambda name: M[(CLS, name)])
+    class_data = uleb(0) + uleb(0) + uleb(0) + uleb(len(virtual))
     previous = 0
-    for name in direct:
+    for name in virtual:
         method_idx = M[(CLS, name)]
         class_data += uleb(method_idx - previous) + uleb(0x1) + uleb(code_offsets[name])
         previous = method_idx

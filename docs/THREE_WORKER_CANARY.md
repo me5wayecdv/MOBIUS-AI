@@ -18,6 +18,7 @@ API startup, CI or import. No new images are published. No model/device is used.
 
 ## Host/deployment contract
 
+Use a disposable host: Docker access for the host consumer is root-equivalent.
 Use an empty dedicated PostgreSQL database, fresh artifact/workspace directories
 and one host queue consumer for this bounded canary. The current development
 analyst identity is a stub, so expose the API only on `127.0.0.1`. Do not expose
@@ -64,13 +65,14 @@ authorized by this recipe.
 
 ## Explicit canary invocation after authorization
 
-`python scripts/three_worker_canary.py --api http://127.0.0.1:8791 --execute-local-canary`
+`python scripts/three_worker_canary.py --api http://127.0.0.1:8791 --expect-worker-id <exact-configured-consumer-id> --execute-local-canary`
 
 The flag is an acknowledgement, NOT a grant. This creates application,
 authorization and investigation test records through the API. The synthetic
 record is labelled as a test record and is not the owner's permission. The
 client uploads fixed deterministic binary AXML plus the existing real DEX,
-then enqueues/waits/applies RECON, provider-analysis and DEX in that order.
+then enqueues/waits/applies API kinds `recon`, `provider-analysis` and `spectre`
+(DEX) in that order, requiring the exact configured worker ID on all three.
 No fake completion, direct DB result edits or inline route is used.
 
 All API work shares a 900-second deadline and the reused bounded HTTP transport.
@@ -99,3 +101,23 @@ Before any broader run: reconcile exact target and evidence audience, verify
 host/image provenance and resource bounds, choose a reviewed code-bearing lab
 contract, and get the required runtime confirmation. This recipe does none of
 those by itself.
+
+## Review hold: fresh-host capability is absent
+
+The client now requires `GET /applications` to return exactly an empty JSON list
+before its first write. The current product API does NOT expose that list route,
+so the executable client intentionally refuses before upload on the current API.
+The offline API lifecycle test supplies the missing read capability explicitly;
+it does NOT prove the current canary is executable or that the host is fresh.
+Do not remove/bypass this refusal. A reviewed freshness capability or a stronger
+explicit disposable-host attestation is needed before proposing a real run.
+
+The synthetic authorization is only a product test record, not owner permission.
+There are no model-consent, hypothesis, PoC, approvals or report routes in this
+client. Downstream static services enforce package/digest/intensity/expiry on the
+record but do not authenticate a human owner's legal authority. The development
+analyst stub must remain confined to the disposable test instance.
+
+Before runtime, independently verify container network denial and CPU/memory/disk/
+output/time enforcement on that host. Existing canary API results and offline
+tests do not establish those unverified limits.
