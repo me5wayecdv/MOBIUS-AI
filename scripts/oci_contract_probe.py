@@ -296,7 +296,8 @@ def main() -> int:
     before_a = snapshot(ws_a)
     before_b = snapshot(ws_b)
 
-    backend = OciBackend(runtime=runtime, binary_images={RECON_BINARY: image})
+    backend = OciBackend(runtime=runtime, binary_images={RECON_BINARY: image},
+                         run_label=os.environ.get("MOBIUS_CANARY_RUN_ID") or None)
 
     print("== stdout-only contract (recon/dex; the only contract this backend exposes)")
     report = run_probe(build_probe_command(backend, image, ws_a))

@@ -257,7 +257,8 @@ def run_once() -> bool:
             _run_jadx_job()
         else:
             binary, image, spec = _tool_for(kind, runtime)
-            backend = OciBackend(runtime=runtime, binary_images={binary: image})
+            backend = OciBackend(runtime=runtime, binary_images={binary: image},
+                                 run_label=os.environ.get("MOBIUS_CANARY_RUN_ID") or None)
             runner = ToolRunner(workspace_root=workspace_root, backend=backend, tools=(spec,))
             result = runner.invoke(investigation_id=scan_id, tool=spec.name, args={})
             output = _output_from_tool_result(kind, result)

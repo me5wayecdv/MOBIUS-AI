@@ -1,0 +1,132 @@
+# PREPARATION ONLY. Manual dispatch requires a separate confirmed runtime scope.
+# No model, emulator, external APK, artifact upload or external image publication.
+name: Manual fixed-fixture three-worker canary
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: fixed-three-worker-canary
+  cancel-in-progress: false
+jobs:
+  canary:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+      - name: Install project tooling
+        run: pip install -c workers/canary-constraints.txt -e '.[worker]'
+      - name: One fixed-fixture canary on disposable runner
+        shell: bash
+        env:
+          DOCKER_CONFIG: ${{ runner.temp }}/canary-docker-config
+          MOBIUS_ENV: test
+          MOBIUS_MODEL_PROVIDER: disabled
+          MOBIUS_WORKER_ID: fixed-three-worker-canary
+          MOBIUS_CANARY_WORKER_ID: fixed-three-worker-canary
+          MOBIUS_RECON_IMAGE: ghcr.io/me5wayecdv/mobius-recon@sha256:3874d22044f2452360e7bd94773ab9f8e4979f1fdc0adffd8f40f6fcfde9e789
+          MOBIUS_DEX_IMAGE: ghcr.io/me5wayecdv/mobius-dex@sha256:3ea8feba92f374825a60e75a94c557584a29a280f2c32b8bb2ec5535929f3f02
+        run: |
+          set -euo pipefail
+          umask 077
+          # Files remain job-local, never uploaded or dumped to shared logs.
+          ROOT="$(mktemp -d "$RUNNER_TEMP/mobius-canary.XXXXXXXX")"
+          mkdir -p "$DOCKER_CONFIG" "$ROOT/artifacts" "$ROOT/workspaces"
+          printf '{}' > "$DOCKER_CONFIG/config.json"
+          export MOBIUS_CANARY_RUN_ID
+          MOBIUS_CANARY_RUN_ID="$(python -c 'import uuid;print(uuid.uuid4())')"
+          export MOBIUS_DB_URL='postgresql+psycopg://mobius:canary_local_only@127.0.0.1:5432/mobius'
+          export MOBIUS_WORKER_DB_URL="$MOBIUS_DB_URL"
+          export MOBIUS_ARTIFACT_ROOT="$ROOT/artifacts"
+          export MOBIUS_WORKSPACE_ROOT="$ROOT/workspaces"
+          export MOBIUS_OCI_RUNTIME
+          MOBIUS_OCI_RUNTIME="$(command -v docker)"
+          unset MOBIUS_RECON_INLINE MOBIUS_PHANTOM_ADB MOBIUS_PHANTOM_SERIAL MOBIUS_PHANTOM_FRIDA
+          API_PID=''
+          WORKER_PID=''
+          PG_ID=''
+          REG_ID=''
+          STAGE=setup
+          cleanup() {
+            rc=$?
+            trap - EXIT INT TERM
+            for pid in "$WORKER_PID" "$API_PID"; do
+              if [ -n "$pid" ]; then kill -- -"$pid" 2>/dev/null || true; fi
+            done
+            sleep 1
+            for pid in "$WORKER_PID" "$API_PID"; do
+              if [ -n "$pid" ]; then
+                kill -KILL -- -"$pid" 2>/dev/null || true
+                wait "$pid" 2>/dev/null || true
+              fi
+            done
+            docker ps -aq --filter "label=org.mobius.canary-run=$MOBIUS_CANARY_RUN_ID" > "$ROOT/owned-container-ids" 2>> "$ROOT/cleanup.log" || true
+            while IFS= read -r id; do
+              if [[ "$id" =~ ^[0-9a-f]{12,64}$ ]]; then docker rm -f "$id" >> "$ROOT/cleanup.log" 2>&1 || true; fi
+            done < "$ROOT/owned-container-ids"
+            # IDs come only from this job's successful docker run outputs.
+            for id in "$PG_ID" "$REG_ID"; do
+              if [ -n "$id" ]; then docker rm -f "$id" >> "$ROOT/cleanup.log" 2>&1 || true; fi
+            done
+            if [ "$rc" -ne 0 ]; then printf 'STAGE=%s FAILED\n' "$STAGE"; fi
+            printf 'CANARY_JOB_EXIT=%s\n' "$rc"
+            exit "$rc"
+          }
+          trap cleanup EXIT
+          trap 'exit 130' INT
+          trap 'exit 143' TERM
+          PG_ID="$(docker run -d -e POSTGRES_USER=mobius -e POSTGRES_PASSWORD=canary_local_only -e POSTGRES_DB=mobius -p 127.0.0.1:5432:5432 postgres:16-alpine@sha256:f2f98726820d0342055351c6e9d36e705f5bfffb3dd53ff556325114b08afb6d)"
+          REG_ID="$(docker run -d -p 127.0.0.1:5000:5000 registry:2@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373)"
+          for i in $(seq 1 30); do
+            if docker exec "$PG_ID" pg_isready -U mobius -d mobius >> "$ROOT/pg.log" 2>&1; then break; fi
+            sleep 1
+          done
+          docker exec "$PG_ID" pg_isready -U mobius -d mobius >> "$ROOT/pg.log" 2>&1
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:5000/v2/ >> "$ROOT/registry.log" 2>&1; then break; fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:5000/v2/ >> "$ROOT/registry.log" 2>&1
+          docker pull "$MOBIUS_RECON_IMAGE" > "$ROOT/pull-recon.log" 2>&1
+          docker pull "$MOBIUS_DEX_IMAGE" > "$ROOT/pull-dex.log" 2>&1
+          STAGE=build
+          docker build -f workers/provider-image/Dockerfile.canary -t 127.0.0.1:5000/mobius-canary-provider:local . > "$ROOT/provider-build.log" 2>&1
+          docker push 127.0.0.1:5000/mobius-canary-provider:local > "$ROOT/provider-registry.log" 2>&1
+          export MOBIUS_PROVIDER_IMAGE
+          MOBIUS_PROVIDER_IMAGE="$(docker inspect --format '{{index .RepoDigests 0}}' 127.0.0.1:5000/mobius-canary-provider:local)"
+          python - <<'PY'
+          import os,re
+          assert re.fullmatch(r'127\.0\.0\.1:5000/mobius-canary-provider@sha256:[0-9a-f]{64}',os.environ['MOBIUS_PROVIDER_IMAGE'])
+          PY
+          STAGE=mount_probe
+          # Mount-contract evidence only, not kernel resource/network verification.
+          timeout --kill-after=5s 180s python scripts/oci_contract_probe.py > "$ROOT/mount-probe.log" 2>&1
+          STAGE=migrate
+          alembic upgrade head > "$ROOT/migrate.log" 2>&1
+          STAGE=api_start
+          setsid -w timeout --kill-after=5s 1200s python -m uvicorn mobius.api.canary_app:create_canary_app --factory --host 127.0.0.1 --port 8791 > "$ROOT/api.log" 2>&1 &
+          API_PID=$!
+          scripts/healthcheck.sh http://127.0.0.1:8791 90 > "$ROOT/health.log" 2>&1
+          STAGE=worker_start
+          setsid -w timeout --kill-after=5s 950s python -m mobius.worker.runner > "$ROOT/worker.log" 2>&1 &
+          WORKER_PID=$!
+          # Exactly one invocation. No automatic retry or fallback.
+          STAGE=canary
+          timeout --kill-after=5s 910s python scripts/three_worker_canary.py --api http://127.0.0.1:8791 --expect-worker-id "$MOBIUS_WORKER_ID" --expect-run-id "$MOBIUS_CANARY_RUN_ID" --execute-local-canary > "$ROOT/canary.log" 2> "$ROOT/canary.err"
+          python - "$ROOT/canary.log" <<'PY'
+          import json,re,sys
+          data=json.load(open(sys.argv[1]))
+          assert data.get('status')=='canary_api_jobs_applied'
+          assert re.fullmatch(r'[0-9a-f]{64}',data.get('apk_sha256',''))
+          print('STATUS=canary_api_jobs_applied')
+          print('APK_SHA256='+data['apk_sha256'])
+          for job in data['jobs']:
+              assert job['kind'] in ('recon','provider-analysis','spectre')
+              assert re.fullmatch(r'[0-9a-f-]{36}',job['job_id'])
+              print('JOB='+job['kind']+':'+job['job_id'])
+          PY

@@ -59,3 +59,8 @@ def test_freshness_covers_all_mapped_domain_tables():
     from mobius.api.canary_app import _TABLES
     from mobius.adapters.models import Base
     assert {t.name for t in _TABLES}==set(Base.metadata.tables)-{'users'}
+
+
+def test_disabled_provider_constructs_no_gateway():
+    from mobius.services.model_provider import create_model_gateway
+    assert create_model_gateway('disabled',base_url='http://invalid.local',model='unused') is None

@@ -144,3 +144,20 @@ def test_readiness_checks_runtime_and_digest_image(tmp_path):
     assert backend.isolation_ready
     assert calls[0][-1] == "info"
     assert calls[1][-1] == IMAGE
+
+
+def test_optional_run_label_is_exact_and_not_a_shell_fragment(tmp_path):
+    label='12345678-1234-1234-1234-123456789abc'
+    backend=make_backend(tmp_path,run_label=label)
+    command=backend._container_argv(argv=(BINARY,'--version'),workspace=make_workspace(tmp_path),limits=ToolLimits())
+    assert command[command.index('--label')+1]=='org.mobius.canary-run='+label
+    with pytest.raises(ValueError,match='run label'):make_backend(tmp_path,run_label='x;id')
+
+
+def test_loopback_registry_digest_is_accepted(tmp_path):
+    runtime=tmp_path/'docker'
+    runtime.write_text('runtime')
+    image='127.0.0.1:5000/mobius-canary-provider@sha256:'+'a'*64
+    backend=OciBackend(runtime=str(runtime),binary_images={BINARY:image})
+    command=backend._container_argv(argv=(BINARY,'--version'),workspace=make_workspace(tmp_path),limits=ToolLimits())
+    assert image in command
