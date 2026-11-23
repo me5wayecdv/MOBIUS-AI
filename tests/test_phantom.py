@@ -487,3 +487,106 @@ def test_start_instrumentation_fail_closed_when_server_dies(tmp_path, monkeypatc
     })
     with pytest.raises(PoCAdapterUnavailable, match="did not stay up"):
         adapter.start_instrumentation(path, digest)
+
+
+@pytest.mark.parametrize('rc,out,err,expected',[
+    (1,b'',b'java.lang.SecurityException: Permission Denial: opening provider com.example.private',True),
+    (0,b'',b'java.lang.SecurityException: Permission Denial: opening provider com.example.private',True),
+    (1,b'',b'error: device offline',None),
+    (1,b'',b'java.lang.IllegalArgumentException: Unknown URI',None),
+    (1,b'',b'java.lang.SecurityException: Something else',None),
+    (0,b'No result found.\n',b'',None),
+    (0,b'Row: 0 text=java.lang.SecurityException: Permission Denial: x',b'',None),
+    (0,b'Row: 0 text=x\njava.lang.SecurityException: Permission Denial: x',b'',None),
+])
+def test_permission_denial_control_never_treats_unknown_error_or_row_text_as_denial(rc,out,err,expected):
+    adapter=_adapter({('shell','content','query','--uri','content://com.example.private/note'):(rc,out,err)})
+    assert adapter.probe_provider_permission_denied('com.example.private','note').actual is expected
+
+
+def test_permission_denial_control_is_a_closed_boolean_step():
+    with pytest.raises(ValueError):
+        PoCStep(action='assert_emulator_provider_permission_denied',target_ref='com.example.private/note',expected_value=0)
+
+
+def test_permission_denial_control_through_runner(session,store,future_iso):
+    app,auth,scan,hyp=_context(session,store,future_iso)
+    step=PoCStep(action='assert_emulator_provider_permission_denied',target_ref='com.example.private/note',expected_value=True)
+    plan=_emulator_plan(app,auth,scan,hyp,(step,))
+    for err,passed in [(b'java.lang.SecurityException: Permission Denial: com.example.private provider',True),(b'device offline',False)]:
+        adapter=_adapter({('shell','content','query','--uri','content://com.example.private/note'):(1,b'',err)})
+        result=SafePoCRunner(session,emulator_adapter=adapter).run(plan)
+        assert result.steps[0].passed is passed
+
+
+@pytest.mark.parametrize('rc,text,outcome,actual',[
+    (0,b'Row: 0 id=1\n','readable_as_shell',1),
+    (0,b'No result found.\n','empty_result',0),
+    (0,b'','unclassified',None),
+    (1,b'error: device offline','transport_error',None),
+    (1,b'Could not find provider com.example.private','provider_not_found',None),
+    (1,b'java.lang.SecurityException: Permission Denial: com.other.private','unclassified',None),
+    (1,b'java.lang.SecurityException: Permission Denial: com.example.private.evil','unclassified',None),
+    (1,b'java.lang.SecurityException: Permission Denial: com.example.private','permission_denied',None),
+])
+def test_provider_outcome_taxonomy(rc,text,outcome,actual):
+    adapter=_adapter({('shell','content','query','--uri','content://com.example.private/note'):(rc,b'',text)})
+    result=adapter.probe_provider_query_rows('com.example.private','note')
+    assert result.outcome==outcome and result.actual==actual
+    assert result.raw_output=='' # no provider row contents retained
+
+
+def test_provider_timeout_distinct_from_permission_denial():
+    import subprocess
+    def runner(argv,timeout):
+        if argv[-1]=='ro.kernel.qemu':return 0,b'1',b''
+        raise subprocess.TimeoutExpired(argv,timeout)
+    result=PhantomEmulatorAdapter(adb_path='/fake/adb',runner=runner).probe_provider_permission_denied('com.example.private','note')
+    assert result.outcome=='transport_error' and result.actual is None
+
+
+@pytest.mark.parametrize('case',['good','root','uid_error','split','wrong_hash','wrong_serial','bad_path'])
+def test_installed_identity_is_exact_base_apk_and_nonroot_shell(case):
+    import hashlib
+    digest=hashlib.sha256(b'unit fixture bytes').hexdigest()
+    path='/data/app/~~random/com.example-random/base.apk'
+    calls=[]
+    def runner(argv,timeout):
+        calls.append(tuple(argv))
+        if argv[-1]=='ro.kernel.qemu':return 0,b'1',b''
+        if argv[-2:]==['id','-u']:
+            return (1,b'',b'error') if case=='uid_error' else (0,b'0' if case=='root' else b'2000\n',b'')
+        if argv[-3:]==['pm','path','com.example']:
+            lines='package:'+path
+            if case=='split':lines+='\npackage:/data/app/split.apk'
+            if case=='bad_path':lines='package:/data/app/a/../../bad/base.apk'
+            return 0,lines.encode(),b''
+        if argv[-2:]==['sha256sum',path]:
+            return 0,((('b'*64) if case=='wrong_hash' else digest)+'  '+path+'\n').encode(),b''
+        raise AssertionError(argv)
+    adapter=PhantomEmulatorAdapter(adb_path='/fake/adb',serial='emulator-5554',runner=runner)
+    if case=='good':adapter.verify_installed_identity('com.example',digest,'emulator-5554',2000)
+    else:
+        with pytest.raises(PoCAdapterUnavailable):
+            adapter.verify_installed_identity('com.example',digest,'emulator-5556' if case=='wrong_serial' else 'emulator-5554',2000)
+    assert not any('query' in c for c in calls)
+
+
+def test_real_subprocess_stream_bound_and_timeout(monkeypatch):
+    """Local inert Python children only, not adb/emulator/runtime evidence."""
+    import sys,subprocess
+    import mobius.services.phantom as phantom
+    monkeypatch.setattr(phantom,'MAX_OUTPUT_BYTES',1024)
+    assert phantom._subprocess_runner([sys.executable,'-c','print(123)'],2)==(0,b'123\n',b'')
+    for stream in ('stdout','stderr'):
+        with pytest.raises(PoCAdapterUnavailable,match='output limit'):
+            phantom._subprocess_runner([sys.executable,'-c',f'import sys;sys.{stream}.write("x"*1000000)'],2)
+    with pytest.raises(subprocess.TimeoutExpired):
+        phantom._subprocess_runner([sys.executable,'-c','import time;time.sleep(5)'],.05)
+
+
+@pytest.mark.parametrize('authority,path',[('com.example;id','note'),('com.example','$(id)'),('com.example','x/y')])
+def test_provider_query_rejects_remote_shell_metacharacters_before_adb(authority,path):
+    def runner(*args):raise AssertionError('must reject before adb')
+    with pytest.raises(PoCAdapterUnavailable,match='literal authority'):
+        PhantomEmulatorAdapter(adb_path='/fake',runner=runner).probe_provider_query_rows(authority,path)

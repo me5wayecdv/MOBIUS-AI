@@ -19,7 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..adapters.models import (
-    ApplicationRow, AuthorizationRow, ApprovalRow, HypothesisRow, InvestigationRow, ObservationRow,
+    ApplicationRow, AuthorizationRow, ApprovalRow, HypothesisRow, InvestigationRow, ObservationRow, EvidenceRow,
 )
 from ..adapters.events import utcnow
 from ..core.schemas import PoCTestPlan
@@ -54,6 +54,7 @@ class PoCStepResult:
     tool_name: str
     tool_version: str
     detail: str = ""
+    outcome: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,18 +124,19 @@ class SafePoCRunner:
                     status = "timed_out"
                     break
                 step_started = time.monotonic()
+                outcome = None
                 if plan.target_kind == "lab_apk":
                     actual, tool, version, detail = self._run_manifest_step(plan, step.action, step.target_ref)
                 elif plan.target_kind == "local_harness":
                     actual, tool, version, detail = self._run_harness_step(step.action, step.target_ref, step.input_values, context)
                 elif plan.target_kind == "emulator":
-                    actual, tool, version, detail = self._run_emulator_step(plan, step)
+                    actual, tool, version, detail, outcome = self._run_emulator_step(plan, step)
                 else:
                     raise PoCAdapterUnavailable(f"unsupported target kind: {plan.target_kind}")
                 versions.add(f"{tool}/{version}")
                 if step.action in {
                     "assert_manifest_component", "assert_manifest_permission", "assert_local_harness_result",
-                    "assert_emulator_package_present",
+                    "assert_emulator_package_present", "assert_emulator_provider_permission_denied",
                 }:
                     passed = actual == step.expected_value
                 elif step.action in {"assert_emulator_provider_rows", "assert_emulator_frida_classes"}:
@@ -153,7 +155,7 @@ class SafePoCRunner:
                 results.append(PoCStepResult(index=index, action=step.action, target_ref=step.target_ref,
                     status="passed" if passed else "failed", passed=passed, actual_value=actual,
                     expected_value=step.expected_value, duration_ms=duration_ms, tool_name=tool, tool_version=version,
-                    detail=detail))
+                    detail=detail, outcome=outcome))
                 if duration_ms > step.timeout_seconds * 1000 or time.monotonic() - started_clock > plan.max_duration_seconds:
                     status = "timed_out"
                     break
@@ -189,7 +191,7 @@ class SafePoCRunner:
         output = {"plan_id": plan.id, "target_sha256": plan.target_sha256,
             "steps": [{"index": r.index, "action": r.action, "target_ref": r.target_ref,
                 "status": r.status, "passed": r.passed, "actual_value": r.actual_value,
-                "expected_value": r.expected_value, "tool": r.tool_name, "tool_version": r.tool_version}
+                "expected_value": r.expected_value, "outcome": r.outcome, "tool": r.tool_name, "tool_version": r.tool_version}
                 for r in results],
             "cleanup": cleanup_results, "simulation_only": plan.target_kind == "local_harness"}
         encoded = json.dumps(output, sort_keys=True, default=str).encode("utf-8")
@@ -255,6 +257,28 @@ class SafePoCRunner:
             raise PoCScopeRejected("investigation intensity exceeds authorization")
         if investigation.state in {"CLOSED", "CANCELLED", "FAILED"}:
             raise PoCScopeRejected("investigation is not in an executable state")
+        if plan.provider_probe_binding is not None:
+            binding = plan.provider_probe_binding
+            observation = self.session.get(ObservationRow, binding.observation_id)
+            if (observation is None or observation.investigation_id != plan.investigation_id
+                or observation.agent != "SPECTRE" or observation.kind != "inference"
+                or (observation.attributes or {}).get("operation") != "read"
+                or binding.flow_evidence_id not in (observation.evidence_refs or [])):
+                raise PoCScopeRejected("approved provider observation binding no longer matches")
+            for evidence_id, digest, kind, producer in (
+                (binding.flow_evidence_id,binding.flow_sha256,"tool-output","SPECTRE"),
+                (binding.manifest_evidence_id,binding.manifest_sha256,"manifest","RECON"),
+            ):
+                evidence = self.session.get(EvidenceRow,evidence_id)
+                if (evidence is None or evidence.investigation_id != plan.investigation_id
+                    or evidence.sha256 != digest or evidence.truncated
+                    or evidence.kind != kind or evidence.produced_by != producer):
+                    raise PoCScopeRejected("approved provider evidence metadata no longer matches")
+            cited = self.session.execute(select(HypothesisRow).where(
+                HypothesisRow.id.in_(plan.hypothesis_ids),
+                HypothesisRow.investigation_id == plan.investigation_id)).scalars()
+            if not any(binding.observation_id in (h.derived_from or []) and h.status == "open" for h in cited):
+                raise PoCScopeRejected("approved provider hypothesis citation no longer matches")
         hypotheses = set(self.session.execute(
             select(HypothesisRow.id).where(
                 HypothesisRow.investigation_id == plan.investigation_id,
@@ -305,8 +329,12 @@ class SafePoCRunner:
                     "emulator package probes must target the plan's authorized package"
                 )
             result = adapter.probe_package_present(step.target_ref)
-            return result.actual, "phantom-adb", adapter.VERSION, result.detail
-        if step.action == "assert_emulator_provider_rows":
+            return result.actual, "phantom-adb", adapter.VERSION, result.detail, getattr(result, "outcome", None)
+        if step.action in {"assert_emulator_provider_rows", "assert_emulator_provider_permission_denied"}:
+            if plan.provider_probe_binding is not None:
+                binding = plan.provider_probe_binding
+                adapter.verify_installed_identity(plan.target_package, plan.target_sha256,
+                                                  binding.emulator_serial, binding.expected_uid)
             authority, sep, path = step.target_ref.partition("/")
             if (
                 not sep or not path or "/" in path
@@ -317,15 +345,18 @@ class SafePoCRunner:
                     "emulator provider probes must target one authority path "
                     "within the plan's authorized package"
                 )
-            result = adapter.probe_provider_query_rows(authority, path)
-            return result.actual, "phantom-adb", adapter.VERSION, result.detail
+            if step.action == "assert_emulator_provider_permission_denied":
+                result = adapter.probe_provider_permission_denied(authority, path)
+            else:
+                result = adapter.probe_provider_query_rows(authority, path)
+            return result.actual, "phantom-adb", adapter.VERSION, result.detail, getattr(result, "outcome", None)
         if step.action == "assert_emulator_frida_classes":
             if step.target_ref != plan.target_package:
                 raise PoCScopeRejected(
                     "emulator instrumentation probes must target the plan's authorized package"
                 )
             result = adapter.probe_frida_enumerate_classes(step.target_ref)
-            return result.actual, "phantom-frida", adapter.VERSION, result.detail
+            return result.actual, "phantom-frida", adapter.VERSION, result.detail, getattr(result, "outcome", None)
         raise PoCAdapterUnavailable(f"action {step.action} is not available for emulator targets")
 
     def _run_harness_step(

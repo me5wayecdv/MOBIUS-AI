@@ -258,3 +258,24 @@ See `docs/DEMO_BLOCKERS.md` for the ordered path from APK selection through the 
 - Added API tests for persistence, evidence-package inclusion, component filtering and ownership, plus a NEXUS test proving the exact persisted source excerpt enters the model package and its evidence ID is recorded in decision provenance. CI Run #707 passed on HEAD `a2f019fc2b5f578951b353eaa15f4bccb519e6bf`: Python 3.11, Python 3.12 and War Room browser E2E/screenshots. D-021 remains PARTIAL pending independent review.
 - No migration, dependency, image push/publication, direct main commit, or restricted-file change was made.
 - D-014 (PR #53) adds the versioned YAML source/sink/guard catalogue as API-level candidates only: it does not prove attacker control, propagation, sanitization failure or exploitability.
+
+### Reviewed provider-read proposal seam (source-only, not activated)
+
+The closed proposal builder has no default fixture contracts and no API wiring.
+It can prepare an approval-required plan only from a cited persisted provider
+read-flow observation, original hash-checked detector/manifest evidence and an
+independently reviewed exact-APK route/control contract. The canonical plan binds
+the contract/review digests, evidence IDs/digests and explicit emulator serial.
+Execution rechecks metadata/citation and verifies non-root shell UID 2000 and the
+single installed base APK hash before each provider query. Split installs and
+unrecognized identity output fail closed. This narrows device-state races but
+does not make a device immutable against concurrent privileged replacement.
+
+Provider outcomes distinguish shell-readable rows, explicit target-authority
+permission denial, empty results, provider-not-found, transport failure and
+unclassified output. No provider row payload is retained by these probes.
+Process output is drained under a combined streaming cap and absolute timeout;
+owned child process groups are killed/reaped on exit. Offline child-process tests
+are not Android or isolation evidence. Approval alone does not prove lab contract
+review, execution permission, installed identity or an actual security property.
+No full connected model-to-security-test/report success is established here.

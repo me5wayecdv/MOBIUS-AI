@@ -69,6 +69,7 @@ class PoCStep(_Model):
         "assert_local_harness_result",
         "assert_emulator_package_present",
         "assert_emulator_provider_rows",
+        "assert_emulator_provider_permission_denied",
         "assert_emulator_frida_classes",
         "capture_native_local_fixture_v1",
         "capture_owned_android_fixture_v1",
@@ -100,6 +101,8 @@ class PoCStep(_Model):
         if self.action == "assert_emulator_package_present":
             if not isinstance(self.expected_value, bool):
                 raise ValueError("emulator package presence expects a boolean expected_value")
+        if self.action == "assert_emulator_provider_permission_denied" and self.expected_value is not True:
+            raise ValueError("permission denial control expects exactly True")
         if self.action in {"assert_emulator_provider_rows", "assert_emulator_frida_classes"}:
             # Threshold semantics: pass when at least expected_value rows
             # (or enumerated classes) are observed.
@@ -113,6 +116,19 @@ class PoCCleanupStep(_Model):
     action: Literal["remove_temporary_workspace", "reset_local_harness", "stop_emulator_instrumentation", "stop_native_local_fixture", "stop_owned_android_fixture"]
     target_ref: str = Field(min_length=1, max_length=300)
     timeout_seconds: int = Field(default=15, ge=1, le=60)
+
+
+class ProviderProbeBinding(_Model):
+    """Included in the existing canonical plan approval hash. No secret values."""
+    contract_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_review_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    manifest_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    flow_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    observation_id: str = Field(min_length=1, max_length=40)
+    manifest_evidence_id: str = Field(min_length=1, max_length=40)
+    flow_evidence_id: str = Field(min_length=1, max_length=40)
+    emulator_serial: str = Field(pattern=r"^emulator-[0-9]{1,8}$")
+    expected_uid: Literal[2000] = 2000
 
 
 class PoCTestPlan(_Model):
@@ -135,11 +151,14 @@ class PoCTestPlan(_Model):
     max_duration_seconds: int = Field(default=60, ge=1, le=300)
     max_output_bytes: int = Field(default=65536, ge=1, le=1_048_576)
     cleanup_steps: tuple[PoCCleanupStep, ...] = Field(default=(), max_length=10)
+    provider_probe_binding: ProviderProbeBinding | None = None
     requires_approval: bool = False
     approval_id: str | None = Field(default=None, min_length=1, max_length=40)
 
     @model_validator(mode="after")
     def _bounded_and_approved(self) -> PoCTestPlan:
+        if self.provider_probe_binding is not None and (self.target_kind != "emulator" or not self.requires_approval):
+            raise ValueError("reviewed provider binding requires approved emulator plan")
         if self.target_kind == "owned_android_fixture":
             if (self.target_package != "org.mobius.ownedfixture"
                 or self.safety_class != "non_destructive" or not self.requires_approval
@@ -191,6 +210,7 @@ class PoCTestPlan(_Model):
             raise ValueError("manifest assertions require a lab_apk or emulator target")
         if any(
             step.action in {"assert_emulator_package_present", "assert_emulator_provider_rows",
+                            "assert_emulator_provider_permission_denied",
                             "assert_emulator_frida_classes"}
             for step in self.steps
         ) and self.target_kind != "emulator":

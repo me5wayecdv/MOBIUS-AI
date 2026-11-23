@@ -21,7 +21,10 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import subprocess
+import selectors
+import signal
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Sequence
@@ -55,8 +58,46 @@ Runner = Callable[[Sequence[str], int], "tuple[int, bytes, bytes]"]
 
 
 def _subprocess_runner(argv: Sequence[str], timeout: int) -> "tuple[int, bytes, bytes]":
-    proc = subprocess.run(list(argv), capture_output=True, timeout=timeout, check=False)
-    return proc.returncode, proc.stdout, proc.stderr
+    # Drain both pipes incrementally under one absolute deadline. Never accumulate
+    # unlimited child output before applying a cap. Kill the owned process group
+    # on all exits so descendants cannot retain pipes after the leader exits.
+    proc = subprocess.Popen(list(argv), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            start_new_session=True)
+    outputs = {proc.stdout: bytearray(), proc.stderr: bytearray()}
+    selector = selectors.DefaultSelector()
+    deadline = time.monotonic() + timeout
+    total = 0
+    try:
+        for pipe in outputs:
+            os.set_blocking(pipe.fileno(), False)
+            selector.register(pipe, selectors.EVENT_READ)
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(list(argv), timeout)
+            for key, _ in selector.select(min(remaining, .1)):
+                chunk = os.read(key.fileobj.fileno(), min(65536, MAX_OUTPUT_BYTES-total+1))
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    continue
+                total += len(chunk)
+                if total > MAX_OUTPUT_BYTES:
+                    raise PoCAdapterUnavailable("probe output limit exceeded")
+                outputs[key.fileobj].extend(chunk)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(list(argv), timeout)
+        rc = proc.wait(timeout=remaining)
+        return rc, bytes(outputs[proc.stdout]), bytes(outputs[proc.stderr])
+    finally:
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        proc.wait(timeout=5)
+        selector.close()
+        for pipe in outputs:
+            pipe.close()
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,6 +107,7 @@ class EmulatorProbeResult:
     actual: Any
     detail: str
     raw_output: str  # capped
+    outcome: str = "unclassified"
 
 
 class PhantomEmulatorAdapter:
@@ -95,16 +137,18 @@ class PhantomEmulatorAdapter:
         argv += list(args)
         return argv
 
-    def _run(self, argv: Sequence[str]) -> "tuple[int, str]":
-        rc, out, err = self._runner(argv, PROBE_TIMEOUT_SECONDS)
-        text = (out + err)[:MAX_OUTPUT_BYTES].decode("utf-8", "replace")
+    def _run(self, argv: Sequence[str], timeout: int = PROBE_TIMEOUT_SECONDS) -> "tuple[int, str]":
+        rc, out, err = self._runner(argv, timeout)
+        if len(out)+len(err)>MAX_OUTPUT_BYTES:
+            raise PoCAdapterUnavailable("probe output limit exceeded")
+        text = (out + err).decode("utf-8", "replace")
         return rc, text
 
-    def _require_emulator(self) -> None:
+    def _require_emulator(self, timeout: int = PROBE_TIMEOUT_SECONDS) -> None:
         if self._emulator_check is not None:
             ok = self._emulator_check()
         else:
-            rc, text = self._run(self._argv("shell", "getprop", "ro.kernel.qemu"))
+            rc, text = self._run(self._argv("shell", "getprop", "ro.kernel.qemu"), timeout)
             ok = rc == 0 and text.strip() == "1"
         if not ok:
             raise PoCAdapterUnavailable(
@@ -122,27 +166,71 @@ class PhantomEmulatorAdapter:
             "package_present", package, present, "pm list packages", text[:_DETAIL_OUTPUT_BYTES]
         )
 
-    def probe_provider_query_rows(self, authority: str, path: str) -> EmulatorProbeResult:
-        """Read-only content query; actual is the row count, or None when the
-        provider refused the query (permission denial, security error)."""
-        self._require_emulator()
+    def verify_installed_identity(self, package: str, sha256: str, serial: str, uid: int) -> None:
+        """Read-only preflight. Reject split installs, root adbd and ambiguous output.
+
+        Repeat before each reviewed provider query. This narrows, but cannot make
+        an external device immutable against concurrent privileged replacement.
+        """
+        if self._serial != serial or not serial:
+            raise PoCAdapterUnavailable("reviewed emulator serial does not match configured adapter")
+        self._require_emulator(timeout=5)
+        rc, text = self._run(self._argv("shell", "id", "-u"), 5)
+        if rc != 0 or text.strip() != str(uid) or uid != 2000:
+            raise PoCAdapterUnavailable("expected non-root adb shell UID not verified")
+        rc, text = self._run(self._argv("shell", "pm", "path", package), 5)
+        paths = text.splitlines()
+        if rc != 0 or len(paths) != 1 or not re.fullmatch(r"package:/data/app/[A-Za-z0-9_./=+~-]+/base\.apk", paths[0]):
+            raise PoCAdapterUnavailable("one installed base APK required; split or unknown install refused")
+        path = paths[0][len("package:"):]
+        if ".." in path.split("/"):
+            raise PoCAdapterUnavailable("invalid installed APK path")
+        rc, text = self._run(self._argv("shell", "sha256sum", path), 5)
+        if rc != 0 or text.strip() != sha256 + "  " + path:
+            raise PoCAdapterUnavailable("installed APK digest not verified")
+
+    def _provider_query(self, authority: str, path: str) -> EmulatorProbeResult:
+        if (re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.]{0,249}",authority) is None
+            or re.fullmatch(r"[A-Za-z0-9_-]{1,64}",path) is None):
+            raise PoCAdapterUnavailable("provider query requires literal authority and one path")
+        self._require_emulator(timeout=5)
         uri = f"content://{authority}/{path}"
-        rc, text = self._run(self._argv("shell", "content", "query", "--uri", uri))
-        refused = (
-            rc != 0
-            or "Permission Denial" in text
-            or "SecurityException" in text
-            or "requires" in text and "permission" in text.lower()
-        )
-        if refused:
-            return EmulatorProbeResult(
-                "provider_query_rows", uri, None,
-                f"query refused or failed (rc={rc})", text[:_DETAIL_OUTPUT_BYTES],
-            )
-        return EmulatorProbeResult(
-            "provider_query_rows", uri, text.count("Row:"),
-            "content query row count", text[:_DETAIL_OUTPUT_BYTES],
-        )
+        try:
+            rc, text = self._run(self._argv("shell", "content", "query", "--uri", uri))
+        except subprocess.TimeoutExpired:
+            return EmulatorProbeResult("provider_query", uri, None, "query timed out", "", "transport_error")
+        except OSError:
+            return EmulatorProbeResult("provider_query", uri, None, "transport unavailable", "", "transport_error")
+        # Row payload is attacker-controlled. Never interpret it as a platform denial.
+        rows = len(re.findall(r"(?m)^Row:\s*\d+", text))
+        denial_lines = re.findall(r"(?m)^\s*(?:java\.lang\.)?SecurityException: Permission Denial:[^\n]*", text)
+        target_denial = any(re.search(r"(?<![A-Za-z0-9_.])" + re.escape(authority) + r"(?![A-Za-z0-9_.])", line)
+                            for line in denial_lines)
+        if rows and (denial_lines or rc != 0):
+            outcome, actual = "unclassified", None
+        elif target_denial:
+            outcome, actual = "permission_denied", None
+        elif re.search(r"(?im)^(?:error:.*(?:offline|no devices|device.*not found)|adb:)", text):
+            outcome, actual = "transport_error", None
+        elif re.search(r"(?im)^.*(?:No content provider|Could not find provider|Unknown authority)", text):
+            outcome, actual = "provider_not_found", None
+        elif rc == 0 and rows:
+            outcome, actual = "readable_as_shell", rows
+        elif rc == 0 and text.strip() == "No result found.":
+            outcome, actual = "empty_result", 0
+        else:
+            outcome, actual = "unclassified", None
+        return EmulatorProbeResult("provider_query", uri, actual,
+            f"{outcome}; adb caller, not ordinary application UID", "", outcome)
+
+    def probe_provider_query_rows(self, authority: str, path: str) -> EmulatorProbeResult:
+        return self._provider_query(authority, path)
+
+    def probe_provider_permission_denied(self, authority: str, path: str) -> EmulatorProbeResult:
+        result = self._provider_query(authority, path)
+        return EmulatorProbeResult("provider_permission_denied", result.target,
+            True if result.outcome == "permission_denied" else None,
+            result.detail, "", result.outcome)
 
     def _pids_of(self, package: str) -> list[str]:
         rc, text = self._run(self._argv("shell", "pidof", package))
