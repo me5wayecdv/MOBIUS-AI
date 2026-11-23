@@ -11,12 +11,21 @@ import re
 import uuid
 from fastapi import HTTPException
 from sqlalchemy import select
-from ..adapters.models import (ApplicationRow,AuthorizationRow,InvestigationRow,
-    WorkerJobRow,EvidenceRow,ObservationRow,HypothesisRow,ApprovalRow,ReportRow,PoCRunRow)
+from ..adapters.models import Base,UserRow
 from .deps import get_context
 
-_TABLES=(ApplicationRow,AuthorizationRow,InvestigationRow,WorkerJobRow,EvidenceRow,
-         ObservationRow,HypothesisRow,ApprovalRow,ReportRow,PoCRunRow)
+# Check every mapped writable domain table, including events/findings/verdicts,
+# graph links and PoC links with composite keys. The identity catalogue is the
+# sole exception: a freshly migrated test DB may already contain its stub user.
+# New mapped domain tables are included automatically rather than silently missed.
+_TABLES=tuple(sorted((mapper.local_table for mapper in Base.registry.mappers
+                     if mapper.class_ is not UserRow),key=lambda table:table.name))
+
+
+def _domain_empty(ctx):
+    with ctx.session() as session:
+        return not any(session.execute(select(1).select_from(table).limit(1)).first()
+                       for table in _TABLES)
 
 
 def create_canary_app():
@@ -31,14 +40,11 @@ def create_canary_app():
     ctx=get_context()
     if ctx.settings.env.lower()!='test' or ctx.model_gateway is not None:
         raise RuntimeError('canary factory requires test environment and disabled model gateway')
-    def empty():
-        with ctx.session() as session:
-            return not any(session.execute(select(table.id).limit(1)).first() for table in _TABLES)
-    if not empty():raise RuntimeError('disposable canary database is not empty')
+    if not _domain_empty(ctx):raise RuntimeError('disposable canary database is not empty')
     from .app import create_app
     app=create_app()
     @app.get('/api/v1/_canary/freshness',include_in_schema=False)
     def freshness():
-        if not empty():raise HTTPException(status_code=409,detail='canary instance no longer empty')
+        if not _domain_empty(ctx):raise HTTPException(status_code=409,detail='canary instance no longer empty')
         return {'kind':'disposable-canary-v1','run_id':run_id,'worker_id':worker_id,'empty':True}
     return app
