@@ -1,6 +1,6 @@
 # Owned provider lab, preparation only
 
-This source is not an APK, installation proof, independent review, runtime contract or user authorization. Nothing registers it in the application. No Android build or device execution has been performed.
+This source is not an APK, installation proof, independent review, runtime contract or user authorization. Nothing registers it in the application. An offline unsigned Android build has now succeeded; device execution has not been performed. See OFFLINE_BUILD_CHECKPOINT.md.
 
 The intended fixed package is `com.mobius.ownedlab`. The exported `NotesProvider` exposes `content://com.mobius.ownedlab.notes/note`. A separate manifest-non-exported `PrivateProvider` uses `content://com.mobius.ownedlab.private/note` as the denial control. Both create only one fixed synthetic row in a private in-memory database. No Internet permission, persistent database, activity, receiver, service, write operation, or URI grants are requested. Caller selection reaches SQLite query for static may-flow analysis. This is not an SQL injection proof. PrivateProvider inherits query, but Android must enforce non-exported access before entering it.
 
@@ -15,4 +15,4 @@ Remaining gates, in order:
 5. Independent source/artifact review supplies a real review digest. Only then can an explicitly scoped host register an exact-APK ProviderReadContract with the real serial. No dummy digest, default registration or model-supplied route is allowed.
 6. Connect genuine parsed flow evidence through a cited hypothesis, reviewed approval-bound plan, bounded runtime evidence and conservative verdict/report. Model approval and device/runtime approval remain separate. A deterministic or mocked hypothesis cannot be labelled a real model result.
 
-The source is intentionally minimal. Its Java compilation and Android semantics remain unverified until those gates are actually run. A passing source-shape test is only a regression check, not an independent verifier.
+The source is intentionally minimal. Java compilation succeeded with the recorded toolchain. Android runtime semantics remain unverified until those gates are actually run. A passing source-shape test is only a regression check, not an independent verifier.
