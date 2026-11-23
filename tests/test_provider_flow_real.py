@@ -107,3 +107,60 @@ def test_negative_helper_bytecode_is_constant_not_a_disconnected_name_check():
     assert [i.get_name() for i in instructions]==['const/4','const-string','invoke-virtual','move-result-object','return-object']
     assert 'SELECT 1' in instructions[1].get_output()
     assert instructions[2].get_output().startswith('v0, v1, v6,')
+
+
+def test_real_static_flow_reaches_nexus_and_keeps_runtime_claim_unproven(session,store,future_iso):
+    """Actual static parser/service chain, deterministic reasoning, no model or runtime."""
+    from mobius.services.intake import IntakeService
+    from mobius.services.recon import ReconService
+    from mobius.services.provider_analysis import ProviderAnalysisService
+    from mobius.services.nexus_hypotheses import NexusHypothesisService
+    from mobius.services.evidence_package import EvidencePackageBuilder
+    from mobius.adapters.models import HypothesisRow,ObservationRow,VerdictRow,FindingRow
+    from sqlalchemy import select
+    intake=IntakeService(session,store)
+    app,_=intake.create_application(fixture_apk(),'static-only.apk',uploaded_by='analyst-1')
+    auth=intake.create_authorization(apk_sha256=app.sha256,target_package='com.example.demo',
+        scope_text='Static synthetic fixture only, no installation or runtime.',statement='Unit test',
+        max_intensity=0,granted_by='analyst-1',expires_at=future_iso)
+    scan=intake.create_investigation(application_id=app.id,authorization_id=auth.id,
+        objective='Connected static evidence regression, not a model run',intensity=0,created_by='analyst-1')
+    intake.start(scan.id)
+    ReconService(session,store).run(scan.id)
+    ProviderAnalysisService(session,store).run(scan.id,validated_by='analyst-1')
+    result=NexusHypothesisService(session,store=store).generate(scan.id)
+    assert result['mode']=='deterministic_fallback'
+    hypotheses=list(session.execute(select(HypothesisRow).where(HypothesisRow.investigation_id==scan.id)).scalars())
+    observations={o.id:o for o in session.execute(select(ObservationRow).where(ObservationRow.investigation_id==scan.id)).scalars()}
+    assert hypotheses
+    for h in hypotheses:
+        assert h.status=='open' and not h.satisfied_evidence
+        assert h.derived_from and set(h.derived_from)<=observations.keys()
+    package=EvidencePackageBuilder(session,store=store).build(scan.id).as_dict()
+    assert package['method_references'] and package['sink_references']
+    assert any(o['kind']=='inference' for o in package['observations'])
+    assert all('unproven' in h.claim and 'runtime_observation' in h.required_evidence for h in hypotheses)
+    # Static detector findings may exist, but this step must not promote them.
+    before=[(v.id,v.verdict) for v in session.execute(select(VerdictRow).join(FindingRow,
+        VerdictRow.finding_id==FindingRow.id).where(FindingRow.investigation_id==scan.id)).scalars()]
+    NexusHypothesisService(session,store=store).generate(scan.id)
+    after=[(v.id,v.verdict) for v in session.execute(select(VerdictRow).join(FindingRow,
+        VerdictRow.finding_id==FindingRow.id).where(FindingRow.investigation_id==scan.id)).scalars()]
+    assert before==after
+    assert len(list(session.execute(select(HypothesisRow).where(HypothesisRow.investigation_id==scan.id)).scalars()))==len(hypotheses)
+
+
+def test_provider_fallback_requires_structured_static_observation_not_keyword():
+    from copy import deepcopy
+    from mobius.services.nexus_hypotheses import NexusHypothesisService
+    base={'id':'obs_test','agent':'SPECTRE','kind':'inference','fidelity':'decompiled',
+          'subject_ref':'com.example.Notes','evidence_refs':['ev_test'],
+          'attributes':{'operation':'read','method_references':['Notes.query'],
+                        'sink_references':['SQLiteDatabase.query']}}
+    assert len(NexusHypothesisService._deterministic({'observations':[base]}))==1
+    for key,value in [('agent','OTHER'),('kind','fact'),('fidelity','runtime'),('evidence_refs',[])]:
+        item=deepcopy(base);item[key]=value
+        assert not NexusHypothesisService._deterministic({'observations':[item]})
+    for key,value in [('operation','write'),('method_references',[]),('sink_references',[])]:
+        item=deepcopy(base);item['attributes'][key]=value
+        assert not NexusHypothesisService._deterministic({'observations':[item]})

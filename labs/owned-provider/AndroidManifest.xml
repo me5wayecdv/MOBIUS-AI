@@ -1,0 +1,7 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.mobius.ownedlab" android:versionCode="1" android:versionName="1">
+  <uses-sdk android:minSdkVersion="26" android:targetSdkVersion="28" />
+  <application android:label="Mobius Owned Lab" android:allowBackup="false" android:debuggable="false" android:usesCleartextTraffic="false">
+    <provider android:name=".NotesProvider" android:authorities="com.mobius.ownedlab.notes" android:exported="true" android:grantUriPermissions="false" />
+    <provider android:name=".PrivateProvider" android:authorities="com.mobius.ownedlab.private" android:exported="false" android:grantUriPermissions="false" />
+  </application>
+</manifest>
