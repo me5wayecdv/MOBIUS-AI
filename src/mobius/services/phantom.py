@@ -157,6 +157,7 @@ class PhantomEmulatorAdapter:
             )
 
     def probe_package_present(self, package: str) -> EmulatorProbeResult:
+        self._require_literal_package(package)
         self._require_emulator()
         rc, text = self._run(self._argv("shell", "pm", "list", "packages", package))
         present = rc == 0 and any(
@@ -166,12 +167,22 @@ class PhantomEmulatorAdapter:
             "package_present", package, present, "pm list packages", text[:_DETAIL_OUTPUT_BYTES]
         )
 
+    @staticmethod
+    def _require_literal_package(package: str) -> None:
+        # adb shell serializes its trailing argv for a remote shell. A Python
+        # argv list alone therefore does not make a package string shell-safe.
+        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)+", package) is None:
+            raise PoCAdapterUnavailable("literal Android package required")
+
     def verify_installed_identity(self, package: str, sha256: str, serial: str, uid: int) -> None:
         """Read-only preflight. Reject split installs, root adbd and ambiguous output.
 
         Repeat before each reviewed provider query. This narrows, but cannot make
         an external device immutable against concurrent privileged replacement.
         """
+        self._require_literal_package(package)
+        if re.fullmatch(r"[0-9a-f]{64}",sha256) is None:
+            raise PoCAdapterUnavailable("literal SHA256 required")
         if self._serial != serial or not serial:
             raise PoCAdapterUnavailable("reviewed emulator serial does not match configured adapter")
         self._require_emulator(timeout=5)
@@ -201,7 +212,12 @@ class PhantomEmulatorAdapter:
             return EmulatorProbeResult("provider_query", uri, None, "query timed out", "", "transport_error")
         except OSError:
             return EmulatorProbeResult("provider_query", uri, None, "transport unavailable", "", "transport_error")
-        # Row payload is attacker-controlled. Never interpret it as a platform denial.
+        # Row payload is attacker-controlled. Newlines inside a value can inflate
+        # this line count, so it is a bounded row-marker count, NOT verified exact
+        # cursor cardinality. The reviewed proposal asks only whether >=1 marker
+        # exists. Do not promote higher thresholds/cardinality claims without a
+        # structured trusted result channel. Total bytes remain independently capped.
+        # Never interpret a row payload as a platform denial.
         rows = len(re.findall(r"(?m)^Row:\s*\d+", text))
         denial_lines = re.findall(r"(?m)^\s*(?:java\.lang\.)?SecurityException: Permission Denial:[^\n]*", text)
         target_denial = any(re.search(r"(?<![A-Za-z0-9_.])" + re.escape(authority) + r"(?![A-Za-z0-9_.])", line)
@@ -233,6 +249,7 @@ class PhantomEmulatorAdapter:
             result.detail, "", result.outcome)
 
     def _pids_of(self, package: str) -> list[str]:
+        self._require_literal_package(package)
         rc, text = self._run(self._argv("shell", "pidof", package))
         if rc != 0:
             return []

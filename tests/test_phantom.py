@@ -590,3 +590,15 @@ def test_provider_query_rejects_remote_shell_metacharacters_before_adb(authority
     def runner(*args):raise AssertionError('must reject before adb')
     with pytest.raises(PoCAdapterUnavailable,match='literal authority'):
         PhantomEmulatorAdapter(adb_path='/fake',runner=runner).probe_provider_query_rows(authority,path)
+
+
+@pytest.mark.parametrize('package',['com.example;id','com.example$(id)','com.example\nwhoami','--help','com/example','com..example'])
+def test_package_strings_are_checked_before_remote_adb_shell(package):
+    def runner(*args):raise AssertionError('must reject before adb')
+    adapter=PhantomEmulatorAdapter(adb_path='/fake',serial='emulator-5554',runner=runner)
+    with pytest.raises(PoCAdapterUnavailable,match='literal Android package'):
+        adapter.probe_package_present(package)
+    with pytest.raises(PoCAdapterUnavailable,match='literal Android package'):
+        adapter.verify_installed_identity(package,'a'*64,'emulator-5554',2000)
+    with pytest.raises(PoCAdapterUnavailable,match='literal Android package'):
+        adapter._pids_of(package)
