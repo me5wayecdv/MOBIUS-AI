@@ -13,10 +13,10 @@ def module():
 
 @pytest.mark.parametrize('failure',[None,'failed','no_worker','no_applied','digest','bad_id','timeout','wrong_worker','nonempty_host'])
 def test_three_worker_route_and_fail_closed(failure):
-    m=module();apk=m.fixed_fixture();sha=hashlib.sha256(apk).hexdigest();calls=[];now=[0];jid=str(uuid.uuid4())
+    m=module();apk=m.fixed_fixture();sha=hashlib.sha256(apk).hexdigest();calls=[];now=[0];jid=str(uuid.uuid4());rid=str(uuid.uuid4())
     def request(method,path,body=None):
         calls.append((method,path));now[0]+=2 if failure=='timeout' else 0
-        if path=='/applications':return [{}] if failure=='nonempty_host' else []
+        if path=='/_canary/freshness':return {} if failure=='nonempty_host' else {'kind':'disposable-canary-v1','run_id':rid,'worker_id':'offline-fake','empty':True}
         if path=='/authorizations':return {'id':'auth_test'}
         if path=='/scans':return {'id':'scn_test'}
         if method=='POST' and path.endswith('/jobs'):return {'job_id':'../x' if failure=='bad_id' else jid}
@@ -27,7 +27,7 @@ def test_three_worker_route_and_fail_closed(failure):
                 'started_at':'unit','finished_at':'unit','applied':failure!='no_applied'}
         if path.endswith('/evidence-package'):return {'observations':[{'id':'unit'}],'evidence':[{'id':'unit'}]}
         return {'application':{'sha256':'b'*64 if failure=='digest' else sha,'package_name':'com.example.demo'}}
-    def run():return m.run_canary(apk,request,lambda _:{'id':'app_test','sha256':sha},expect_worker_id='offline-fake',clock=lambda:now[0],sleep=lambda _:None,budget=3)
+    def run():return m.run_canary(apk,request,lambda _:{'id':'app_test','sha256':sha},expect_worker_id='offline-fake',expect_run_id=rid,clock=lambda:now[0],sleep=lambda _:None,budget=3)
     if failure:
         with pytest.raises((ValueError,TimeoutError)):run()
     else:
@@ -51,14 +51,14 @@ def test_canary_through_actual_api_with_explicitly_supplied_completions(client,c
     from mobius.adapters.dex import index_apk
     from mobius.adapters.dex_payload import code_index_payload
     from test_provider_worker import _sample_payload,FIXTURE_DEX,IMAGE
-    m=module();raw=m.fixed_fixture();sha=hashlib.sha256(raw).hexdigest()
+    m=module();raw=m.fixed_fixture();sha=hashlib.sha256(raw).hexdigest();rid=str(uuid.uuid4())
     monkeypatch.setenv('MOBIUS_PROVIDER_IMAGE',IMAGE)
     def upload(apk):
         result=client.post('/api/v1/applications',files={'file':('canary.apk',apk,'application/vnd.android.package-archive')})
         assert result.status_code<300,result.text
         return result.json()
     def request(method,path,body=None):
-        if method=='GET' and path=='/applications':return [] # supplied future fresh-host capability, NOT current API
+        if method=='GET' and path=='/_canary/freshness':return {'kind':'disposable-canary-v1','run_id':rid,'worker_id':'offline-supplied-canary','empty':True} # supplied test-only capability
         result=client.request(method,'/api/v1'+path,json=body)
         assert result.status_code<300,result.text
         data=result.json()
@@ -74,20 +74,23 @@ def test_canary_through_actual_api_with_explicitly_supplied_completions(client,c
                 else:payload=code_index_payload(index_apk(raw),sha)
                 q.succeed(job.id,'offline-supplied-canary',payload,staged_sha256=sha);session.commit()
         return data
-    result=m.run_canary(raw,request,upload,expect_worker_id='offline-supplied-canary')
+    result=m.run_canary(raw,request,upload,expect_worker_id='offline-supplied-canary',expect_run_id=rid)
     assert result['status']=='canary_api_jobs_applied'
     assert len(result['jobs'])==3 and not result['provider_flow_semantics_proven']
 
 
 def test_current_api_has_no_fresh_host_capability_and_canary_refuses_before_upload(client):
-    m=module();writes=[]
+    import httpx
+    m=module();writes=[];methods=[]
     def request(method,path,body=None):
+        methods.append(method)
         response=client.request(method,'/api/v1'+path,json=body)
         response.raise_for_status()
         return response.json()
-    with pytest.raises(Exception):
-        m.run_canary(m.fixed_fixture(),request,lambda _:writes.append('upload'),expect_worker_id='unit')
-    assert writes==[]
+    with pytest.raises(httpx.HTTPStatusError) as caught:
+        m.run_canary(m.fixed_fixture(),request,lambda _:writes.append('upload'),expect_worker_id='unit',expect_run_id=str(uuid.uuid4()))
+    assert caught.value.response.status_code==404
+    assert writes==[] and methods==['GET']
 
 
 def test_connected_transport_import_has_no_side_effects(monkeypatch):
@@ -99,3 +102,13 @@ def test_connected_transport_import_has_no_side_effects(monkeypatch):
     transport=importlib.util.module_from_spec(spec);spec.loader.exec_module(transport)
     assert {'raw','headers'} <= set(inspect.signature(transport.call).parameters)
     assert transport.failures==[] and transport.CALL_DEADLINE is None
+
+
+def test_transport_refuses_redirect_instead_of_following_to_another_api():
+    import urllib.request,urllib.error
+    spec=importlib.util.spec_from_file_location('transport_no_redirect',Path(__file__).parents[1]/'scripts/connected_journey_smoke.py')
+    m=importlib.util.module_from_spec(spec);spec.loader.exec_module(m)
+    request=urllib.request.Request('http://127.0.0.1/api/v1/health')
+    with pytest.raises(urllib.error.HTTPError) as caught:
+        m.NoRedirect().redirect_request(request,None,302,'redirect',{},'http://other.invalid')
+    assert caught.value.code==302

@@ -34,7 +34,7 @@ Required configuration, values independently checked on the chosen host:
 
 | Setting | API | Host consumer |
 | --- | --- | --- |
-| `MOBIUS_ENV=development` | yes | yes |
+| `MOBIUS_ENV=test` | yes | yes |
 | `MOBIUS_DB_URL` | dedicated migrated DB | optional |
 | `MOBIUS_WORKER_DB_URL` | no | same dedicated DB |
 | `MOBIUS_ARTIFACT_ROOT` | fresh absolute directory | same directory |
@@ -54,7 +54,7 @@ a mutable tag as a digest. No GHCR login/publication is needed. Do not run any
 publication workflow. A local image build/download is still runtime work and
 requires the separate go-ahead.
 
-Start API with `python -m uvicorn mobius.api.app:create_app --factory --host
+Start API with `python -m uvicorn mobius.api.canary_app:create_canary_app --factory --host
 127.0.0.1 --port 8791` and ONE consumer with `python -m mobius.worker.runner`,
 using explicit tracked process IDs and a bounded parent supervisor. Set a real
 fixed consumer ID for this run. Do not reuse an existing production queue. A
@@ -102,22 +102,30 @@ host/image provenance and resource bounds, choose a reviewed code-bearing lab
 contract, and get the required runtime confirmation. This recipe does none of
 those by itself.
 
-## Review hold: fresh-host capability is absent
+## Explicit disposable-instance freshness seam, separately reviewed source
 
-The client now requires `GET /applications` to return exactly an empty JSON list
-before its first write. The current product API does NOT expose that list route,
-so the executable client intentionally refuses before upload on the current API.
-The offline API lifecycle test supplies the missing read capability explicitly;
-it does NOT prove the current canary is executable or that the host is fresh.
-Do not remove/bypass this refusal. A reviewed freshness capability or a stronger
-explicit disposable-host attestation is needed before proposing a real run.
+Default API exposes neither an application list nor this test seam. An explicit
+factory `mobius.api.canary_app:create_canary_app` is available only with
+`MOBIUS_ENV=test`, disabled model gateway, a canonical `MOBIUS_CANARY_RUN_ID`
+UUID and literal `MOBIUS_CANARY_WORKER_ID`. The manual workflow must generate a
+fresh run UUID and set the same values for the factory and canary client. Add
+`--expect-run-id <same-run-UUID>` to the explicit invocation. Factory startup
+refuses nonempty investigation/application/authorization/job/evidence/hypothesis/
+approval/report/PoC tables. Its hidden GET `/_canary/freshness` repeats that check
+and returns only run ID, configured worker ID and an empty flag, never user data.
+The client refuses missing/mismatched fields before upload. Default API returns
+404 and the client makes no non-GET request.
 
-The synthetic authorization is only a product test record, not owner permission.
-There are no model-consent, hypothesis, PoC, approvals or report routes in this
-client. Downstream static services enforce package/digest/intensity/expiry on the
-record but do not authenticate a human owner's legal authority. The development
-analyst stub must remain confined to the disposable test instance.
+This is a freshness HEURISTIC and configuration correlation, not cryptographic
+attestation or worker authenticity. A malicious local service could forge it,
+and the empty check races with another writer. Exclusive disposable host/DB
+ownership and no tunnel to a real instance are deployment duties. The API kind
+names `recon`, `provider-analysis`, `spectre` match existing job routes. Exact
+worker ID proves configuration agreement, not that the worker was isolated.
 
-Before runtime, independently verify container network denial and CPU/memory/disk/
-output/time enforcement on that host. Existing canary API results and offline
-tests do not establish those unverified limits.
+The synthetic authorization is a product test record, not owner permission.
+The client has no model-consent/hypothesis/PoC/approvals/report requests. Static
+services check digest/package/intensity/expiry, not human legal authority.
+Docker access for the consumer is root-equivalent; use a disposable host only.
+Before runtime, independently verify network denial and CPU/memory/disk/output/
+time enforcement. Offline tests do not establish those kernel-enforced limits.
