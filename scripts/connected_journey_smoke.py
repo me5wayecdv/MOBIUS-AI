@@ -31,6 +31,7 @@ import os
 import sys
 import time
 import urllib.request
+import urllib.error
 import uuid
 
 BASE = os.environ.get("MOBIUS_SMOKE_API", "http://127.0.0.1:8791")
@@ -48,6 +49,11 @@ def check(name: str, ok: bool, detail: str = "") -> None:
         failures.append(name)
 
 
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(req.full_url,code,'redirect refused',headers,fp)
+
+
 def call(method: str, path: str, body=None, raw=None, headers=None):
     url = BASE + "/api/v1" + path
     data = raw
@@ -60,7 +66,9 @@ def call(method: str, path: str, body=None, raw=None, headers=None):
     req = urllib.request.Request(url, data=data, headers=hdrs, method=method)
     remaining = 300 if CALL_DEADLINE is None else min(10, CALL_DEADLINE-time.monotonic())
     if remaining <= 0: raise TimeoutError('preparation HTTP deadline')
-    with urllib.request.urlopen(req, timeout=remaining) as resp:
+    with urllib.request.build_opener(NoRedirect()).open(req, timeout=remaining) as resp:
+        if not 200 <= resp.status < 300:
+            raise urllib.error.HTTPError(url,resp.status,"non-success API response",resp.headers,None)
         chunks = []; size = 0
         while True:
             if CALL_DEADLINE is not None:

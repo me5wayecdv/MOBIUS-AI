@@ -96,3 +96,14 @@ def test_dex_header_integrity_and_query_instruction_operands():
     assert 'rawQuery' in instructions[1].get_output()
     # register5 is parameter3 (selection); source comes from actual method arguments.
     assert instructions[1].get_output().startswith('v0, v5, v6,')
+
+
+def test_negative_helper_bytecode_is_constant_not_a_disconnected_name_check():
+    from androguard.core.dex import DEX
+    with ZipFile(BytesIO(fixture_apk())) as z:vm=DEX(z.read('classes.dex'))
+    cls=next(c for c in vm.get_classes() if c.get_name()=='Lcom/example/demo/NotesProvider;')
+    helper=next(m for m in cls.get_methods() if m.get_name()=='negative')
+    instructions=list(helper.get_instructions())
+    assert [i.get_name() for i in instructions]==['const/4','const-string','invoke-virtual','move-result-object','return-object']
+    assert 'SELECT 1' in instructions[1].get_output()
+    assert instructions[2].get_output().startswith('v0, v1, v6,')

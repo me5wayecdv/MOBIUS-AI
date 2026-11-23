@@ -124,6 +124,8 @@ class PhantomEmulatorAdapter:
         runner: Runner | None = None,
         emulator_check: Callable[[], bool] | None = None,
     ) -> None:
+        if serial is not None and re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.:-]{0,127}",serial) is None:
+            raise PoCAdapterUnavailable("literal device serial required")
         self._adb = adb_path
         self._serial = serial
         self._frida = frida_path
@@ -181,6 +183,8 @@ class PhantomEmulatorAdapter:
         an external device immutable against concurrent privileged replacement.
         """
         self._require_literal_package(package)
+        if type(uid) is not int or uid != 2000:
+            raise PoCAdapterUnavailable("integer non-root shell UID required")
         if re.fullmatch(r"[0-9a-f]{64}",sha256) is None:
             raise PoCAdapterUnavailable("literal SHA256 required")
         if self._serial != serial or not serial:
@@ -253,7 +257,10 @@ class PhantomEmulatorAdapter:
         rc, text = self._run(self._argv("shell", "pidof", package))
         if rc != 0:
             return []
-        return text.split()
+        pids=text.split()
+        if any(re.fullmatch(r"[1-9][0-9]{0,9}",pid) is None for pid in pids):
+            raise PoCAdapterUnavailable("literal process identity required")
+        return pids
 
     def _ensure_app_running(self, package: str) -> tuple[str | None, bool]:
         """Target-side setup (not instrumentation): launch the lab app on the

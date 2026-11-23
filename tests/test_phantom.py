@@ -602,3 +602,19 @@ def test_package_strings_are_checked_before_remote_adb_shell(package):
         adapter.verify_installed_identity(package,'a'*64,'emulator-5554',2000)
     with pytest.raises(PoCAdapterUnavailable,match='literal Android package'):
         adapter._pids_of(package)
+
+
+@pytest.mark.parametrize('serial',['-x','a b','a\nb','$(id)',''])
+def test_serial_rejected_before_any_command(serial):
+    with pytest.raises(PoCAdapterUnavailable,match='literal device serial'):
+        PhantomEmulatorAdapter(adb_path='/fake',serial=serial)
+
+
+def test_identity_digest_and_uid_types_rejected_before_adb():
+    def runner(*args):raise AssertionError('no adb')
+    adapter=PhantomEmulatorAdapter(adb_path='/fake',serial='emulator-5554',runner=runner)
+    with pytest.raises(PoCAdapterUnavailable,match='literal SHA256 required'):
+        adapter.verify_installed_identity('com.example','A'*64,'emulator-5554',2000)
+    for uid in ('2000',2000.0,True,0):
+        with pytest.raises(PoCAdapterUnavailable,match='integer non-root'):
+            adapter.verify_installed_identity('com.example','a'*64,'emulator-5554',uid)
