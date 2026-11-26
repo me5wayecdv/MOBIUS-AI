@@ -6,7 +6,9 @@
   REAL persisted hypothesis id (no seeding) -> approvals API -> emulator
   Frida execution -> persisted evidence -> ARCHIVIST report -> read-back.
 
-This closes the gap between two separately verified slices: the model-backed
+This attempts a connection between separately verified slices; a pass is instrumentation
+plumbing only, not security validation of the model hypothesis. It does not close
+the full agent acceptance gap. Historical slices: the model-backed
 hypothesis path (REAL_TARGET_VERIFICATION.md) and the dynamic-evidence
 journeys that seed a hypothesis (phantom-frida-smoke). Nothing is seeded
 here; the plan references the hypothesis the model actually produced.
@@ -14,7 +16,7 @@ here; the plan references the hypothesis the model actually produced.
 Honesty rules:
 - The per-investigation model consent granted here is a synthetic CI test
   consent inside a throwaway investigation (the upstream-data route itself
-  is the owner-authorized free OpenCode provider). It is labelled as such.
+  requires separate user-channel authority for each permitted scope). It is labelled as such.
 - The plan approval is a synthetic CI test approval through the product
   approvals API - not a real user-approved plan.
 - The model leg is not tuned toward any outcome: an invalid, refusing, or
@@ -29,6 +31,7 @@ import os
 import sys
 import time
 import urllib.request
+import urllib.error
 import uuid
 
 BASE = os.environ.get("MOBIUS_SMOKE_API", "http://127.0.0.1:8791")
@@ -37,12 +40,18 @@ PKG = "infosecadventures.allsafe"
 SHA256 = "d6792d6634a033f048f935f1269179d3c27b859c4c34b1e9e5b008a88375efd9"
 
 failures: list[str] = []
+CALL_DEADLINE: float | None = None
 
 
 def check(name: str, ok: bool, detail: str = "") -> None:
     print(("PASS " if ok else "FAIL ") + name + (f" ({detail})" if detail else ""))
     if not ok:
         failures.append(name)
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise urllib.error.HTTPError(req.full_url,code,'redirect refused',headers,fp)
 
 
 def call(method: str, path: str, body=None, raw=None, headers=None):
@@ -55,8 +64,25 @@ def call(method: str, path: str, body=None, raw=None, headers=None):
     if headers:
         hdrs.update(headers)
     req = urllib.request.Request(url, data=data, headers=hdrs, method=method)
-    with urllib.request.urlopen(req, timeout=300) as resp:
-        payload = resp.read()
+    remaining = 300 if CALL_DEADLINE is None else min(10, CALL_DEADLINE-time.monotonic())
+    if remaining <= 0: raise TimeoutError('preparation HTTP deadline')
+    with urllib.request.build_opener(NoRedirect()).open(req, timeout=remaining) as resp:
+        if not 200 <= resp.status < 300:
+            raise urllib.error.HTTPError(url,resp.status,"non-success API response",resp.headers,None)
+        chunks = []; size = 0
+        while True:
+            if CALL_DEADLINE is not None:
+                left = CALL_DEADLINE-time.monotonic()
+                if left <= 0: raise TimeoutError('preparation HTTP body deadline')
+                # HTTPResponse.read1 performs at most one underlying read. Reset the
+                # socket timeout to the remaining absolute budget before each read.
+                resp.fp.raw._sock.settimeout(min(10,left))
+            chunk = resp.read1(65536)
+            if not chunk: break
+            size += len(chunk)
+            if size > 2*1024*1024: raise ValueError('API response body over limit')
+            chunks.append(chunk)
+        payload = b''.join(chunks)
         ctype = resp.headers.get("Content-Type", "")
     if "application/json" in ctype:
         return json.loads(payload)
@@ -79,6 +105,48 @@ def multipart_upload(path: str, file_path: str):
     ])
     return call("POST", path, raw=body,
                 headers={"Content-Type": f"multipart/form-data; boundary={boundary}"})
+
+
+def prepare_static_evidence(scan_id: str, *, request=call, clock=time.monotonic, sleep=time.sleep,
+                            timeout_seconds: float = 180) -> dict:
+    """Use configured isolated workers, not an inline parsing bypass or seeded evidence.
+
+    A missing worker/image, failed job, timeout or manifest-only package stops before any
+    model request. Runtime/code evidence must be real persisted product output. The
+    finite call timeout is also clamped to the shared preparation deadline by call().
+    """
+    global CALL_DEADLINE
+    old_deadline = CALL_DEADLINE
+    deadline = clock() + timeout_seconds
+    CALL_DEADLINE = time.monotonic() + timeout_seconds
+    try:
+        for kind in ('provider-analysis', 'spectre'):
+            if clock() >= deadline: raise TimeoutError('static evidence preparation deadline')
+            stem = f'/scans/{scan_id}/{kind}/jobs'
+            queued = request('POST', stem)
+            job_id = queued.get('job_id')
+            try:
+                if not isinstance(job_id, str) or str(uuid.UUID(job_id)) != job_id: raise ValueError
+            except (ValueError, AttributeError):
+                raise ValueError('static worker did not return a canonical job identity')
+            while True:
+                if clock() >= deadline: raise TimeoutError('static evidence preparation deadline')
+                status = request('GET', stem+'/'+job_id).get('status')
+                if status == 'succeeded': break
+                if status not in ('queued', 'running'):
+                    raise ValueError('static worker failed or returned an unknown state')
+                sleep(min(.5, max(0, deadline-clock())))
+            request('POST', stem+'/'+job_id+'/apply')
+        package = request('GET', f'/scans/{scan_id}/evidence-package')
+        # Paths/sinks justify investigation, NOT exploitability. Their absence is not
+        # repaired by telling the model a vulnerability must exist.
+        if not package.get('observations') or not package.get('evidence'):
+            raise ValueError('no persisted static observations/evidence')
+        if not any(package.get(k) for k in ('method_references','sink_references','source_snippets')):
+            raise ValueError('manifest-only package: no code evidence for model investigation')
+        return package
+    finally:
+        CALL_DEADLINE = old_deadline
 
 
 def main() -> int:
@@ -112,8 +180,17 @@ def main() -> int:
     package = (detail.get("application") or {}).get("package_name")
     check("package-parsed-by-recon", package == PKG, str(package))
 
+    try:
+        prepare_static_evidence(scan_id)
+    except (ValueError, TimeoutError, OSError) as exc:
+        # No raw provider response, APK strings or arbitrary exception text in logs.
+        check('static-evidence-ready', False, type(exc).__name__)
+        print('SUMMARY failures=' + str(len(failures)))
+        return 1
+    check('static-evidence-ready', True)
+
     # Synthetic CI test consent inside this throwaway investigation; the
-    # upstream route is the owner-authorized free OpenCode provider. Distinct
+    # upstream route requires separately grounded authority. Distinct
     # from both the owner's real consent and any real user-approved plan.
     consent = call("PUT", f"/scans/{scan_id}/model-consent", {
         "enabled": True, "provider": "opencode", "auto_veritas": False,
@@ -134,6 +211,9 @@ def main() -> int:
         print("SUMMARY failures=" + str(len(failures)))
         return 1
     hyp_id = hyps[0]["id"]
+    # This fixed enumeration plan is an instrumentation transport check only. It
+    # does not test the security claim in an arbitrary model-produced hypothesis.
+    check('instrumentation-only-not-hypothesis-validation', True)
     prov = reply.get("provenance") or {}
     check("hypothesis-provenance-recorded",
           bool(prov.get("provider")) and bool(prov.get("response_sha256")),
@@ -152,7 +232,8 @@ def main() -> int:
              "expected_value": 100},
         ],
         "expected_outcome": ("Observation-only Frida attach enumerates at least 100 loaded "
-                             "classes in the lab app process."),
+                             "classes in the lab app process. Instrumentation transport only, "
+                             "NOT validation of the model security hypothesis."),
         "safety_class": "non_destructive",
         "requires_approval": True,
         "cleanup_steps": [

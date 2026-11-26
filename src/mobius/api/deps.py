@@ -56,6 +56,7 @@ class AppContext:
         # Trusted host injection only. No env/URL/argv escape hatch and no sudo
         # from API; default routes fail closed for native_local_fixture plans.
         self.native_fixture_adapter = None
+        self.owned_android_fixture_adapter = None
         self.model_gateway = create_model_gateway(
             self.settings.model_provider,
             base_url=self.settings.model_base_url,

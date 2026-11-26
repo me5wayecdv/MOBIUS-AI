@@ -473,6 +473,33 @@ class NexusHypothesisService:
         output: list[ProposedHypothesis] = []
         for observation in package["observations"]:
             attrs = observation.get("attributes") or {}
+            # Provider may-flow observations carry unordered method references,
+            # not reachability paths. Keep that distinction in rule-derived prose.
+            if (observation.get("agent") == "SPECTRE"
+                    and observation.get("kind") == "inference"
+                    and observation.get("fidelity") == "decompiled"
+                    and attrs.get("operation") == "read"
+                    and isinstance(attrs.get("method_references"), list)
+                    and attrs["method_references"]
+                    and isinstance(attrs.get("sink_references"), list)
+                    and attrs["sink_references"]
+                    and observation.get("evidence_refs")):
+                component = observation.get("subject_ref") or "unknown provider"
+                output.append(ProposedHypothesis(
+                    claim=(f"Bounded static provider analysis for {component} records a read may-flow; "
+                           "determine whether the reviewed read route is exposed to an approved caller. "
+                           "Method references are not an ordered caller chain. Runtime access and "
+                           "exploitability are unproven.")[:1000],
+                    derived_from=[observation["id"]],
+                    required_evidence=["source_location", "caller_chain", "sink_operation",
+                                       "attacker_controlled_input", "guard_order", "runtime_observation",
+                                       "controlled_poc", "negative_control"],
+                    maswe=list(observation.get("maswe") or [])[:10],
+                    priority=0.5,
+                ))
+                if len(output) == 10:
+                    break
+                continue
             if attrs.get("reachability") not in {"reached-unguarded", "reached-guarded"}:
                 continue
             sink = attrs.get("sink")

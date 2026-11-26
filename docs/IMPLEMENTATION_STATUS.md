@@ -1,5 +1,33 @@
 # IMPLEMENTATION STATUS
 
+## Current audit boundary: 2026-11-22
+
+The sections below this notice are a **historical implementation ledger with contradictory dates/rows**, not a current acceptance checklist. In particular, old statements that no model/reviewer/graph/PHANTOM exists, that KVM is categorically unavailable, or that every local startup recipe runs the full inline analysis pipeline must not be used as current facts. They are retained here as historical records, not silently upgraded to successful tests.
+
+Current source and existing CI establish a tested APK intake, manifest/DEX analysis, evidence/event/report foundation, graph/War Room UI, optional consent-gated model hypotheses/review and narrow earlier Android smoke slices. They do not establish a fully working autonomous agent or broad detection reliability.
+
+### Evidence that can be checked independently
+
+- Held preparation head `e1146a5bd9b09b571aa29fed7fece02fad86afe7`: [CI tests/browser](https://github.com/me5wayecdv/MOBIUS-AI/actions/runs/44933620430) and [isolated RECON/DEX pipeline](https://github.com/me5wayecdv/MOBIUS-AI/actions/runs/44933620369) succeeded. The browser test seeds evidence/hypotheses and uses simulated local PoCs (`frontend/e2e/war-room.spec.js`); it is not Android execution.
+- Historical Allsafe [provider runtime smoke](https://github.com/me5wayecdv/MOBIUS-AI/actions/runs/44845497482), [API read-only PHANTOM smoke](https://github.com/me5wayecdv/MOBIUS-AI/actions/runs/44862803427) and [observation-only Frida smoke](https://github.com/me5wayecdv/MOBIUS-AI/actions/runs/44884058267) succeeded. These are narrow lab slices, not evidence of the whole agent's readiness on a user's machine. Their past execution does not authorize a new run.
+- The [connected model-hypothesis-to-runtime journey](https://github.com/me5wayecdv/MOBIUS-AI/actions/runs/44884058366) failed at its emulator journey step. A read-only workflow-history audit found no successful run of that workflow. The retained run log/DB audit narrowed this to a schema-valid empty model hypothesis list after manifest-only RECON; no code findings or method/sink/source context had been supplied. The model abstained rather than inventing a claim. The run stopped before runtime PoC/report.
+- [PR121](https://github.com/me5wayecdv/MOBIUS-AI/pull/121) remains draft/unmerged held source preparation. The new owned-app traffic/capture/replay path has not been executed. Real image export defaults refused without an implemented daemon/VM resource guard.
+- The earlier [host capability probe](https://github.com/me5wayecdv/MOBIUS-AI/actions/runs/44913618178) failed inconclusively. It does not prove KVM, Docker or Android infeasibility.
+
+### Concrete readiness blockers, not owner approval requests
+
+1. The complete agent acceptance journey needs actual successful execution with its model-produced hypothesis, approved bounded action, real result, persisted evidence and report. Separate green slices do not fill that gap.
+2. Default local startup has no running isolated worker and direct SPECTRE/NEXUS parsing is disabled outside test unless explicitly enabled for trusted local development. See `api/routes.py`, `docker-compose.yml` and [LOCAL_RUN.md](LOCAL_RUN.md). Never disable safety checks merely to make a demo green.
+3. The owned-Android alternative still needs a real enforced disposable resource envelope, independently bound image/source locks, bounded inert harness, approved execution scope and appropriate retained evidence. The inventory alone cannot establish runtime safety or finish the agent.
+4. Detection remains coverage/catalogue bounded. Incomplete coverage and model suggestions must not be presented as confirmed vulnerabilities or an established detection rate.
+5. Production authentication, deployment and the owner's actual demo host remain separate unverified capabilities. This is a development product, not a production multi-user service.
+
+Source/API regression audit on 2026-11-22: 138 selected tests passed locally (API, NEXUS/hypotheses, ARCHIVIST, graph API, PHANTOM tests). No new Docker, model, SDK, emulator or Android action was performed in that audit. This is supporting test evidence, not live target validation.
+
+---
+
+## Historical ledger (not the current acceptance state)
+
 > **Main at `bb494a3` (2026-11-19) is the verified closeout baseline.** GitHub Actions CI on main runs the full pytest suite on Python 3.11 and 3.12 with PostgreSQL 16 integration tests, plus the War Room browser E2E (536 tests on the clean tree).
 > RECON decodes real binary manifests, SPECTRE reads real dex and proves or fails to prove sink
 > reachability from an exported entry point, and NEXUS drives that work from the frontier to a
@@ -230,3 +258,24 @@ See `docs/DEMO_BLOCKERS.md` for the ordered path from APK selection through the 
 - Added API tests for persistence, evidence-package inclusion, component filtering and ownership, plus a NEXUS test proving the exact persisted source excerpt enters the model package and its evidence ID is recorded in decision provenance. CI Run #707 passed on HEAD `a2f019fc2b5f578951b353eaa15f4bccb519e6bf`: Python 3.11, Python 3.12 and War Room browser E2E/screenshots. D-021 remains PARTIAL pending independent review.
 - No migration, dependency, image push/publication, direct main commit, or restricted-file change was made.
 - D-014 (PR #53) adds the versioned YAML source/sink/guard catalogue as API-level candidates only: it does not prove attacker control, propagation, sanitization failure or exploitability.
+
+### Reviewed provider-read proposal seam (source-only, not activated)
+
+The closed proposal builder has no default fixture contracts and no API wiring.
+It can prepare an approval-required plan only from a cited persisted provider
+read-flow observation, original hash-checked detector/manifest evidence and an
+independently reviewed exact-APK route/control contract. The canonical plan binds
+the contract/review digests, evidence IDs/digests and explicit emulator serial.
+Execution rechecks metadata/citation and verifies non-root shell UID 2000 and the
+single installed base APK hash before each provider query. Split installs and
+unrecognized identity output fail closed. This narrows device-state races but
+does not make a device immutable against concurrent privileged replacement.
+
+Provider outcomes distinguish shell-readable rows, explicit target-authority
+permission denial, empty results, provider-not-found, transport failure and
+unclassified output. No provider row payload is retained by these probes.
+Process output is drained under a combined streaming cap and absolute timeout;
+owned child process groups are killed/reaped on exit. Offline child-process tests
+are not Android or isolation evidence. Approval alone does not prove lab contract
+review, execution permission, installed identity or an actual security property.
+No full connected model-to-security-test/report success is established here.

@@ -1,20 +1,17 @@
 # Local self-host run
 
-Two ways to run the full War Room stack on one machine:
+## Current readiness warning (2026-11-22 audit)
 
-- **Option B (no Docker)** is the verified path: run end to end on
-  2026-11-19 on Python 3.12 / PostgreSQL 16 (real pinned APK, upload to
-  report; see "Verification status" at the bottom).
-- **Option A (Docker Compose)** is verified by CI startup smoke: the stack
-  builds, boots, and serves intake, persistence, and the UI shell on every
-  relevant change (`.github/workflows/local-delivery-smoke.yml`, first green
-  run on `main` at eb93308, 2026-11-19). The Compose stack runs the same
-  inline pipeline as Option B; the constrained OCI worker is not wired into
-  Compose (worker scope below).
+These are startup instructions for a single-user local development stack, not a complete agent deployment or Android-runtime acceptance procedure. They have NOT been rerun on the owner's demonstration laptop. Do not call the agent ready merely because the UI and health endpoint load.
 
-What you get: APK upload, RECON manifest/surface analysis, inline multi-DEX
-indexing, SPECTRE reachability, NEXUS investigation, attack graph, PoC lab
-(local harnesses only), Markdown report, War Room UI.
+- **Option B (no Docker)** has a historical 2026-11-19 upload-to-report record. It is not current proof that the commands below automatically provide an end-to-end analysis journey.
+- **Option A (Docker Compose)** has CI startup-smoke coverage: build, boot, intake, persistence and UI shell. It does not wire a constrained worker into Compose.
+- Current `POST /scans/{id}/spectre` and `/nexus` refuse in-process DEX parsing outside test mode unless `MOBIUS_SPECTRE_INLINE=1` is explicitly set. The commands below do NOT set that flag. They can start successfully while those routes correctly return 503.
+- The isolated RECON/DEX queue path is separately CI-verified with configured digest-pinned images and a running worker. Configuring an image alone does not supply a running worker or connect the NEXUS dispatch loop to it. Do not expose the Docker socket to the API as a shortcut.
+- `MOBIUS_SPECTRE_INLINE=1` is a local-development escape hatch for an explicitly trusted lab APK only. It parses APK DEX in the API process and is NOT an isolation fix. It is deliberately not enabled in the copy-paste startup commands. Do not set `MOBIUS_ENV=test` to make a real deployment pass.
+- Model calls are off by default and require explicit investigation consent plus a configured provider. A model suggestion is not a confirmed vulnerability. Browser E2E's fixture seed and local-harness PoC are labelled simulations, not an APK runtime demonstration.
+
+What can be shown from the tested existing product: intake/authorization records, stored evidence, event replay, graph and Markdown report interfaces. A genuine investigation also needs the correct configured analysis path and a verified authorized target. Earlier narrow Android smoke records do not authorize rerunning them or activate the held owned-app traffic backend.
 
 ## Option A: Docker Compose (CI startup-smoke verified)
 
@@ -33,7 +30,7 @@ The stack binds 127.0.0.1 only. The API's analyst identity is a development
 stub (`analyst-1`, see docs/INVESTIGATION_OWNERSHIP.md): this delivery is
 single-user local use, not multi-user hosting.
 
-## Option B: no Docker (Python + PostgreSQL + Node) - verified
+## Option B: no Docker (historical startup recipe; current pipeline prerequisites above)
 
 Verified on Python 3.12, PostgreSQL 16, Node 22. The database role/database
 steps need a PostgreSQL account with CREATEDB/CREATEROLE authority (usually
@@ -117,7 +114,7 @@ local-image shortcut, and none is documented here. GHCR publication of the
 JADX image remains a manual, owner-gated workflow and is not part of local
 delivery; the JADX image stays unpublished.
 
-## Verification status (2026-11-19)
+## Historical verification status (2026-11-19, not current acceptance)
 
 - Option B verified end to end on clean `main` (commit c6f0b82): PostgreSQL
   16 over TCP with the exact `mobius` role/password above, `alembic upgrade

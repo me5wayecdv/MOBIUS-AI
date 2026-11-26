@@ -22,19 +22,19 @@ The War Room is not a decorative dashboard. Agent activity, code locations, tool
 
 ## Current implementation — read before making claims
 
-The current backend is a tested foundation, not yet the complete autonomous system:
-- APK ZIP intake, SHA-256 identity and authorization binding.
-- Real Android binary manifest parsing through androguard.
-- Multi-DEX ZIP enumeration/index aggregation and bounded application-level call-graph reachability (per-method DEX provenance and full data-flow are not yet implemented).
-- Deterministic evidence gates and finding/verdict persistence.
-- NEXUS deterministic frontier dispatcher (not yet model-driven adaptive planning).
-- Durable investigation events and SSE replay.
-- Markdown report generation from persisted records.
-- Basic API-backed War Room page.
+The current backend is a tested foundation, not the completed autonomous Android agent:
+- APK ZIP intake, SHA-256 identity and authorization binding, with bounded upload/archive checks.
+- Real binary-manifest analysis and bounded multi-DEX indexing; selected-family code analysis records coverage gaps instead of treating missing evidence as safety.
+- Persisted evidence, hypotheses, findings, graph relations, events and Markdown reports, with an API-backed War Room and graph UI.
+- Deterministic NEXUS dispatch and bounded evidence-triggered follow-up. Optional consent-gated model hypothesis generation and advisory VERITAS review exist; models do not establish verdicts by prose.
+- Digest-bound isolated RECON/DEX worker transport is CI-verified. A separate runtime/worker host still needs configuration; a fresh default local server is not a complete analysis deployment.
+- Earlier public Allsafe emulator/provider and API/Frida smoke tests verified narrow runtime slices. They did not establish the complete model-to-runtime-to-report agent journey. The connected journey has no successful recorded workflow run in the 2026-11-22 audit.
 
-**No model is called in the current analysis path.** There is no complete decompilation/data-flow pipeline, safe PoC runner, persisted attack graph UI, PHANTOM runtime agent, VECTOR network agent, or independent model-backed VERITAS reviewer yet. The existing call-graph reachability must not be described as taint analysis or proof of exploitability.
+**Readiness boundary:** green unit/API/browser/worker CI is not proof of reliable autonomous vulnerability discovery. Browser E2E uses explicitly seeded evidence/hypotheses and simulated local PoCs. The owned-Android traffic/capture/replay backend under `research/d061_android/` is HELD source preparation, not an activated or verified runtime.
 
-See [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md) for tested implementation details and limitations.
+**Local startup boundary:** `GET /ui` serving and `/api/v1/health` returning OK do not mean an APK investigation can run end to end. Default development mode refuses direct SPECTRE/NEXUS DEX parsing without a supported isolated-worker path or explicit local-development opt-in. Do not set test mode to bypass deployment checks. Authentication remains a single-user development stub, not production protection.
+
+See [docs/IMPLEMENTATION_STATUS.md](docs/IMPLEMENTATION_STATUS.md) for the current evidence boundary and [docs/LOCAL_RUN.md](docs/LOCAL_RUN.md) for startup limitations. Historical test counts and old status rows are not current acceptance evidence.
 
 ## Graduation-demo engineering strategy
 

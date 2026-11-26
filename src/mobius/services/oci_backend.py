@@ -21,7 +21,7 @@ class OciBackend:
 
     def __init__(
         self, *, runtime: str, binary_images: dict[str, str],
-        pids_limit: int = 128, tmpfs_mb: int = 128,
+        pids_limit: int = 128, tmpfs_mb: int = 128, run_label: str | None = None,
         popen: Callable = subprocess.Popen, run: Callable = subprocess.run,
     ) -> None:
         if not Path(runtime).is_absolute():
@@ -33,6 +33,9 @@ class OciBackend:
                 raise ValueError("container binary path must be absolute")
             if not _IMAGE.fullmatch(image):
                 raise ValueError("tool images must be immutable sha256 digest references")
+        if run_label is not None and re.fullmatch(r"[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}",run_label) is None:
+            raise ValueError("canonical run label UUID required")
+        self.run_label=run_label
         self.runtime = runtime
         self.binary_images = dict(binary_images)
         self.pids_limit = pids_limit
@@ -79,7 +82,8 @@ class OciBackend:
             raise ValueError("staged input.apk must be a regular non-symlink file")
         image = self.binary_images[argv[0]]
         return (
-            self.runtime, "run", "--rm", "--init", "--network=none", "--read-only",
+            self.runtime, "run", "--rm", "--init",
+            *(("--label", "org.mobius.canary-run="+self.run_label) if self.run_label else ()), "--network=none", "--read-only",
             "--cap-drop=ALL", "--security-opt=no-new-privileges",
             f"--pids-limit={self.pids_limit}", f"--memory={limits.memory_mb}m",
             "--memory-swap", f"{limits.memory_mb}m",
